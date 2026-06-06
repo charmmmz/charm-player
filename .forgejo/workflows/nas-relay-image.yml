@@ -1,0 +1,139 @@
+name: Build nas-relay image
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Build target platforms
+        required: true
+        default: amd64
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - multi
+  push:
+    branches:
+      - main
+    paths:
+      - .forgejo/workflows/nas-relay-image.yml
+      - nas-relay/**
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nas-relay-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ${{ github.repository }}/nas-relay
+  REGISTRY_OVERRIDE: ${{ vars.REGISTRY }}
+  NPM_REGISTRY_OVERRIDE: ${{ vars.NPM_REGISTRY }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build Docker Image
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Resolve registry
+        run: |
+          registry="${REGISTRY_OVERRIDE}"
+          if [ -z "$registry" ]; then
+            registry="${GITHUB_SERVER_URL#http://}"
+            registry="${registry#https://}"
+          fi
+          registry="${registry%%/}"
+          image_name=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          npm_registry="${NPM_REGISTRY_OVERRIDE:-https://registry.npmjs.org}"
+          echo "REGISTRY=${registry}" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=${image_name}" >> "$GITHUB_ENV"
+          echo "NPM_REGISTRY=${npm_registry}" >> "$GITHUB_ENV"
+
+      - name: Release version
+        run: |
+          short_sha=$(git rev-parse --short=12 HEAD)
+          run_number="${GITHUB_RUN_NUMBER:-$(date -u +%Y%m%d%H%M%S)}"
+          run_attempt="${GITHUB_RUN_ATTEMPT:-1}"
+          build_tag="sha-${short_sha}-run${run_number}-${run_attempt}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_ENV"
+          echo "build_tag=${build_tag}" >> "$GITHUB_ENV"
+          echo "Build tag: ${build_tag}"
+
+      - name: Resolve platforms
+        env:
+          PLATFORM_INPUT: ${{ inputs.platforms }}
+        run: |
+          case "${PLATFORM_INPUT:-amd64}" in
+            amd64)
+              platforms="linux/amd64"
+              ;;
+            arm64)
+              platforms="linux/arm64"
+              ;;
+            multi)
+              platforms="linux/amd64,linux/arm64"
+              ;;
+            *)
+              echo "Unsupported platforms input: ${PLATFORM_INPUT}" >&2
+              exit 1
+              ;;
+          esac
+          echo "Resolved platforms: ${platforms}"
+          echo "PLATFORMS=${platforms}" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        if: ${{ inputs.platforms == 'arm64' || inputs.platforms == 'multi' }}
+        uses: https://github.com/docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+
+      - name: Resolve Buildx proxy
+        id: buildx-proxy
+        run: |
+          proxy="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+          no_proxy="${NO_PROXY:-${no_proxy:-}}"
+          echo "proxy=${proxy}" >> "$GITHUB_OUTPUT"
+          echo "no_proxy=${no_proxy}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: https://github.com/docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.13.2
+            network=host
+            env.HTTP_PROXY=${{ steps.buildx-proxy.outputs.proxy }}
+            env.HTTPS_PROXY=${{ steps.buildx-proxy.outputs.proxy }}
+            env.http_proxy=${{ steps.buildx-proxy.outputs.proxy }}
+            env.https_proxy=${{ steps.buildx-proxy.outputs.proxy }}
+
+      - name: Login to Forgejo registry
+        uses: https://github.com/docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.PACKAGE_TOKEN }}
+
+      - name: Build and push image
+        uses: https://github.com/docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: ./nas-relay
+          file: ./nas-relay/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,oci-mediatypes=true,image-manifest=true
+          build-args: |
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+            HTTP_PROXY=${{ steps.buildx-proxy.outputs.proxy }}
+            HTTPS_PROXY=${{ steps.buildx-proxy.outputs.proxy }}
+            http_proxy=${{ steps.buildx-proxy.outputs.proxy }}
+            https_proxy=${{ steps.buildx-proxy.outputs.proxy }}
+            NO_PROXY=${{ steps.buildx-proxy.outputs.no_proxy }}
+            no_proxy=${{ steps.buildx-proxy.outputs.no_proxy }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ env.short_sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.build_tag }}

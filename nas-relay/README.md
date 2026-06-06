@@ -47,10 +47,11 @@ external transport once Phase 1 is verified.
    keys blank for now; the relay starts in *dry-run* mode.
 3. **Deploy via Portainer** — Stacks → Add stack, paste the contents of
    `docker-compose.yml`, attach `.env` under "Environment variables", deploy.
-   The stack pulls `ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest` and
-   `ghcr.io/charmmmz/hue-edk-sidecar:latest`.
-   If the GHCR package is private, log in first with a GitHub personal access
-   token that can read packages.
+   The stack pulls `forgejo.charmmmz.xyz/charm/charm-for-sonos/nas-relay:latest` and
+   `forgejo.charmmmz.xyz/charm/hue-edk-sidecar:latest` by default.
+   If either Forgejo package is private, log in first with a Forgejo token that
+   can read packages. Override `NAS_RELAY_IMAGE` or `HUE_EDK_SIDECAR_IMAGE` in
+   `.env` if you publish either image under a different package path.
 4. **Verify**:
    ```bash
    curl http://<qnap-ip>:8787/api/health

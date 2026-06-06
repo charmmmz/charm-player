@@ -10,14 +10,14 @@
 #
 # To bring up:
 #   1. cp .env.example .env  (then fill in the values)
-#   2. docker login ghcr.io  (only needed for a private GHCR package)
+#   2. docker login forgejo.charmmmz.xyz  (only needed for private packages)
 #   3. docker compose pull && docker compose up -d
 #   (or paste this file into Portainer → Stacks → New stack, attach the
 #    .env content under "Environment variables".)
 
 services:
   hue-edk-sidecar:
-    image: ghcr.io/charmmmz/hue-edk-sidecar:latest
+    image: ${HUE_EDK_SIDECAR_IMAGE:-forgejo.charmmmz.xyz/charm/hue-edk-sidecar:latest}
     pull_policy: always
     container_name: hue-edk-sidecar
     init: true
@@ -31,7 +31,7 @@ services:
       HUE_EDK_SIDECAR_TOKEN: ${HUE_EDK_SIDECAR_TOKEN:-}
 
   relay:
-    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    image: ${NAS_RELAY_IMAGE:-forgejo.charmmmz.xyz/charm/charm-for-sonos/nas-relay:latest}
     pull_policy: always
     container_name: sonos-live-activity-relay
     init: true
