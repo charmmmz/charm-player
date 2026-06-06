@@ -40,6 +40,45 @@ jobs:
       - name: Checkout
         uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      - name: Resolve Forgejo runner host
+        env:
+          FORGEJO_HOST_IP: ${{ vars.FORGEJO_HOST_IP }}
+        run: |
+          forgejo_url="${GITHUB_SERVER_URL:-https://forgejo.charmmmz.xyz}"
+          forgejo_host="${forgejo_url#http://}"
+          forgejo_host="${forgejo_host#https://}"
+          forgejo_host="${forgejo_host%%/*}"
+          forgejo_host="${forgejo_host%%:*}"
+          if [ -z "$forgejo_host" ]; then
+            echo "::error::Cannot derive Forgejo host from GITHUB_SERVER_URL=${GITHUB_SERVER_URL:-}"
+            exit 1
+          fi
+
+          if getent hosts "$forgejo_host" >/dev/null 2>&1; then
+            getent hosts "$forgejo_host"
+            exit 0
+          fi
+
+          forgejo_ip="${FORGEJO_HOST_IP}"
+          if [ -z "$forgejo_ip" ]; then
+            forgejo_ip="$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{print $3; exit}')"
+          fi
+          if [ -z "$forgejo_ip" ]; then
+            echo "::error::Cannot resolve ${forgejo_host}, and no FORGEJO_HOST_IP or Docker gateway was found."
+            exit 1
+          fi
+
+          hosts_line="${forgejo_ip} ${forgejo_host}"
+          if [ -w /etc/hosts ]; then
+            echo "$hosts_line" >> /etc/hosts
+          elif command -v sudo >/dev/null 2>&1; then
+            echo "$hosts_line" | sudo tee -a /etc/hosts >/dev/null
+          else
+            echo "::error::Cannot write /etc/hosts; set runner DNS or provide FORGEJO_HOST_IP in an environment where /etc/hosts is writable."
+            exit 1
+          fi
+          getent hosts "$forgejo_host"
+
       - name: Resolve registry
         run: |
           registry="${REGISTRY_OVERRIDE}"
