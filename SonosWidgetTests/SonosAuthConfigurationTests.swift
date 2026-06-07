@@ -63,4 +63,19 @@ final class SonosAuthConfigurationTests: XCTestCase {
 
         XCTAssertNil(message)
     }
+
+    func testExampleSecretsUseStableRedirectURIEscaping() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let repositoryRoot = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let exampleURL = repositoryRoot
+            .appendingPathComponent("Config")
+            .appendingPathComponent("SonosSecrets.example.xcconfig")
+        let example = try String(contentsOf: exampleURL, encoding: .utf8)
+
+        XCTAssertTrue(example.contains("SLASH = /"))
+        XCTAssertTrue(example.contains("SONOS_OAUTH_REDIRECT_URI = https:$(SLASH)$(SLASH)your-domain.example/oauth/callback.html"))
+        XCTAssertFalse(example.contains("https:/$()/"))
+    }
 }

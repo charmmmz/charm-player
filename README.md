@@ -112,6 +112,9 @@ The app probes reachability and can fall back from LAN to Cloud when you leave t
    - Register an integration at the [Sonos integration portal](https://integration.sonos.com).
    - Copy `Config/SonosSecrets.example.xcconfig` to `Config/SonosSecrets.xcconfig`.
    - Set `SONOS_OAUTH_CLIENT_ID`, `SONOS_OAUTH_CLIENT_SECRET`, and `SONOS_OAUTH_REDIRECT_URI`.
+   - In `.xcconfig`, keep URL slashes escaped with `SLASH = /` and
+     `https:$(SLASH)$(SLASH)...`; writing `https://...` directly is parsed as
+     a comment.
    - Keep `SonosSecrets.xcconfig` private; it is gitignored for a reason.
 
 > [!NOTE]
