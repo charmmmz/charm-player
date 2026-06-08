@@ -13,6 +13,14 @@ nonisolated struct PendingAppleMusicShare: Codable, Equatable, Sendable, Identif
     let receivedAt: Date
 }
 
+nonisolated struct AppleMusicSonosServiceCredential: Codable, Equatable, Sendable {
+    let cloudServiceId: String
+    let localServiceId: Int
+    let accountId: String
+    let username: String?
+    let displayName: String
+}
+
 enum SharedStorage {
 
     nonisolated static let appGroupID = "group.com.charm.SonosWidget"
@@ -26,6 +34,7 @@ enum SharedStorage {
     }
 
     private nonisolated static let pendingAppleMusicShareKey = "pendingAppleMusicShare"
+    private nonisolated static let appleMusicSonosServiceCredentialKey = "appleMusicSonosServiceCredential"
 
     // MARK: - Apple Music Share Intake
 
@@ -52,11 +61,35 @@ enum SharedStorage {
         pendingAppleMusicShare = nil
     }
 
+    nonisolated static var appleMusicSonosServiceCredential: AppleMusicSonosServiceCredential? {
+        get {
+            guard let data = defaults.data(forKey: appleMusicSonosServiceCredentialKey) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(AppleMusicSonosServiceCredential.self, from: data)
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: appleMusicSonosServiceCredentialKey)
+                return
+            }
+
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: appleMusicSonosServiceCredentialKey)
+            }
+        }
+    }
+
     // MARK: - Speaker
 
     nonisolated static var speakerIP: String? {
         get { defaults.string(forKey: "speakerIP") }
         set { defaults.set(newValue, forKey: "speakerIP") }
+    }
+
+    nonisolated static var speakerID: String? {
+        get { defaults.string(forKey: "speakerID") }
+        set { defaults.set(newValue, forKey: "speakerID") }
     }
 
     nonisolated static var speakerName: String? {

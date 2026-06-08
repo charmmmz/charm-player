@@ -27,7 +27,11 @@ struct PlayerView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { manager.loadSavedState() }
+        .onAppear {
+            manager.loadSavedState()
+            searchManager.configure(speakerIP: manager.selectedSpeaker?.playbackIP)
+            Task { await searchManager.probeLinkedServices() }
+        }
     }
 
     // MARK: - Configured View

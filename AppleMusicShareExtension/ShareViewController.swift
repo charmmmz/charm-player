@@ -3,76 +3,196 @@ import UniformTypeIdentifiers
 import UserNotifications
 
 final class ShareViewController: UIViewController {
-    private let activityIndicator = UIActivityIndicatorView(style: .medium)
+    private let resolver = ShareAppleMusicResolver()
+    private let playbackService = ShareSonosPlaybackService()
+
+    private var shareURLString: String?
+    private var playable: ShareAppleMusicPlayable?
+    private var speakerGroups: [ShareSpeakerGroup] = []
+    private var selectedGroupID: String?
+    private var isPlaying = false
+    private var loadTask: Task<Void, Never>?
+    private var playTask: Task<Void, Never>?
+
+    private let gradientLayer = CAGradientLayer()
+    private let artworkImageView = UIImageView()
+    private let artworkFallbackView = UIImageView(image: UIImage(systemName: "music.note"))
     private let titleLabel = UILabel()
-    private let detailLabel = UILabel()
-    private let openButton = UIButton(type: .system)
+    private let subtitleLabel = UILabel()
+    private let statusLabel = UILabel()
+    private let spinner = UIActivityIndicatorView(style: .medium)
+    private let speakerStack = UIStackView()
+    private let emptyStateLabel = UILabel()
+    private let notifyButton = UIButton(type: .system)
     private let doneButton = UIButton(type: .system)
+    private var speakerCards: [String: SpeakerGroupCard] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        preferredContentSize = CGSize(width: 0, height: 560)
         configureView()
         processSharedInput()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        gradientLayer.frame = view.bounds
+    }
+
+    deinit {
+        loadTask?.cancel()
+        playTask?.cancel()
+    }
+
     private func configureView() {
-        view.backgroundColor = .systemBackground
+        gradientLayer.colors = [
+            UIColor(red: 0.02, green: 0.02, blue: 0.03, alpha: 1).cgColor,
+            UIColor(red: 0.11, green: 0.05, blue: 0.09, alpha: 1).cgColor,
+            UIColor(red: 0.02, green: 0.03, blue: 0.05, alpha: 1).cgColor
+        ]
+        gradientLayer.locations = [0, 0.45, 1]
+        view.layer.insertSublayer(gradientLayer, at: 0)
+
+        let contentView = UIView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(contentView)
+
+        let headerStack = UIStackView()
+        headerStack.axis = .horizontal
+        headerStack.alignment = .center
+        headerStack.spacing = 12
+
+        let artworkContainer = UIView()
+        artworkContainer.translatesAutoresizingMaskIntoConstraints = false
+        artworkContainer.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        artworkContainer.layer.cornerRadius = 8
+        artworkContainer.clipsToBounds = true
+
+        artworkImageView.translatesAutoresizingMaskIntoConstraints = false
+        artworkImageView.contentMode = .scaleAspectFill
+        artworkImageView.clipsToBounds = true
+        artworkImageView.isHidden = true
+
+        artworkFallbackView.translatesAutoresizingMaskIntoConstraints = false
+        artworkFallbackView.tintColor = UIColor(red: 1.0, green: 0.22, blue: 0.47, alpha: 1)
+        artworkFallbackView.contentMode = .scaleAspectFit
+
+        artworkContainer.addSubview(artworkImageView)
+        artworkContainer.addSubview(artworkFallbackView)
+
+        let textStack = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel])
+        textStack.axis = .vertical
+        textStack.spacing = 3
 
         titleLabel.font = .preferredFont(forTextStyle: .headline)
-        titleLabel.textAlignment = .center
-        titleLabel.numberOfLines = 0
+        titleLabel.textColor = .white
+        titleLabel.numberOfLines = 2
+        titleLabel.text = "Apple Music ready"
 
-        detailLabel.font = .preferredFont(forTextStyle: .subheadline)
-        detailLabel.textColor = .secondaryLabel
-        detailLabel.textAlignment = .center
-        detailLabel.numberOfLines = 0
+        subtitleLabel.font = .preferredFont(forTextStyle: .subheadline)
+        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.62)
+        subtitleLabel.numberOfLines = 2
+        subtitleLabel.text = "Choose a speaker to start playback."
 
-        openButton.setTitle("Open Charm Player", for: .normal)
-        openButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
-        openButton.addTarget(self, action: #selector(openButtonTapped), for: .touchUpInside)
-        openButton.isHidden = true
+        headerStack.addArrangedSubview(artworkContainer)
+        headerStack.addArrangedSubview(textStack)
+
+        let statusRow = UIStackView(arrangedSubviews: [spinner, statusLabel])
+        statusRow.axis = .horizontal
+        statusRow.alignment = .center
+        statusRow.spacing = 8
+
+        spinner.color = UIColor.white.withAlphaComponent(0.75)
+        spinner.startAnimating()
+
+        statusLabel.font = .preferredFont(forTextStyle: .footnote)
+        statusLabel.textColor = UIColor.white.withAlphaComponent(0.65)
+        statusLabel.numberOfLines = 2
+        statusLabel.text = "Reading Apple Music share..."
+
+        let scrollView = UIScrollView()
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = false
+
+        speakerStack.axis = .vertical
+        speakerStack.spacing = 10
+        speakerStack.translatesAutoresizingMaskIntoConstraints = false
+
+        emptyStateLabel.font = .preferredFont(forTextStyle: .subheadline)
+        emptyStateLabel.textColor = UIColor.white.withAlphaComponent(0.58)
+        emptyStateLabel.textAlignment = .center
+        emptyStateLabel.numberOfLines = 0
+        emptyStateLabel.text = "No speakers yet. Open Charm Player once on this Wi-Fi."
+        emptyStateLabel.isHidden = true
+
+        scrollView.addSubview(speakerStack)
+
+        notifyButton.setTitle("Notify to open Charm Player", for: .normal)
+        notifyButton.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
+        notifyButton.tintColor = UIColor(red: 0.45, green: 0.78, blue: 1.0, alpha: 1)
+        notifyButton.addTarget(self, action: #selector(notifyButtonTapped), for: .touchUpInside)
+        notifyButton.isHidden = true
 
         doneButton.setTitle("Done", for: .normal)
+        doneButton.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
+        doneButton.tintColor = UIColor.white.withAlphaComponent(0.75)
         doneButton.addTarget(self, action: #selector(doneButtonTapped), for: .touchUpInside)
-        doneButton.isHidden = true
 
-        let buttonStack = UIStackView(arrangedSubviews: [openButton, doneButton])
-        buttonStack.axis = .vertical
-        buttonStack.spacing = 10
-        buttonStack.alignment = .center
+        let buttonRow = UIStackView(arrangedSubviews: [notifyButton, doneButton])
+        buttonRow.axis = .horizontal
+        buttonRow.alignment = .center
+        buttonRow.distribution = .equalSpacing
 
-        let stack = UIStackView(arrangedSubviews: [
-            activityIndicator,
-            titleLabel,
-            detailLabel,
-            buttonStack
+        let mainStack = UIStackView(arrangedSubviews: [
+            headerStack,
+            statusRow,
+            scrollView,
+            emptyStateLabel,
+            buttonRow
         ])
-        stack.axis = .vertical
-        stack.spacing = 14
-        stack.alignment = .center
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        mainStack.axis = .vertical
+        mainStack.spacing = 16
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(mainStack)
 
-        view.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: view.layoutMarginsGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: view.layoutMarginsGuide.trailingAnchor),
-            stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            detailLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
-            titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280)
-        ])
+            contentView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            contentView.topAnchor.constraint(equalTo: view.topAnchor),
+            contentView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-        setLoading(title: "Saving Apple Music link", detail: nil)
+            mainStack.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor, constant: 4),
+            mainStack.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor, constant: -4),
+            mainStack.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor, constant: 8),
+            mainStack.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor, constant: -8),
+
+            artworkContainer.widthAnchor.constraint(equalToConstant: 64),
+            artworkContainer.heightAnchor.constraint(equalToConstant: 64),
+            artworkImageView.leadingAnchor.constraint(equalTo: artworkContainer.leadingAnchor),
+            artworkImageView.trailingAnchor.constraint(equalTo: artworkContainer.trailingAnchor),
+            artworkImageView.topAnchor.constraint(equalTo: artworkContainer.topAnchor),
+            artworkImageView.bottomAnchor.constraint(equalTo: artworkContainer.bottomAnchor),
+            artworkFallbackView.centerXAnchor.constraint(equalTo: artworkContainer.centerXAnchor),
+            artworkFallbackView.centerYAnchor.constraint(equalTo: artworkContainer.centerYAnchor),
+            artworkFallbackView.widthAnchor.constraint(equalToConstant: 26),
+            artworkFallbackView.heightAnchor.constraint(equalToConstant: 26),
+
+            speakerStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            speakerStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            speakerStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            speakerStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            speakerStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180)
+        ])
     }
 
     private func processSharedInput() {
         loadFirstSharedValue { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-
                 switch result {
                 case .success(let value):
-                    self.saveAndOpen(value)
+                    self.prepareShare(value)
                 case .failure(let error):
                     self.showError(error.localizedDescription)
                 }
@@ -80,17 +200,33 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func saveAndOpen(_ value: String) {
+    private func prepareShare(_ value: String) {
         do {
-            _ = try AppleMusicShareExtensionStore.saveFirstAppleMusicURL(from: value)
-            setLoading(title: "Saved to Charm Player", detail: "Opening Charm Player...")
-            openContainingApp { [weak self] success in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    if success {
-                        self.extensionContext?.completeRequest(returningItems: nil)
-                    } else {
-                        self.showNotificationFallbackAfterBlockedOpen()
+            let urlString = try AppleMusicShareExtensionStore.saveFirstAppleMusicURL(from: value)
+            shareURLString = urlString
+            speakerGroups = AppleMusicShareExtensionStore.cachedSpeakerGroups
+            updateSpeakerCards()
+            setStatus("Choose a speaker to start playback.", loading: false)
+
+            loadTask = Task { [weak self] in
+                guard let self else { return }
+                async let resolvedPlayable = self.resolver.resolve(urlString: urlString)
+                async let refreshedGroups = AppleMusicShareExtensionStore.refreshedSpeakerGroups()
+
+                if let playable = try? await resolvedPlayable {
+                    await MainActor.run {
+                        self.playable = playable
+                        self.updatePlayable(playable)
+                    }
+                }
+
+                let groups = await refreshedGroups
+                await MainActor.run {
+                    self.speakerGroups = groups
+                    self.updateSpeakerCards()
+                    if groups.isEmpty {
+                        self.setStatus("Open Charm Player once on this Wi-Fi, then share again.", loading: false)
+                        self.notifyButton.isHidden = false
                     }
                 }
             }
@@ -99,54 +235,141 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func setLoading(title: String, detail: String?) {
-        titleLabel.text = title
-        detailLabel.text = detail
-        activityIndicator.startAnimating()
-        openButton.isHidden = true
-        doneButton.isHidden = true
+    private func updatePlayable(_ playable: ShareAppleMusicPlayable) {
+        titleLabel.text = playable.title
+        let parts = [playable.artist, playable.album]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        subtitleLabel.text = parts.isEmpty ? "Apple Music" : parts.joined(separator: " - ")
+        loadArtwork(from: playable.artworkURLString)
     }
 
-    private func showSavedFallback() {
-        activityIndicator.stopAnimating()
-        titleLabel.text = "Saved to Charm Player"
-        detailLabel.text = "iOS blocked opening from Apple Music. Use a notification or open Charm Player manually."
-        openButton.setTitle("Notify to Open", for: .normal)
-        openButton.isHidden = false
-        doneButton.isHidden = false
+    private func updateSpeakerCards() {
+        speakerCards.values.forEach { $0.removeFromSuperview() }
+        speakerCards.removeAll()
+
+        emptyStateLabel.isHidden = !speakerGroups.isEmpty
+        for group in speakerGroups {
+            let card = SpeakerGroupCard()
+            card.configure(
+                group: group,
+                isSelected: selectedGroupID == group.id,
+                isLoading: isPlaying && selectedGroupID == group.id
+            )
+            card.addAction(UIAction { [weak self] _ in
+                self?.startPlayback(on: group)
+            }, for: .touchUpInside)
+            speakerCards[group.id] = card
+            speakerStack.addArrangedSubview(card)
+        }
     }
 
-    private func showNotificationFallbackAfterBlockedOpen() {
-        scheduleOpenNotification(requestAuthorizationIfNeeded: false) { [weak self] scheduled in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if scheduled {
-                    self.extensionContext?.completeRequest(returningItems: nil)
+    private func startPlayback(on group: ShareSpeakerGroup) {
+        guard !isPlaying else { return }
+        guard let urlString = shareURLString else {
+            showError(SharePlaybackError.missingAppleMusicLink.localizedDescription)
+            return
+        }
+        guard let credential = AppleMusicShareExtensionStore.appleMusicCredential else {
+            showError(SharePlaybackError.missingCredential.localizedDescription)
+            notifyButton.isHidden = false
+            return
+        }
+
+        selectedGroupID = group.id
+        isPlaying = true
+        updateSpeakerCards()
+        setStatus("Starting on \(group.displayName)...", loading: true)
+
+        playTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let resolved: ShareAppleMusicPlayable
+                if let playable = self.playable {
+                    resolved = playable
                 } else {
-                    self.showSavedFallback()
+                    resolved = try await self.resolver.resolve(urlString: urlString)
+                }
+                await MainActor.run {
+                    self.playable = resolved
+                    self.updatePlayable(resolved)
+                }
+
+                try await self.playbackService.play(
+                    resolved,
+                    on: group,
+                    credential: credential
+                )
+
+                AppleMusicShareExtensionStore.clearPendingAppleMusicShare()
+                await MainActor.run {
+                    self.isPlaying = false
+                    self.setStatus("Playing on \(group.displayName)", loading: false)
+                    self.markSuccess()
+                }
+                try? await Task.sleep(for: .milliseconds(900))
+                await MainActor.run {
+                    self.extensionContext?.completeRequest(returningItems: nil)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isPlaying = false
+                    self.updateSpeakerCards()
+                    self.showError(error.localizedDescription)
+                    self.notifyButton.isHidden = false
                 }
             }
         }
     }
 
-    private func showError(_ message: String) {
-        activityIndicator.stopAnimating()
-        titleLabel.text = "Could not save link"
-        detailLabel.text = message
-        openButton.isHidden = true
-        doneButton.isHidden = false
+    private func setStatus(_ text: String, loading: Bool) {
+        statusLabel.text = text
+        statusLabel.textColor = UIColor.white.withAlphaComponent(0.66)
+        loading ? spinner.startAnimating() : spinner.stopAnimating()
+        spinner.isHidden = !loading
     }
 
-    @objc private func openButtonTapped() {
-        setLoading(title: "Preparing notification", detail: nil)
+    private func markSuccess() {
+        statusLabel.textColor = UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
+        updateSpeakerCards()
+    }
+
+    private func showError(_ message: String?) {
+        statusLabel.text = message ?? "Something went wrong."
+        statusLabel.textColor = UIColor(red: 1.0, green: 0.45, blue: 0.55, alpha: 1)
+        spinner.stopAnimating()
+        spinner.isHidden = true
+    }
+
+    private func loadArtwork(from urlString: String?) {
+        guard let urlString, let url = URL(string: urlString) else {
+            artworkImageView.isHidden = true
+            artworkFallbackView.isHidden = false
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data) else {
+                return
+            }
+            await MainActor.run {
+                self.artworkImageView.image = image
+                self.artworkImageView.isHidden = false
+                self.artworkFallbackView.isHidden = true
+            }
+        }
+    }
+
+    @objc private func notifyButtonTapped() {
+        setStatus("Preparing notification...", loading: true)
         scheduleOpenNotification(requestAuthorizationIfNeeded: true) { [weak self] scheduled in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if scheduled {
                     self.extensionContext?.completeRequest(returningItems: nil)
                 } else {
-                    self.showSavedFallback()
-                    self.detailLabel.text = "Still saved. Open Charm Player from the Home Screen."
+                    self.showError("Still saved. Open Charm Player from the Home Screen.")
                 }
             }
         }
@@ -154,14 +377,6 @@ final class ShareViewController: UIViewController {
 
     @objc private func doneButtonTapped() {
         extensionContext?.completeRequest(returningItems: nil)
-    }
-
-    private func openContainingApp(completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "sonoswidget://share/apple-music") else {
-            completion(false)
-            return
-        }
-        extensionContext?.open(url, completionHandler: completion)
     }
 
     private func scheduleOpenNotification(
@@ -233,29 +448,148 @@ final class ShareViewController: UIViewController {
         typeIdentifier: String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(typeIdentifier) }) else {
-            completion(.failure(AppleMusicShareExtensionStore.StoreError.missingAppleMusicURL))
-            return
-        }
+        var pendingProviders = providers[...]
 
-        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, error in
-            if let error {
-                completion(.failure(error))
+        func loadNext() {
+            guard !pendingProviders.isEmpty else {
+                completion(.failure(AppleMusicShareExtensionStore.StoreError.missingAppleMusicURL))
                 return
             }
 
-            if let url = item as? URL {
-                completion(.success(url.absoluteString))
-            } else if let url = item as? NSURL {
-                completion(.success(url.absoluteString ?? ""))
-            } else if let string = item as? String {
-                completion(.success(string))
-            } else if let data = item as? Data,
-                      let string = String(data: data, encoding: .utf8) {
-                completion(.success(string))
-            } else {
-                completion(.failure(AppleMusicShareExtensionStore.StoreError.missingAppleMusicURL))
+            let provider = pendingProviders.removeFirst()
+            guard provider.hasItemConformingToTypeIdentifier(typeIdentifier) else {
+                loadNext()
+                return
+            }
+
+            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, error in
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+
+                if let url = item as? URL {
+                    completion(.success(url.absoluteString))
+                } else if let string = item as? String {
+                    completion(.success(string))
+                } else if let data = item as? Data,
+                          let string = String(data: data, encoding: .utf8) {
+                    completion(.success(string))
+                } else {
+                    loadNext()
+                }
             }
         }
+
+        loadNext()
+    }
+}
+
+private final class SpeakerGroupCard: UIControl {
+    private let iconView = UIImageView(image: UIImage(systemName: "hifispeaker.2.fill"))
+    private let titleLabel = UILabel()
+    private let detailLabel = UILabel()
+    private let playView = UIImageView(image: UIImage(systemName: "play.fill"))
+    private let spinner = UIActivityIndicatorView(style: .medium)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configure()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(group: ShareSpeakerGroup, isSelected: Bool, isLoading: Bool) {
+        titleLabel.text = group.displayName
+        detailLabel.text = group.detailText
+        layer.borderColor = (isSelected
+            ? UIColor(red: 1.0, green: 0.22, blue: 0.47, alpha: 1)
+            : UIColor.white.withAlphaComponent(0.16)).cgColor
+        backgroundColor = isSelected
+            ? UIColor(red: 0.22, green: 0.06, blue: 0.12, alpha: 0.86)
+            : UIColor.white.withAlphaComponent(0.08)
+        playView.isHidden = isLoading
+        spinner.isHidden = !isLoading
+        isLoading ? spinner.startAnimating() : spinner.stopAnimating()
+    }
+
+    private func configure() {
+        layer.cornerRadius = 8
+        layer.borderWidth = 1
+        clipsToBounds = true
+
+        iconView.tintColor = UIColor.white.withAlphaComponent(0.85)
+        iconView.contentMode = .scaleAspectFit
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        titleLabel.font = .preferredFont(forTextStyle: .headline)
+        titleLabel.textColor = .white
+        titleLabel.numberOfLines = 1
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.8
+
+        detailLabel.font = .preferredFont(forTextStyle: .subheadline)
+        detailLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        detailLabel.numberOfLines = 1
+
+        playView.tintColor = .white
+        playView.contentMode = .scaleAspectFit
+        playView.translatesAutoresizingMaskIntoConstraints = false
+
+        spinner.color = .white
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.isHidden = true
+
+        let iconContainer = UIView()
+        iconContainer.translatesAutoresizingMaskIntoConstraints = false
+        iconContainer.layer.cornerRadius = 8
+        iconContainer.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        iconContainer.addSubview(iconView)
+
+        let textStack = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
+        textStack.axis = .vertical
+        textStack.spacing = 3
+
+        let playContainer = UIView()
+        playContainer.translatesAutoresizingMaskIntoConstraints = false
+        playContainer.layer.cornerRadius = 20
+        playContainer.layer.borderWidth = 1
+        playContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        playContainer.backgroundColor = UIColor.black.withAlphaComponent(0.26)
+        playContainer.addSubview(playView)
+        playContainer.addSubview(spinner)
+
+        let stack = UIStackView(arrangedSubviews: [iconContainer, textStack, playContainer])
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 82),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+
+            iconContainer.widthAnchor.constraint(equalToConstant: 48),
+            iconContainer.heightAnchor.constraint(equalToConstant: 48),
+            iconView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 23),
+            iconView.heightAnchor.constraint(equalToConstant: 23),
+
+            playContainer.widthAnchor.constraint(equalToConstant: 42),
+            playContainer.heightAnchor.constraint(equalToConstant: 42),
+            playView.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor, constant: 1),
+            playView.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor),
+            playView.widthAnchor.constraint(equalToConstant: 16),
+            playView.heightAnchor.constraint(equalToConstant: 16),
+            spinner.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor)
+        ])
     }
 }

@@ -52,6 +52,31 @@ final class PendingAppleMusicShareStorageTests: XCTestCase {
         XCTAssertNil(SharedStorage.pendingAppleMusicShare)
     }
 
+    func testAppleMusicSonosServiceCredentialRoundTripsThroughSharedStorage() {
+        let previous = SharedStorage.appleMusicSonosServiceCredential
+        defer { SharedStorage.appleMusicSonosServiceCredential = previous }
+
+        let credential = AppleMusicSonosServiceCredential(
+            cloudServiceId: "52231",
+            localServiceId: 204,
+            accountId: "2",
+            username: "X_#Svc52231-2-Token",
+            displayName: "Apple Music")
+
+        SharedStorage.appleMusicSonosServiceCredential = credential
+
+        XCTAssertEqual(SharedStorage.appleMusicSonosServiceCredential, credential)
+    }
+
+    func testSpeakerIDRoundTripsThroughSharedStorage() {
+        let previous = SharedStorage.speakerID
+        defer { SharedStorage.speakerID = previous }
+
+        SharedStorage.speakerID = "RINCON_12345678901400"
+
+        XCTAssertEqual(SharedStorage.speakerID, "RINCON_12345678901400")
+    }
+
     func testRouteRecognizesAppleMusicShareURL() {
         let route = AppRoute.route(for: URL(string: "sonoswidget://share/apple-music")!)
 

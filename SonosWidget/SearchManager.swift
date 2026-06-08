@@ -432,6 +432,7 @@ final class SearchManager {
             SharedStorage.serviceNamesByLocalSid = sidNameMap
         }
         persistSidMapping()
+        persistAppleMusicShareCredentialIfAvailable()
     }
 
     private func persistSidMapping() {
@@ -448,7 +449,27 @@ final class SearchManager {
                 as? [String: Int], !dict.isEmpty else { return }
         cloudToLocalSid = dict
         localToCloudSid = Dictionary(uniqueKeysWithValues: dict.map { ($0.value, $0.key) })
+        persistAppleMusicShareCredentialIfAvailable()
         SonosLog.debug(.search, "Restored \(dict.count) cached sid mappings")
+    }
+
+    private func persistAppleMusicShareCredentialIfAvailable() {
+        guard
+            let account = linkedAccounts.first(where: { isAppleMusicAccount($0) }),
+            let cloudServiceId = account.serviceId,
+            let localServiceId = cloudToLocalSid[cloudServiceId],
+            let accountId = account.accountId
+        else {
+            return
+        }
+
+        SharedStorage.appleMusicSonosServiceCredential = AppleMusicSonosServiceCredential(
+            cloudServiceId: cloudServiceId,
+            localServiceId: localServiceId,
+            accountId: accountId,
+            username: account.username,
+            displayName: account.displayName
+        )
     }
 
     func localSid(forCloudServiceId cloudId: String) -> Int? {

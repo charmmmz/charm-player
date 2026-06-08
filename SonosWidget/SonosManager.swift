@@ -2610,6 +2610,7 @@ final class SonosManager {
     // MARK: - Private Helpers
 
     private func syncSpeakerToStorage(_ speaker: SonosPlayer) {
+        SharedStorage.speakerID = speaker.id
         SharedStorage.speakerIP = speaker.ipAddress
         SharedStorage.speakerName = speaker.name
         SharedStorage.coordinatorIP = speaker.coordinatorIP
