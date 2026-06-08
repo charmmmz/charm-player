@@ -46,6 +46,10 @@ struct SonosWidgetApp: App {
             ContentView()
                 .onOpenURL { url in
                     guard url.scheme == "sonoswidget" else { return }
+                    if AppRoute.route(for: url) == .appleMusicShare {
+                        NotificationCenter.default.post(name: .appleMusicShareRouteReceived, object: nil)
+                        return
+                    }
                     Task { await SonosAuth.shared.handleCallback(url: url) }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in

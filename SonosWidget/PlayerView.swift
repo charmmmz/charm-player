@@ -3,6 +3,7 @@ import SwiftUI
 struct PlayerView: View {
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
+    @Binding var pendingAppleMusicShare: PendingAppleMusicShare?
     @State private var newSpeakerIP = ""
     @State private var showManualEntry = false
     /// Tracked per-session so we only auto-connect on the *first* discovery
@@ -65,6 +66,8 @@ struct PlayerView: View {
     @State private var dropTargetGroupID: String?
     @State private var isSeparateZoneTargeted = false
     @State private var isTransferringPlayback = false
+    @State private var pendingSharePlaybackGroupID: String?
+    @State private var pendingSharePulse = false
     @State private var speakerCardSizes: [String: CGSize] = [:]
     @State private var homeToastMessage: String?
 
@@ -76,6 +79,9 @@ struct PlayerView: View {
                 // hasn't resolved). Tap-to-refresh runs another probe.
                 if manager.isSpeakerUnreachable {
                     unreachableBanner
+                }
+                if pendingAppleMusicShare != nil {
+                    pendingAppleMusicShareBanner
                 }
                 if manager.groupStatuses.isEmpty {
                     HStack {
@@ -146,9 +152,16 @@ struct PlayerView: View {
                                         .transition(.opacity)
                                     }
                                 }
-                                .scaleEffect(isDropTarget ? 1.02 : 1.0)
+                                .overlay {
+                                    pendingAppleMusicShareHighlight(for: group)
+                                }
+                                .scaleEffect(
+                                    isDropTarget || pendingSharePlaybackGroupID == group.id ? 1.02 : 1.0
+                                )
                                 .animation(.spring(response: 0.25, dampingFraction: 0.7),
                                            value: isDropTarget)
+                                .animation(.spring(response: 0.25, dampingFraction: 0.7),
+                                           value: pendingSharePlaybackGroupID)
                         }
                     }
                     .padding(.horizontal)
@@ -191,6 +204,10 @@ struct PlayerView: View {
         .toast($homeToastMessage)
         .onAppear {
             Task { await manager.refreshAllGroupStatuses() }
+            updatePendingSharePulse()
+        }
+        .onChange(of: pendingAppleMusicShare?.id) { _, _ in
+            updatePendingSharePulse()
         }
     }
 
@@ -235,6 +252,83 @@ struct PlayerView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal)
         .padding(.top, 8)
+    }
+
+    private var pendingAppleMusicShareBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "music.note")
+                .font(.title3)
+                .foregroundStyle(.pink)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Apple Music ready")
+                    .font(.subheadline.weight(.semibold))
+                Text("Choose a speaker to start playback.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if pendingSharePlaybackGroupID != nil {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                SharedStorage.clearPendingAppleMusicShare()
+                pendingAppleMusicShare = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss Apple Music share")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(.pink.opacity(pendingSharePulse ? 0.42 : 0.18), lineWidth: 1)
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private func pendingAppleMusicShareHighlight(for group: SpeakerGroupStatus) -> some View {
+        if pendingAppleMusicShare != nil {
+            let accent = manager.groupAlbumColors[group.id]
+                ?? manager.albumArtDominantColor
+                ?? .pink
+            let isStarting = pendingSharePlaybackGroupID == group.id
+
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(accent.opacity(pendingSharePulse || isStarting ? 0.72 : 0.34),
+                              lineWidth: isStarting ? 2 : 1.25)
+                .shadow(color: accent.opacity(pendingSharePulse || isStarting ? 0.42 : 0.18),
+                        radius: isStarting ? 16 : 10)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func updatePendingSharePulse() {
+        guard pendingAppleMusicShare != nil else {
+            pendingSharePulse = false
+            return
+        }
+
+        pendingSharePulse = false
+        DispatchQueue.main.async {
+            guard pendingAppleMusicShare != nil else { return }
+            withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
+                pendingSharePulse = true
+            }
+        }
     }
 
     private var homeActionZone: some View {
@@ -443,8 +537,62 @@ struct PlayerView: View {
         }
     }
 
+    private func handleSpeakerGroupCardTap(_ group: SpeakerGroupStatus) {
+        guard pendingAppleMusicShare != nil else {
+            if !isCurrentGroup(group) {
+                Task { await manager.selectSpeaker(group.coordinator) }
+            }
+            return
+        }
+
+        startPendingAppleMusicShare(on: group)
+    }
+
+    private func isCurrentGroup(_ group: SpeakerGroupStatus) -> Bool {
+        group.coordinator.id == manager.selectedSpeaker?.id
+            || group.coordinator.groupId == manager.selectedSpeaker?.groupId
+    }
+
+    private func startPendingAppleMusicShare(on group: SpeakerGroupStatus) {
+        guard pendingSharePlaybackGroupID == nil,
+              let share = pendingAppleMusicShare else { return }
+
+        pendingSharePlaybackGroupID = group.id
+
+        Task {
+            do {
+                await manager.selectSpeaker(group.coordinator)
+                let playable = try await AppleMusicSharePlayableResolver.shared.resolve(share)
+                let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
+                guard didStart else {
+                    throw AppleMusicSharePlaybackError.playbackFailed(searchManager.errorMessage)
+                }
+
+                SharedStorage.clearPendingAppleMusicShare()
+                pendingAppleMusicShare = nil
+                $homeToastMessage.showToast("Playing on \(speakerGroupDisplayName(group))")
+            } catch {
+                manager.errorMessage = error.localizedDescription
+                $homeToastMessage.showToast(error.localizedDescription)
+            }
+
+            pendingSharePlaybackGroupID = nil
+        }
+    }
+
+    private func speakerGroupDisplayName(_ group: SpeakerGroupStatus) -> String {
+        let names = group.members
+            .filter { !$0.isInvisible }
+            .sorted { a, _ in a.id == group.coordinator.id }
+            .map(\.name)
+        return names.isEmpty ? group.coordinator.name : names.joined(separator: " + ")
+    }
+
     private func speakerGroupCard(_ group: SpeakerGroupStatus) -> some View {
-        SpeakerGroupCardView(group: group, manager: manager)
+        SpeakerGroupCardView(
+            group: group,
+            manager: manager,
+            onSelectGroup: { handleSpeakerGroupCardTap($0) })
     }
 
     // MARK: - Setup (Auto-Discovery)
@@ -604,6 +752,7 @@ private struct SpeakerCardSizePreferenceKey: PreferenceKey {
 private struct SpeakerGroupCardView: View {
     let group: SpeakerGroupStatus
     @Bindable var manager: SonosManager
+    let onSelectGroup: (SpeakerGroupStatus) -> Void
 
     @State private var premuteGroupVolume: Int?
     @State private var premuteMemberVolumes: [String: Int] = [:]
@@ -644,9 +793,7 @@ private struct SpeakerGroupCardView: View {
         VStack(spacing: 0) {
             // ── Top row: art + track info + waveform ──
             Button {
-                if !isCurrentGroup {
-                    Task { await manager.selectSpeaker(group.coordinator) }
-                }
+                onSelectGroup(group)
             } label: {
                 HStack(spacing: 12) {
                     if group.trackInfo?.source == .tv {

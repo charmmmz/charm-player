@@ -7,6 +7,12 @@ let noProxySession: URLSession = {
     return URLSession(configuration: config)
 }()
 
+nonisolated struct PendingAppleMusicShare: Codable, Equatable, Sendable, Identifiable {
+    let id: UUID
+    let urlString: String
+    let receivedAt: Date
+}
+
 enum SharedStorage {
 
     nonisolated static let appGroupID = "group.com.charm.SonosWidget"
@@ -17,6 +23,33 @@ enum SharedStorage {
 
     private nonisolated static var containerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+    }
+
+    private nonisolated static let pendingAppleMusicShareKey = "pendingAppleMusicShare"
+
+    // MARK: - Apple Music Share Intake
+
+    nonisolated static var pendingAppleMusicShare: PendingAppleMusicShare? {
+        get {
+            guard let data = defaults.data(forKey: pendingAppleMusicShareKey) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(PendingAppleMusicShare.self, from: data)
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: pendingAppleMusicShareKey)
+                return
+            }
+
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: pendingAppleMusicShareKey)
+            }
+        }
+    }
+
+    nonisolated static func clearPendingAppleMusicShare() {
+        pendingAppleMusicShare = nil
     }
 
     // MARK: - Speaker

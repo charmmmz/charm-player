@@ -1,24 +1,30 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State var manager = SonosManager()
     @State var searchManager = SearchManager()
+    @State private var selectedTab: AppTab = .home
+    @State private var pendingAppleMusicShare: PendingAppleMusicShare?
 
     var body: some View {
-        TabView {
-            Tab("Home", systemImage: "play.circle.fill") {
-                PlayerView(manager: manager, searchManager: searchManager)
+        TabView(selection: $selectedTab) {
+            Tab("Home", systemImage: "play.circle.fill", value: AppTab.home) {
+                PlayerView(
+                    manager: manager,
+                    searchManager: searchManager,
+                    pendingAppleMusicShare: $pendingAppleMusicShare)
                     .miniPlayerLegacyInsetIfNeeded(manager: manager)
             }
-            Tab("Browse", systemImage: "magnifyingglass") {
+            Tab("Browse", systemImage: "magnifyingglass", value: AppTab.browse) {
                 SearchView(manager: manager, searchManager: searchManager)
                     .miniPlayerLegacyInsetIfNeeded(manager: manager)
             }
-            Tab("Local Service", systemImage: "music.note.house") {
+            Tab("Local Service", systemImage: "music.note.house", value: AppTab.localService) {
                 LocalLibraryView(manager: manager, searchManager: searchManager)
                     .miniPlayerLegacyInsetIfNeeded(manager: manager)
             }
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
                 SettingsView(manager: manager, searchManager: searchManager)
                     .miniPlayerLegacyInsetIfNeeded(manager: manager)
             }
@@ -59,12 +65,33 @@ struct ContentView: View {
             // user open Settings first.
             RelayManager.shared.startPeriodicProbe()
             MusicAmbienceManager.shared.refreshStatus()
+            routePendingAppleMusicShareToHomeIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appleMusicShareRouteReceived)) { _ in
+            routePendingAppleMusicShareToHomeIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            routePendingAppleMusicShareToHomeIfNeeded()
         }
         .onDisappear {
             manager.stopAutoRefresh()
             RelayManager.shared.stopPeriodicProbe()
         }
     }
+
+    private func routePendingAppleMusicShareToHomeIfNeeded() {
+        pendingAppleMusicShare = SharedStorage.pendingAppleMusicShare
+        if pendingAppleMusicShare != nil {
+            selectedTab = .home
+        }
+    }
 }
 
 #Preview { ContentView() }
+
+private enum AppTab: Hashable {
+    case home
+    case browse
+    case localService
+    case settings
+}
