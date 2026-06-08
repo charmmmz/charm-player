@@ -2679,8 +2679,7 @@ final class SearchManager {
         }
 
         if item.isArtist {
-            await startStation(item: item, manager: manager)
-            return false
+            return await startStation(item: item, manager: manager)
         }
 
         // Everything below this line uses UPnP — gate on .cloud mode so users
@@ -2776,21 +2775,22 @@ final class SearchManager {
     /// Start a personalized radio station from an artist.
     /// Searches Cloud API for the artist's Apple Music ID, then constructs radio:ra.{id}
     /// — the same format the official Sonos app uses for "Start Station".
-    func startStation(item: BrowseItem, manager: SonosManager) async {
+    @discardableResult
+    func startStation(item: BrowseItem, manager: SonosManager) async -> Bool {
         // Push to recents before network work so Browse shows the entry
         // even if cloud search below fails. Dedupes by id — safe to repeat.
         pushRecentlyPlayed(item)
 
         guard let ip = manager.selectedSpeaker?.playbackIP else {
             SonosLog.error(.station, "startStation: no speaker IP")
-            return
+            return false
         }
 
         guard let token = await SonosAuth.shared.validAccessToken(),
               let householdId = SonosAuth.shared.householdId else {
             SonosLog.error(.station, "startStation: no Cloud auth")
             errorMessage = "Not logged in to Sonos Cloud"
-            return
+            return false
         }
 
         if !hasProbed { await probeLinkedServices() }
@@ -2798,7 +2798,7 @@ final class SearchManager {
         guard !serviceIds.isEmpty else {
             SonosLog.error(.station, "startStation: no active services")
             errorMessage = "No music services linked"
-            return
+            return false
         }
 
         do {
@@ -2850,14 +2850,14 @@ final class SearchManager {
             guard let amArtistId = artistId else {
                 SonosLog.error(.station, "No artist found in search results")
                 errorMessage = "Could not find artist \(item.title)"
-                return
+                return false
             }
 
             // Construct radio:ra.{artist_id} — this is the "Start Station" format
             let radioId = "radio:ra.\(amArtistId)"
             let stationName = "\(item.title) Radio"
 
-            await playRadioStation(
+            return await playRadioStation(
                 ip: ip, radioId: radioId, stationName: stationName,
                 cloudServiceId: cloudServiceId, accountId: cloudAccountId,
                 artURL: artistArtURL, resMD: item.resMD, manager: manager)
@@ -2865,13 +2865,14 @@ final class SearchManager {
         } catch {
             SonosLog.error(.station, "startStation failed: \(error)")
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
     /// Play a selected radio station option (from station picker).
     func playStationOption(_ option: RadioStationOption, manager: SonosManager) async {
         guard let ip = manager.selectedSpeaker?.playbackIP else { return }
-        await playRadioStation(
+        _ = await playRadioStation(
             ip: ip, radioId: option.id, stationName: option.name,
             cloudServiceId: option.cloudServiceId, accountId: option.accountId,
             artURL: option.artURL, resMD: option.resMD, manager: manager)
@@ -2881,7 +2882,7 @@ final class SearchManager {
     private func playRadioStation(ip: String, radioId: String, stationName: String,
                                   cloudServiceId: String?, accountId: String?,
                                   artURL: String?, resMD: String?,
-                                  manager: SonosManager) async {
+                                  manager: SonosManager) async -> Bool {
         let localSid = cloudServiceId.flatMap { cloudToLocalSid[$0] }
         let params = extractServiceParams()
         let sid = localSid.map(String.init) ?? params?.sid ?? "204"
@@ -2931,9 +2932,11 @@ final class SearchManager {
 
             SonosLog.info(.station, "playRadioStation '\(stationName)'")
             await manager.refreshState()
+            return true
         } catch {
             SonosLog.error(.station, "playRadioStation failed: \(error)")
             errorMessage = error.localizedDescription
+            return false
         }
     }
 

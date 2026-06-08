@@ -144,18 +144,75 @@ final class LocalLibraryStore {
     func playOnSonos(
         playable: LocalServiceAppleMusicPlayable?,
         displayID: String,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind? = nil,
+        fallbackTitle: String? = nil,
+        fallbackArtist: String? = nil,
+        fallbackAlbum: String? = nil,
         manager: SonosManager,
         searchManager: SearchManager
     ) async {
         await runPlayback(id: displayID) {
-            guard let playable else {
-                throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+            var didAttemptPlayback = false
+            if let playable {
+                didAttemptPlayback = true
+                let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
+                if didStart { return }
             }
 
-            let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
-            guard didStart else {
-                throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+            if let fallbackKind,
+               let fallbackTitle,
+               let catalogPlayable = await catalogFallbackPlayable(
+                kind: fallbackKind,
+                title: fallbackTitle,
+                artist: fallbackArtist,
+                album: fallbackAlbum
+               ),
+               catalogPlayable.id != playable?.id {
+                didAttemptPlayback = true
+                let didStart = await searchManager.playLocalAppleMusic(catalogPlayable, manager: manager)
+                if didStart { return }
             }
+
+            if !didAttemptPlayback {
+                throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+            }
+            throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+        }
+    }
+
+    private func catalogFallbackPlayable(
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        title: String,
+        artist: String?,
+        album: String?
+    ) async -> LocalServiceAppleMusicPlayable? {
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: kind,
+            title: title,
+            artist: artist,
+            album: album)
+        guard !term.isEmpty else { return nil }
+
+        do {
+            let items = try await AppleMusicCatalogSearchClient.shared.search(term: term, limit: 12)
+            guard let item = LocalMusicCatalogMatcher.bestItem(
+                in: items,
+                kind: kind,
+                title: title,
+                artist: artist,
+                album: album
+            ) else {
+                SonosLog.info(.playback, "LocalService catalog fallback found no \(kind) match for '\(term)'")
+                return nil
+            }
+
+            SonosLog.info(
+                .playback,
+                "LocalService catalog fallback kind=\(kind) term='\(term)' matched \(item.sonosPlayableObjectID)")
+            return LocalServiceAppleMusicPlayable.make(catalogItem: item)
+        } catch {
+            SonosLog.info(.playback, "LocalService catalog fallback failed for '\(term)': \(error)")
+            return nil
         }
     }
 

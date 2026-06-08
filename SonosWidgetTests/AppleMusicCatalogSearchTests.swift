@@ -89,4 +89,64 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(item.sonosPlayableObjectID, "album:1440857781")
         XCTAssertNil(item.sonosPlayableMimeType)
     }
+
+    func testMatcherPrefersExactSongTitleAndArtist() {
+        let wrongArtist = AppleMusicCatalogSearchItem(
+            id: "111",
+            type: .song,
+            title: "Comfortable",
+            artist: "Another Artist",
+            album: "Other",
+            artworkURLString: nil,
+            duration: nil
+        )
+        let exact = AppleMusicCatalogSearchItem(
+            id: "222",
+            type: .song,
+            title: "Comfortable",
+            artist: "John Mayer",
+            album: "Inside Wants Out",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        let match = LocalMusicCatalogMatcher.bestItem(
+            in: [wrongArtist, exact],
+            kind: .song,
+            title: "comfortable",
+            artist: "john mayer",
+            album: nil)
+
+        XCTAssertEqual(match?.id, "222")
+    }
+
+    func testMatcherFallsBackToFirstRequestedKind() {
+        let album = AppleMusicCatalogSearchItem(
+            id: "album-1",
+            type: .album,
+            title: "Comfortable",
+            artist: "John Mayer",
+            album: "Comfortable",
+            artworkURLString: nil,
+            duration: nil
+        )
+        let song = AppleMusicCatalogSearchItem(
+            id: "song-1",
+            type: .song,
+            title: "Comfortable - Live",
+            artist: "John Mayer",
+            album: "Any Given Thursday",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        let match = LocalMusicCatalogMatcher.bestItem(
+            in: [album, song],
+            kind: .song,
+            title: "Comfortable",
+            artist: "John Mayer",
+            album: nil)
+
+        XCTAssertEqual(match?.id, "song-1")
+    }
 }

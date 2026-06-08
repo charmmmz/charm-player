@@ -71,6 +71,109 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     }
 }
 
+enum LocalMusicCatalogMatcher {
+    static func bestItem(
+        in items: [AppleMusicCatalogSearchItem],
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        title: String,
+        artist: String?,
+        album: String?
+    ) -> AppleMusicCatalogSearchItem? {
+        guard let targetType = AppleMusicCatalogItemType(kind: kind) else { return nil }
+        let candidates = items.filter { $0.type == targetType }
+        guard !candidates.isEmpty else { return nil }
+
+        let targetTitle = normalized(title)
+        let targetArtist = normalized(artist ?? "")
+        let targetAlbum = normalized(album ?? "")
+
+        let titleMatches = candidates.filter { normalized($0.title) == targetTitle }
+        if let exact = titleMatches.first(where: {
+            switch kind {
+            case .song:
+                return targetArtist.isEmpty || normalized($0.artist) == targetArtist
+            case .album:
+                return targetArtist.isEmpty || normalized($0.artist) == targetArtist
+            case .artist:
+                return true
+            case .playlist:
+                return targetArtist.isEmpty || normalized($0.artist) == targetArtist
+            case .station:
+                return false
+            }
+        }) {
+            return exact
+        }
+
+        if kind == .song,
+           let albumMatch = titleMatches.first(where: {
+               !targetAlbum.isEmpty && normalized($0.album) == targetAlbum
+           }) {
+            return albumMatch
+        }
+
+        return titleMatches.first ?? candidates.first
+    }
+
+    static func searchTerm(
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        title: String,
+        artist: String?,
+        album: String?
+    ) -> String {
+        var parts = [title]
+        switch kind {
+        case .song, .album, .artist:
+            parts.append(artist ?? "")
+        case .playlist:
+            break
+        case .station:
+            parts.append(artist ?? "")
+        }
+        if kind == .song {
+            parts.append(album ?? "")
+        }
+        return dedupedNormalized(parts)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private static func dedupedNormalized(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for value in values {
+            let normalizedValue = normalized(value)
+            guard !normalizedValue.isEmpty, seen.insert(normalizedValue).inserted else { continue }
+            result.append(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return result
+    }
+}
+
+extension AppleMusicCatalogItemType {
+    init?(kind: LocalServiceAppleMusicPlayable.Kind) {
+        switch kind {
+        case .song:
+            self = .song
+        case .album:
+            self = .album
+        case .artist:
+            self = .artist
+        case .playlist:
+            self = .playlist
+        case .station:
+            return nil
+        }
+    }
+}
+
 enum AppleMusicCatalogSearchError: LocalizedError {
     case authorizationDenied
 

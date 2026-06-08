@@ -348,6 +348,10 @@ struct LocalLibraryView: View {
                     await store.playOnSonos(
                         playable: LocalServiceAppleMusicPlayable.make(song: song),
                         displayID: song.id.rawValue,
+                        fallbackKind: .song,
+                        fallbackTitle: song.title,
+                        fallbackArtist: song.artistName,
+                        fallbackAlbum: song.albumTitle,
                         manager: manager,
                         searchManager: searchManager)
                 }
@@ -362,6 +366,9 @@ struct LocalLibraryView: View {
                     await store.playOnSonos(
                         playable: LocalServiceAppleMusicPlayable.make(artist: artist),
                         displayID: artist.id.rawValue,
+                        fallbackKind: .artist,
+                        fallbackTitle: artist.name,
+                        fallbackArtist: artist.name,
                         manager: manager,
                         searchManager: searchManager)
                 }
@@ -530,6 +537,10 @@ struct LocalLibraryView: View {
                     await store.playOnSonos(
                         playable: LocalServiceAppleMusicPlayable.make(song: song),
                         displayID: song.id.rawValue,
+                        fallbackKind: .song,
+                        fallbackTitle: song.title,
+                        fallbackArtist: song.artistName,
+                        fallbackAlbum: song.albumTitle,
                         manager: manager,
                         searchManager: searchManager)
                 }
@@ -581,6 +592,9 @@ struct LocalLibraryView: View {
                     await store.playOnSonos(
                         playable: LocalServiceAppleMusicPlayable.make(artist: artist),
                         displayID: artist.id.rawValue,
+                        fallbackKind: .artist,
+                        fallbackTitle: artist.name,
+                        fallbackArtist: artist.name,
                         manager: manager,
                         searchManager: searchManager)
                 }
@@ -857,27 +871,12 @@ private struct LocalLibraryArtworkTile: View {
                 fallbackIcon
 
                 if let artwork {
-                    let requestSize = artworkRequestSize(for: artwork, in: proxy.size)
-                    ArtworkImage(
-                        artwork,
-                        width: CGFloat(requestSize.width),
-                        height: CGFloat(requestSize.height)
-                    )
-                    .scaledToFit()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
+                    LocalMusicArtworkView(artwork: artwork)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func artworkRequestSize(for artwork: Artwork, in size: CGSize) -> LocalMusicArtworkURL.RequestSize {
-        let pixels = Int(max(size.width, size.height) * 2)
-        return LocalMusicArtworkURL.fittedRequestSize(
-            maximumWidth: artwork.maximumWidth,
-            maximumHeight: artwork.maximumHeight,
-            shortSidePixels: pixels)
     }
 
     private var fallbackIcon: some View {

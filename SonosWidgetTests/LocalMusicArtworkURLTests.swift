@@ -41,4 +41,37 @@ final class LocalMusicArtworkURLTests: XCTestCase {
         XCTAssertEqual(size.width, 300)
         XCTAssertEqual(size.height, 300)
     }
+
+    func testFittedDisplaySizePreservesWideArtworkInsideSquareBounds() {
+        let size = LocalMusicArtworkURL.fittedDisplaySize(
+            maximumWidth: 1200,
+            maximumHeight: 600,
+            boundingWidth: 300,
+            boundingHeight: 300)
+
+        XCTAssertEqual(size.width, 300)
+        XCTAssertEqual(size.height, 150)
+    }
+
+    func testFittedDisplaySizePreservesTallArtworkInsideSquareBounds() {
+        let size = LocalMusicArtworkURL.fittedDisplaySize(
+            maximumWidth: 600,
+            maximumHeight: 1200,
+            boundingWidth: 300,
+            boundingHeight: 300)
+
+        XCTAssertEqual(size.width, 150)
+        XCTAssertEqual(size.height, 300)
+    }
+
+    func testFittedDisplaySizeFallsBackToBoundsWhenSourceSizeIsUnknown() {
+        let size = LocalMusicArtworkURL.fittedDisplaySize(
+            maximumWidth: 0,
+            maximumHeight: 0,
+            boundingWidth: 300,
+            boundingHeight: 280)
+
+        XCTAssertEqual(size.width, 300)
+        XCTAssertEqual(size.height, 280)
+    }
 }

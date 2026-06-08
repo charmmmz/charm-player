@@ -175,6 +175,31 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
         )
     }
 
+    static func make(catalogItem: AppleMusicCatalogSearchItem) -> LocalServiceAppleMusicPlayable? {
+        let kind: Kind
+        switch catalogItem.type {
+        case .song:
+            kind = .song
+        case .album:
+            kind = .album
+        case .artist:
+            kind = .artist
+        case .playlist:
+            kind = .playlist
+        }
+
+        return make(
+            kind: kind,
+            rawID: catalogItem.id,
+            playParameterCandidates: [catalogItem.sonosPlayableObjectID, catalogItem.id],
+            title: catalogItem.title,
+            artist: catalogItem.artist,
+            album: catalogItem.album,
+            artworkURLString: catalogItem.artworkURLString,
+            duration: catalogItem.duration
+        )
+    }
+
     static func make(recentlyPlayed item: RecentlyPlayedMusicItem) -> LocalServiceAppleMusicPlayable? {
         switch item {
         case .album(let album):

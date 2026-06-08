@@ -35,6 +35,7 @@ enum LocalMusicLibraryError: LocalizedError, Equatable {
     case authorizationDenied
     case emptyPlaybackQueue
     case artistHasNoSongs
+    case catalogMatchMissing
 
     var errorDescription: String? {
         switch self {
@@ -44,6 +45,8 @@ enum LocalMusicLibraryError: LocalizedError, Equatable {
             return "Nothing could be queued for playback."
         case .artistHasNoSongs:
             return "No playable songs were found for this artist."
+        case .catalogMatchMissing:
+            return "This Apple Music library item could not be matched in the catalog."
         }
     }
 }
@@ -179,11 +182,21 @@ struct LocalMusicLibraryClient {
     }
 
     func albumDetails(for album: Album) async throws -> Album {
-        try await album.with(.tracks, .artists)
+        do {
+            return try await album.with(.tracks)
+        } catch {
+            SonosLog.info(.albumDetail, "Library album detail load failed, trying catalog fallback: \(error)")
+            return try await catalogAlbumDetails(for: album)
+        }
     }
 
     func playlistDetails(for playlist: Playlist) async throws -> Playlist {
-        try await playlist.with(.tracks, .featuredArtists, .moreByCurator)
+        do {
+            return try await playlist.with(.tracks)
+        } catch {
+            SonosLog.info(.playlistDetail, "Library playlist detail load failed, trying catalog fallback: \(error)")
+            return try await catalogPlaylistDetails(for: playlist)
+        }
     }
 
     func play(artist: Artist) async throws {
@@ -269,6 +282,70 @@ struct LocalMusicLibraryClient {
         request.sort(by: \.title, ascending: true)
         let response = try await request.response()
         return Array(response.items)
+    }
+
+    private func catalogAlbumDetails(for album: Album) async throws -> Album {
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: .album,
+            title: album.title,
+            artist: album.artistName,
+            album: album.title)
+        var request = MusicCatalogSearchRequest(term: term, types: [Album.self])
+        request.limit = 12
+        let response = try await request.response()
+        let albums = Array(response.albums)
+        let items = albums.map {
+            AppleMusicCatalogSearchItem(
+                id: $0.id.rawValue,
+                type: .album,
+                title: $0.title,
+                artist: $0.artistName,
+                album: $0.title,
+                artworkURLString: $0.artwork?.url(width: 400, height: 400)?.absoluteString,
+                duration: nil)
+        }
+        guard let match = LocalMusicCatalogMatcher.bestItem(
+            in: items,
+            kind: .album,
+            title: album.title,
+            artist: album.artistName,
+            album: album.title),
+              let catalogAlbum = albums.first(where: { $0.id.rawValue == match.id }) else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await catalogAlbum.with(.tracks)
+    }
+
+    private func catalogPlaylistDetails(for playlist: Playlist) async throws -> Playlist {
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: .playlist,
+            title: playlist.name,
+            artist: playlist.curatorName,
+            album: nil)
+        var request = MusicCatalogSearchRequest(term: term, types: [Playlist.self])
+        request.limit = 12
+        let response = try await request.response()
+        let playlists = Array(response.playlists)
+        let items = playlists.map {
+            AppleMusicCatalogSearchItem(
+                id: $0.id.rawValue,
+                type: .playlist,
+                title: $0.name,
+                artist: $0.curatorName ?? "",
+                album: "",
+                artworkURLString: $0.artwork?.url(width: 400, height: 400)?.absoluteString,
+                duration: nil)
+        }
+        guard let match = LocalMusicCatalogMatcher.bestItem(
+            in: items,
+            kind: .playlist,
+            title: playlist.name,
+            artist: playlist.curatorName,
+            album: nil),
+              let catalogPlaylist = playlists.first(where: { $0.id.rawValue == match.id }) else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await catalogPlaylist.with(.tracks)
     }
 
     private func play(_ songs: [Song], startingAt song: Song) async throws {

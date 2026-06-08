@@ -86,4 +86,26 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         XCTAssertEqual(playable?.catalogID, "song:16704742")
         XCTAssertEqual(playable?.sonosObjectID, "song:16704742")
     }
+
+    func testCatalogSearchItemConvertsToPlayable() {
+        let item = AppleMusicCatalogSearchItem(
+            id: "1440857781",
+            type: .song,
+            title: "Nikes",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            artworkURLString: "https://example.com/cover.jpg",
+            duration: 312
+        )
+
+        let playable = LocalServiceAppleMusicPlayable.make(catalogItem: item)
+
+        XCTAssertEqual(playable?.kind, .song)
+        XCTAssertEqual(playable?.catalogID, "song:1440857781")
+        XCTAssertEqual(playable?.title, "Nikes")
+        XCTAssertEqual(playable?.artist, "Frank Ocean")
+        XCTAssertEqual(playable?.album, "Blonde")
+        XCTAssertEqual(playable?.artworkURLString, "https://example.com/cover.jpg")
+        XCTAssertEqual(playable?.duration, 312)
+    }
 }
