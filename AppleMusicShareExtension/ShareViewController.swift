@@ -1,5 +1,6 @@
 import UIKit
 import UniformTypeIdentifiers
+import UserNotifications
 
 final class ShareViewController: UIViewController {
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
@@ -89,7 +90,7 @@ final class ShareViewController: UIViewController {
                     if success {
                         self.extensionContext?.completeRequest(returningItems: nil)
                     } else {
-                        self.showSavedFallback()
+                        self.showNotificationFallbackAfterBlockedOpen()
                     }
                 }
             }
@@ -109,9 +110,23 @@ final class ShareViewController: UIViewController {
     private func showSavedFallback() {
         activityIndicator.stopAnimating()
         titleLabel.text = "Saved to Charm Player"
-        detailLabel.text = "Open Charm Player to choose a speaker."
+        detailLabel.text = "iOS blocked opening from Apple Music. Use a notification or open Charm Player manually."
+        openButton.setTitle("Notify to Open", for: .normal)
         openButton.isHidden = false
         doneButton.isHidden = false
+    }
+
+    private func showNotificationFallbackAfterBlockedOpen() {
+        scheduleOpenNotification(requestAuthorizationIfNeeded: false) { [weak self] scheduled in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if scheduled {
+                    self.extensionContext?.completeRequest(returningItems: nil)
+                } else {
+                    self.showSavedFallback()
+                }
+            }
+        }
     }
 
     private func showError(_ message: String) {
@@ -123,11 +138,11 @@ final class ShareViewController: UIViewController {
     }
 
     @objc private func openButtonTapped() {
-        setLoading(title: "Opening Charm Player", detail: nil)
-        openContainingApp { [weak self] success in
+        setLoading(title: "Preparing notification", detail: nil)
+        scheduleOpenNotification(requestAuthorizationIfNeeded: true) { [weak self] scheduled in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if success {
+                if scheduled {
                     self.extensionContext?.completeRequest(returningItems: nil)
                 } else {
                     self.showSavedFallback()
@@ -147,6 +162,48 @@ final class ShareViewController: UIViewController {
             return
         }
         extensionContext?.open(url, completionHandler: completion)
+    }
+
+    private func scheduleOpenNotification(
+        requestAuthorizationIfNeeded: Bool,
+        completion: @escaping (Bool) -> Void
+    ) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.addOpenNotification(completion: completion)
+            case .notDetermined where requestAuthorizationIfNeeded:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    guard granted else {
+                        completion(false)
+                        return
+                    }
+                    self.addOpenNotification(completion: completion)
+                }
+            default:
+                completion(false)
+            }
+        }
+    }
+
+    private func addOpenNotification(completion: @escaping (Bool) -> Void) {
+        let content = UNMutableNotificationContent()
+        content.title = "Open Charm Player"
+        content.body = "Tap to choose a speaker for your Apple Music share."
+        content.sound = .default
+        content.userInfo = ["route": "appleMusicShare"]
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: "apple-music-share-\(UUID().uuidString)",
+            content: content,
+            trigger: trigger
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            completion(error == nil)
+        }
     }
 
     private func loadFirstSharedValue(completion: @escaping (Result<String, Error>) -> Void) {

@@ -36,9 +36,13 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     var sonosPlayableObjectID: String {
         switch type {
         case .song:
-            return "10032020\(id)"
-        case .album, .artist, .playlist:
-            return id
+            return "song:\(id)"
+        case .album:
+            return "album:\(id)"
+        case .artist:
+            return "artist:\(id)"
+        case .playlist:
+            return "playlist:\(id)"
         }
     }
 
@@ -53,7 +57,7 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
 
     func browseItem(localServiceId: Int?, uri: String? = nil) -> BrowseItem {
         BrowseItem(
-            id: id,
+            id: sonosPlayableObjectID,
             title: title,
             artist: artist,
             album: album,

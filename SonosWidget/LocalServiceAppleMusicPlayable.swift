@@ -61,9 +61,7 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
 
     var sonosObjectID: String {
         switch kind {
-        case .song:
-            return "10032020\(catalogID)"
-        case .album, .artist, .playlist, .station:
+        case .song, .album, .artist, .playlist, .station:
             return catalogID
         }
     }
@@ -219,16 +217,30 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
 
         switch kind {
         case .song:
-            return SonosAppleMusicTrackResolver.storeID(fromObjectID: candidate)
-        case .album, .artist:
-            return numericCatalogID(from: candidate, namespaces: namespaces(for: kind))
+            return SonosAppleMusicTrackResolver.storeID(fromObjectID: candidate).map {
+                "song:\($0)"
+            }
+        case .album:
+            return namespacedObjectID(
+                from: candidate,
+                namespaces: namespaces(for: kind),
+                defaultNamespace: "album") {
+                    $0.allSatisfy(\.isNumber) || $0.hasPrefix("l.")
+                }
+        case .artist:
+            return namespacedObjectID(
+                from: candidate,
+                namespaces: namespaces(for: kind),
+                defaultNamespace: "artist") {
+                    $0.allSatisfy(\.isNumber) || $0.hasPrefix("r.")
+                }
         case .playlist:
-            if candidate.hasPrefix("pl.") {
-                return candidate
-            }
-            return namespacedSuffix(from: candidate, namespaces: namespaces(for: kind)) {
-                $0.hasPrefix("pl.") || $0.allSatisfy(\.isNumber)
-            }
+            return namespacedObjectID(
+                from: candidate,
+                namespaces: namespaces(for: kind),
+                defaultNamespace: "playlist") {
+                    $0.hasPrefix("pl.") || $0.hasPrefix("p.") || $0.allSatisfy(\.isNumber)
+                }
         case .station:
             if candidate.hasPrefix("radio:") {
                 return candidate
@@ -240,20 +252,16 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
         }
     }
 
-    private static func numericCatalogID(from value: String, namespaces: Set<String>) -> String? {
-        if value.allSatisfy(\.isNumber) {
-            return value
-        }
-        return namespacedSuffix(from: value, namespaces: namespaces) {
-            $0.allSatisfy(\.isNumber)
-        }
-    }
-
-    private static func namespacedSuffix(
+    private static func namespacedObjectID(
         from value: String,
         namespaces: Set<String>,
+        defaultNamespace: String,
         isValid: (String) -> Bool
     ) -> String? {
+        if isValid(value) {
+            return "\(defaultNamespace):\(value)"
+        }
+
         let parts = value.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
         guard parts.count >= 2,
               let namespace = parts.dropLast().last?.lowercased(),
@@ -261,15 +269,23 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
             return nil
         }
         let suffix = parts.last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !suffix.isEmpty && isValid(suffix) ? suffix : nil
+        guard !suffix.isEmpty && isValid(suffix) else { return nil }
+        return "\(canonicalNamespace(namespace, defaultNamespace: defaultNamespace)):\(suffix)"
+    }
+
+    private static func canonicalNamespace(_ namespace: String, defaultNamespace: String) -> String {
+        if namespace.hasPrefix("library") {
+            return namespace
+        }
+        return defaultNamespace
     }
 
     private static func namespaces(for kind: Kind) -> Set<String> {
         switch kind {
         case .song: return ["song", "songs", "track", "tracks"]
-        case .album: return ["album", "albums"]
-        case .artist: return ["artist", "artists"]
-        case .playlist: return ["playlist", "playlists"]
+        case .album: return ["album", "albums", "libraryalbum", "libraryalbums"]
+        case .artist: return ["artist", "artists", "libraryartist", "libraryartists"]
+        case .playlist: return ["playlist", "playlists", "libraryplaylist", "libraryplaylists"]
         case .station: return ["station", "stations", "radio"]
         }
     }

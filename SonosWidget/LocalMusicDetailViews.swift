@@ -1,6 +1,7 @@
 import Foundation
 import MusicKit
 import SwiftUI
+import UIKit
 
 struct LocalMusicAlbumDetailView: View {
     let album: Album
@@ -11,8 +12,15 @@ struct LocalMusicAlbumDetailView: View {
     @State private var detailedAlbum: Album?
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var coverImage: UIImage?
+    @State private var themeColor: Color?
 
     private var displayAlbum: Album { detailedAlbum ?? album }
+    private var coverURL: URL? {
+        displayAlbum.artwork.flatMap {
+            LocalMusicArtworkURL.url(for: $0, shortSidePixels: 600)
+        }
+    }
     private var tracks: [Track] {
         guard let tracks = detailedAlbum?.tracks else { return [] }
         return Array(tracks)
@@ -32,17 +40,16 @@ struct LocalMusicAlbumDetailView: View {
         .background(detailBackground.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadDetails() }
+        .task(id: coverURL) { await loadCoverImage(from: coverURL) }
     }
 
     private var detailBackground: some View {
-        LinearGradient(
-            colors: [
-                Color.black,
-                Color(red: 0.08, green: 0.08, blue: 0.09)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
+        SonosArtworkBackground(
+            image: coverImage ?? manager.albumArtImage,
+            fallbackColor: themeColor ?? manager.albumArtDominantColor
         )
+        .animation(.easeInOut(duration: 0.8), value: coverURL)
+        .animation(.easeInOut(duration: 0.8), value: themeColor)
     }
 
     private var header: some View {
@@ -156,6 +163,27 @@ struct LocalMusicAlbumDetailView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func loadCoverImage(from url: URL?) async {
+        guard let url else {
+            coverImage = nil
+            themeColor = nil
+            return
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            let image = UIImage(data: data)
+            coverImage = image
+            themeColor = image?.dominantColor()
+        } catch {
+            guard !Task.isCancelled else { return }
+            SonosLog.error(.albumDetail, "Local Music cover image load failed: \(error)")
+            coverImage = nil
+            themeColor = nil
+        }
+    }
 }
 
 struct LocalMusicPlaylistDetailView: View {
@@ -167,8 +195,15 @@ struct LocalMusicPlaylistDetailView: View {
     @State private var detailedPlaylist: Playlist?
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var coverImage: UIImage?
+    @State private var themeColor: Color?
 
     private var displayPlaylist: Playlist { detailedPlaylist ?? playlist }
+    private var coverURL: URL? {
+        displayPlaylist.artwork.flatMap {
+            LocalMusicArtworkURL.url(for: $0, shortSidePixels: 600)
+        }
+    }
     private var tracks: [Track] {
         guard let tracks = detailedPlaylist?.tracks else { return [] }
         return Array(tracks)
@@ -188,17 +223,16 @@ struct LocalMusicPlaylistDetailView: View {
         .background(detailBackground.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadDetails() }
+        .task(id: coverURL) { await loadCoverImage(from: coverURL) }
     }
 
     private var detailBackground: some View {
-        LinearGradient(
-            colors: [
-                Color.black,
-                Color(red: 0.08, green: 0.08, blue: 0.09)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
+        SonosArtworkBackground(
+            image: coverImage ?? manager.albumArtImage,
+            fallbackColor: themeColor ?? manager.albumArtDominantColor
         )
+        .animation(.easeInOut(duration: 0.8), value: coverURL)
+        .animation(.easeInOut(duration: 0.8), value: themeColor)
     }
 
     private var header: some View {
@@ -308,6 +342,27 @@ struct LocalMusicPlaylistDetailView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func loadCoverImage(from url: URL?) async {
+        guard let url else {
+            coverImage = nil
+            themeColor = nil
+            return
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            let image = UIImage(data: data)
+            coverImage = image
+            themeColor = image?.dominantColor()
+        } catch {
+            guard !Task.isCancelled else { return }
+            SonosLog.error(.playlistDetail, "Local Music cover image load failed: \(error)")
+            coverImage = nil
+            themeColor = nil
+        }
+    }
 }
 
 private struct LocalMusicDetailArtwork: View {
@@ -322,8 +377,13 @@ private struct LocalMusicDetailArtwork: View {
             fallbackIcon
 
             if let artwork {
-                ArtworkImage(artwork, width: 420, height: 420)
-                    .scaledToFill()
+                let requestSize = artworkRequestSize(for: artwork)
+                ArtworkImage(
+                    artwork,
+                    width: CGFloat(requestSize.width),
+                    height: CGFloat(requestSize.height)
+                )
+                .scaledToFit()
                     .frame(width: 240, height: 240)
                     .clipped()
             }
@@ -331,6 +391,13 @@ private struct LocalMusicDetailArtwork: View {
         .frame(width: 240, height: 240)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+    }
+
+    private func artworkRequestSize(for artwork: Artwork) -> LocalMusicArtworkURL.RequestSize {
+        LocalMusicArtworkURL.fittedRequestSize(
+            maximumWidth: artwork.maximumWidth,
+            maximumHeight: artwork.maximumHeight,
+            shortSidePixels: 480)
     }
 
     private var fallbackIcon: some View {

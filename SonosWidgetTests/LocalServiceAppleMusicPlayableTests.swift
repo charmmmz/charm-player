@@ -6,7 +6,7 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         let playable = LocalServiceAppleMusicPlayable.make(
             kind: .song,
             rawID: "i.local-library-song",
-            playParameterCandidates: ["1440857781"],
+            playParameterCandidates: ["song:1440857781"],
             title: "Nikes",
             artist: "Frank Ocean",
             album: "Blonde",
@@ -14,8 +14,8 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
             duration: 312
         )
 
-        XCTAssertEqual(playable?.catalogID, "1440857781")
-        XCTAssertEqual(playable?.sonosObjectID, "100320201440857781")
+        XCTAssertEqual(playable?.catalogID, "song:1440857781")
+        XCTAssertEqual(playable?.sonosObjectID, "song:1440857781")
         XCTAssertEqual(playable?.cloudType, "TRACK")
         XCTAssertFalse(playable?.isContainer ?? true)
     }
@@ -32,8 +32,8 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
             duration: nil
         )
 
-        XCTAssertEqual(playable?.catalogID, "1440864059")
-        XCTAssertEqual(playable?.sonosObjectID, "1440864059")
+        XCTAssertEqual(playable?.catalogID, "album:1440864059")
+        XCTAssertEqual(playable?.sonosObjectID, "album:1440864059")
         XCTAssertEqual(playable?.cloudType, "ALBUM")
         XCTAssertTrue(playable?.isContainer ?? false)
     }
@@ -50,8 +50,8 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
             duration: nil
         )
 
-        XCTAssertEqual(playable?.catalogID, "pl.abc123")
-        XCTAssertEqual(playable?.sonosObjectID, "pl.abc123")
+        XCTAssertEqual(playable?.catalogID, "playlist:pl.abc123")
+        XCTAssertEqual(playable?.sonosObjectID, "playlist:pl.abc123")
         XCTAssertEqual(playable?.cloudType, "PLAYLIST")
         XCTAssertTrue(playable?.isContainer ?? false)
     }
@@ -69,5 +69,21 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         )
 
         XCTAssertNil(playable)
+    }
+
+    func testNumericSongCandidateIsNamespacedForSonos() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .song,
+            rawID: "i.local-library-song",
+            playParameterCandidates: ["16704742"],
+            title: "No Such Thing",
+            artist: "John Mayer",
+            album: "Room for Squares",
+            artworkURLString: nil,
+            duration: 231
+        )
+
+        XCTAssertEqual(playable?.catalogID, "song:16704742")
+        XCTAssertEqual(playable?.sonosObjectID, "song:16704742")
     }
 }

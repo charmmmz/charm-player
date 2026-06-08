@@ -1313,6 +1313,12 @@ final class SearchManager {
             return false
         }
 
+        SonosLog.info(
+            .playback,
+            "LocalService play kind=\(playable.kind) catalogID=\(playable.catalogID) " +
+            "objectID=\(item.id) localSid=\(item.serviceId.map(String.init) ?? "nil") " +
+            "cloudServiceId=\(serviceId) accountId=\(accountId) uri=\(item.uri ?? "nil")")
+
         return await playNowInternal(item: item, manager: manager)
     }
 
@@ -1325,7 +1331,7 @@ final class SearchManager {
         switch playable.kind {
         case .song:
             item = makeTrackItem(
-                objectId: playable.sonosObjectID,
+                objectId: playable.catalogID,
                 title: playable.title,
                 artist: playable.artist,
                 album: playable.album,
@@ -1460,25 +1466,55 @@ final class SearchManager {
             return nil
         }
 
-        let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
-
         switch type {
         case "TRACK":
+            let trackId = trackURIObjectId(objectId: objectId, cloudServiceId: cloudSid)
+            let encodedId = trackId.replacingOccurrences(of: ":", with: "%3a")
             let (scheme, ext, flags) = trackURIComponents(localSid: sid, mimeType: mimeType)
             return "\(scheme):\(encodedId)\(ext)?sid=\(sid)&flags=\(flags)&sn=\(aid)"
         case "ALBUM":
+            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
             return "x-rincon-cpcontainer:1004206c\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
         case "PLAYLIST":
+            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
             return "x-rincon-cpcontainer:1006206c\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
         case "PROGRAM":
+            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
             return "x-sonosapi-radio:\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
         case "ARTIST":
+            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
             // Artist favorites use a cp-container URI with the bare object id
             // (no `10052064` prefix on the URI side — only the metadata id has it).
             return "x-rincon-cpcontainer:\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
         default:
             return nil
         }
+    }
+
+    private func trackURIObjectId(objectId: String, cloudServiceId: String) -> String {
+        guard isAppleMusicServiceId(cloudServiceId) else { return objectId }
+        if let storeID = SonosAppleMusicTrackResolver.storeID(fromObjectID: objectId) {
+            return "song:\(storeID)"
+        }
+        return objectId
+    }
+
+    private func appleMusicCatalogTrackId(from objectId: String) -> String {
+        let decodedObjectId = objectId.removingPercentEncoding ?? objectId
+        if let storeID = SonosAppleMusicTrackResolver.storeID(fromObjectID: decodedObjectId) {
+            return "song%3a\(storeID)"
+        }
+        return objectId
+    }
+
+    private func isAppleMusicServiceId(_ cloudServiceId: String) -> Bool {
+        if cloudServiceId == "52231" {
+            return true
+        }
+        guard let account = linkedAccounts.first(where: { $0.serviceId == cloudServiceId }) else {
+            return false
+        }
+        return isAppleMusicAccount(account)
     }
 
     /// Returns (scheme, fileExtension, flags) for track URIs.
@@ -1564,9 +1600,9 @@ final class SearchManager {
     ///   - ALBUM    → title, class, albumArtURI, creator, albumArtist, desc
     ///   - PLAYLIST → title, class, albumArtURI, creator, desc
     ///   - TRACK    → title, class, albumArtURI, creator, album, albumArtist, desc
-    private func buildCloudDIDLMetadata(item: BrowseItem, localSid: Int, accountId: String) -> String {
+    func buildCloudDIDLMetadata(item: BrowseItem, localSid: Int, accountId: String) -> String {
         let cloudSid = localToCloudSid[localSid] ?? String(localSid)
-        let username = cloudServiceUsername[cloudSid] ?? "X_#Svc\(cloudSid)-0-Token"
+        let username = cloudServiceUsername(for: cloudSid, accountId: accountId)
         let desc = "SA_RINCON\(cloudSid)_\(username)"
 
         let encodedObjId = item.id.replacingOccurrences(of: ":", with: "%3a")
@@ -1611,6 +1647,17 @@ final class SearchManager {
             "</\(xmlTag)></DIDL-Lite>"
     }
 
+    private func cloudServiceUsername(for cloudSid: String, accountId: String) -> String {
+        if let username = cloudServiceUsername[cloudSid], !username.isEmpty {
+            return username
+        }
+        if let username = linkedAccounts.first(where: { $0.serviceId == cloudSid })?.username,
+           !username.isEmpty {
+            return username
+        }
+        return "X_#Svc\(cloudSid)-\(accountId)-Token"
+    }
+
     /// Returns (itemId, upnpClass, xmlTag) based on cloudType.
     /// Format derived from Wireshark capture of official Sonos app.
     private func metadataComponents(cloudType: String, objectId: String,
@@ -1619,7 +1666,7 @@ final class SearchManager {
         case "TRACK":
             let flags = extractFlagsFromURI(uri)
             let flagsHex = String(format: "%04x", flags)
-            return ("1003\(flagsHex)\(objectId)",
+            return (trackMetadataObjectId(objectId: objectId, flagsHex: flagsHex),
                     "object.item.audioItem.musicTrack",
                     "item")
         case "ALBUM":
@@ -1644,6 +1691,11 @@ final class SearchManager {
         default:
             return (objectId, "object.item.audioItem.musicTrack", "item")
         }
+    }
+
+    private func trackMetadataObjectId(objectId: String, flagsHex: String) -> String {
+        let catalogTrackId = appleMusicCatalogTrackId(from: objectId)
+        return "1003\(flagsHex)\(catalogTrackId)"
     }
 
     private func extractFlagsFromURI(_ uri: String?) -> Int {
@@ -2641,6 +2693,14 @@ final class SearchManager {
             SonosLog.error(.playback, "playNow: no URI for '\(item.title)'")
             return false
         }
+
+        let metadataId = extractDIDLItemId(from: playMeta) ?? "nil"
+        let metadataDesc = SonosAPI.extractTag("desc", from: playMeta) ?? "nil"
+        SonosLog.info(
+            .playback,
+            "playNow enqueue title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
+            "itemId=\(item.id) serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
+            "uri=\(uri) metadataId=\(metadataId) desc=\(metadataDesc)")
 
         do {
             guard let uuid = activeSpeaker?.id else {

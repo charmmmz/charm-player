@@ -59,14 +59,12 @@ struct LocalLibraryView: View {
     }
 
     private var backgroundLayer: some View {
-        LinearGradient(
-            colors: [
-                Color.black,
-                Color(red: 0.07, green: 0.08, blue: 0.09)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
+        SonosArtworkBackground(
+            image: manager.albumArtImage,
+            fallbackColor: manager.albumArtDominantColor
         )
+        .animation(.easeInOut(duration: 0.8), value: manager.trackInfo?.albumArtURL)
+        .animation(.easeInOut(duration: 0.8), value: manager.albumArtDominantColor)
     }
 
     private var loadingContent: some View {
@@ -859,18 +857,27 @@ private struct LocalLibraryArtworkTile: View {
                 fallbackIcon
 
                 if let artwork {
+                    let requestSize = artworkRequestSize(for: artwork, in: proxy.size)
                     ArtworkImage(
                         artwork,
-                        width: max(1, proxy.size.width * 2),
-                        height: max(1, proxy.size.height * 2)
+                        width: CGFloat(requestSize.width),
+                        height: CGFloat(requestSize.height)
                     )
-                    .scaledToFill()
+                    .scaledToFit()
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func artworkRequestSize(for artwork: Artwork, in size: CGSize) -> LocalMusicArtworkURL.RequestSize {
+        let pixels = Int(max(size.width, size.height) * 2)
+        return LocalMusicArtworkURL.fittedRequestSize(
+            maximumWidth: artwork.maximumWidth,
+            maximumHeight: artwork.maximumHeight,
+            shortSidePixels: pixels)
     }
 
     private var fallbackIcon: some View {

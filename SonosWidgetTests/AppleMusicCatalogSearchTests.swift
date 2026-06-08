@@ -29,7 +29,7 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
 
         let browseItem = item.browseItem(localServiceId: 204)
 
-        XCTAssertEqual(browseItem.id, "1440857781")
+        XCTAssertEqual(browseItem.id, "album:1440857781")
         XCTAssertEqual(browseItem.title, "Kind of Blue")
         XCTAssertEqual(browseItem.artist, "Miles Davis")
         XCTAssertEqual(browseItem.album, "Kind of Blue")
@@ -57,6 +57,7 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertFalse(browseItem.isContainer)
         XCTAssertNil(browseItem.serviceId)
         XCTAssertEqual(browseItem.cloudType, "TRACK")
+        XCTAssertEqual(browseItem.id, "song:1234567890")
     }
 
     func testSongSearchItemProvidesSonosPlayableObjectID() {
@@ -70,11 +71,11 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
             duration: 245
         )
 
-        XCTAssertEqual(item.sonosPlayableObjectID, "100320201234567890")
+        XCTAssertEqual(item.sonosPlayableObjectID, "song:1234567890")
         XCTAssertEqual(item.sonosPlayableMimeType, "audio/mp4")
     }
 
-    func testContainerSearchItemsUseRawCatalogIDsForSonosObjectID() {
+    func testContainerSearchItemsUseNamespacedSonosObjectID() {
         let item = AppleMusicCatalogSearchItem(
             id: "1440857781",
             type: .album,
@@ -85,7 +86,7 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
             duration: nil
         )
 
-        XCTAssertEqual(item.sonosPlayableObjectID, "1440857781")
+        XCTAssertEqual(item.sonosPlayableObjectID, "album:1440857781")
         XCTAssertNil(item.sonosPlayableMimeType)
     }
 }
