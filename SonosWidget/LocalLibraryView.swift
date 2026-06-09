@@ -489,6 +489,7 @@ struct LocalLibraryView: View {
         VStack(alignment: .leading, spacing: 6) {
             LocalLibraryArtworkTile(
                 artwork: item.artwork,
+                artworkURL: item.catalogArtworkURL(using: store),
                 fallbackSystemImage: item.fallbackSystemImage
             )
             .frame(width: 138, height: 138)
@@ -529,6 +530,7 @@ struct LocalLibraryView: View {
                 playRow(
                     id: song.id.rawValue,
                     artwork: song.artwork,
+                    artworkURL: store.catalogArtworkURL(for: song),
                     title: song.title,
                     subtitle: song.artistName,
                     detail: song.albumTitle,
@@ -641,6 +643,7 @@ struct LocalLibraryView: View {
     private func playRow(
         id: String,
         artwork: Artwork?,
+        artworkURL: URL? = nil,
         title: String,
         subtitle: String,
         detail: String?,
@@ -652,6 +655,7 @@ struct LocalLibraryView: View {
         } label: {
             rowContent(
                 artwork: artwork,
+                artworkURL: artworkURL,
                 title: title,
                 subtitle: subtitle,
                 detail: detail,
@@ -665,6 +669,7 @@ struct LocalLibraryView: View {
 
     private func rowContent(
         artwork: Artwork?,
+        artworkURL: URL? = nil,
         title: String,
         subtitle: String,
         detail: String?,
@@ -674,6 +679,7 @@ struct LocalLibraryView: View {
         HStack(spacing: 12) {
             LocalLibraryArtworkTile(
                 artwork: artwork,
+                artworkURL: artworkURL,
                 fallbackSystemImage: fallbackSystemImage
             )
             .frame(width: 56, height: 56)
@@ -821,6 +827,15 @@ private enum LocalServiceCardItem: Identifiable {
         }
     }
 
+    func catalogArtworkURL(using store: LocalLibraryStore) -> URL? {
+        switch self {
+        case .song(let song):
+            return store.catalogArtworkURL(for: song)
+        case .album, .artist, .playlist, .station, .recentlyPlayed, .recommendation:
+            return nil
+        }
+    }
+
     private func recentlyPlayedFallbackTitle(_ item: RecentlyPlayedMusicItem) -> String {
         switch item {
         case .album: return "Album"
@@ -860,6 +875,7 @@ private enum LocalServiceCardItem: Identifiable {
 
 private struct LocalLibraryArtworkTile: View {
     let artwork: Artwork?
+    let artworkURL: URL?
     let fallbackSystemImage: String
 
     var body: some View {
@@ -869,6 +885,10 @@ private struct LocalLibraryArtworkTile: View {
                     .fill(Color.white.opacity(0.08))
 
                 fallbackIcon
+
+                if let artworkURL {
+                    remoteArtwork(url: artworkURL)
+                }
 
                 if let artwork {
                     LocalMusicArtworkView(artwork: artwork)
@@ -883,6 +903,18 @@ private struct LocalLibraryArtworkTile: View {
         Image(systemName: fallbackSystemImage)
             .font(.title3)
             .foregroundStyle(.secondary)
+    }
+
+    private func remoteArtwork(url: URL) -> some View {
+        AsyncImage(url: url) { phase in
+            if let image = phase.image {
+                image
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
     }
 }
 

@@ -18,6 +18,10 @@ final class LocalLibraryStore {
     var activePlaybackItemID: String?
     var errorMessage: String?
     var hasLoaded = false
+    var catalogArtworkURLStrings: [String: String] = [:]
+
+    @ObservationIgnored private var artworkLookupTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogArtworkMissIDs: Set<String> = []
 
     convenience init() {
         self.init(client: .shared)
@@ -49,6 +53,7 @@ final class LocalLibraryStore {
     }
 
     func reload() async {
+        artworkLookupTask?.cancel()
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -60,7 +65,10 @@ final class LocalLibraryStore {
             recentlyPlayed = content.recentlyPlayed
             recommendations = content.recommendations
             searchSnapshot = nil
+            catalogArtworkURLStrings = [:]
+            catalogArtworkMissIDs = []
             hasLoaded = true
+            scheduleCatalogArtworkLookup(for: content.snapshot.songs)
         } catch {
             authorizationStatus = MusicAuthorization.currentStatus
             errorMessage = displayMessage(for: error)
@@ -82,7 +90,9 @@ final class LocalLibraryStore {
 
         do {
             authorizationStatus = try await client.authorize()
-            searchSnapshot = try await client.search(term: trimmed)
+            let snapshot = try await client.search(term: trimmed)
+            searchSnapshot = snapshot
+            scheduleCatalogArtworkLookup(for: snapshot.songs)
         } catch {
             guard !Task.isCancelled else { return }
             searchSnapshot = nil
@@ -91,6 +101,10 @@ final class LocalLibraryStore {
         }
 
         isSearching = false
+    }
+
+    func catalogArtworkURL(for song: Song) -> URL? {
+        catalogArtworkURLStrings[song.id.rawValue].flatMap(URL.init(string:))
     }
 
     func play(song: Song) async {
@@ -212,6 +226,53 @@ final class LocalLibraryStore {
             return LocalServiceAppleMusicPlayable.make(catalogItem: item)
         } catch {
             SonosLog.info(.playback, "LocalService catalog fallback failed for '\(term)': \(error)")
+            return nil
+        }
+    }
+
+    private func scheduleCatalogArtworkLookup(for songs: [Song]) {
+        let candidates = songs.filter { song in
+            catalogArtworkURLStrings[song.id.rawValue] == nil
+                && !catalogArtworkMissIDs.contains(song.id.rawValue)
+        }
+        guard !candidates.isEmpty else { return }
+
+        artworkLookupTask?.cancel()
+        artworkLookupTask = Task { [weak self] in
+            await self?.resolveCatalogArtwork(for: candidates)
+        }
+    }
+
+    private func resolveCatalogArtwork(for songs: [Song]) async {
+        SonosLog.debug(.search, "LocalService resolving catalog artwork for \(songs.count) library songs")
+
+        for song in songs {
+            guard !Task.isCancelled else { return }
+            if let urlString = await catalogArtworkURLString(for: song) {
+                catalogArtworkURLStrings[song.id.rawValue] = urlString
+            } else {
+                catalogArtworkMissIDs.insert(song.id.rawValue)
+            }
+        }
+    }
+
+    private func catalogArtworkURLString(for song: Song) async -> String? {
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: .song,
+            title: song.title,
+            artist: song.artistName,
+            album: song.albumTitle)
+        guard !term.isEmpty else { return nil }
+
+        do {
+            let items = try await AppleMusicCatalogSearchClient.shared.search(term: term, limit: 8)
+            return LocalMusicCatalogArtworkFallback.artworkURLString(
+                in: items,
+                title: song.title,
+                artist: song.artistName,
+                album: song.albumTitle)
+        } catch {
+            SonosLog.debug(.search, "LocalService catalog artwork fallback failed for '\(term)': \(error)")
             return nil
         }
     }

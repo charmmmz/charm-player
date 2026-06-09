@@ -149,4 +149,31 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
 
         XCTAssertEqual(match?.id, "song-1")
     }
+
+    func testArtworkFallbackUsesBestMatchedSongArtworkURL() {
+        let wrongArtist = AppleMusicCatalogSearchItem(
+            id: "wrong",
+            type: .song,
+            title: "Comfortable",
+            artist: "Someone Else",
+            album: "Other Album",
+            artworkURLString: "https://example.com/wrong.jpg",
+            duration: 120)
+        let exact = AppleMusicCatalogSearchItem(
+            id: "exact",
+            type: .song,
+            title: "Comfortable",
+            artist: "John Mayer",
+            album: "Room for Squares",
+            artworkURLString: "https://example.com/exact.jpg",
+            duration: 120)
+
+        let urlString = LocalMusicCatalogArtworkFallback.artworkURLString(
+            in: [wrongArtist, exact],
+            title: "Comfortable",
+            artist: "John Mayer",
+            album: "Room for Squares")
+
+        XCTAssertEqual(urlString, "https://example.com/exact.jpg")
+    }
 }

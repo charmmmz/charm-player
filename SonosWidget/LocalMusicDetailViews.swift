@@ -141,6 +141,7 @@ struct LocalMusicAlbumDetailView: View {
                     LocalMusicTrackRow(
                         track: track,
                         index: index,
+                        numberStyle: .albumTrackNumber,
                         isPlaying: store.isStartingPlayback && store.activePlaybackItemID == track.id.rawValue
                     ) {
                         await store.playOnSonos(
@@ -327,6 +328,7 @@ struct LocalMusicPlaylistDetailView: View {
                     LocalMusicTrackRow(
                         track: track,
                         index: index,
+                        numberStyle: .listPosition,
                         isPlaying: store.isStartingPlayback && store.activePlaybackItemID == track.id.rawValue
                     ) {
                         await store.playOnSonos(
@@ -411,6 +413,7 @@ private struct LocalMusicDetailArtwork: View {
 private struct LocalMusicTrackRow: View {
     let track: Track
     let index: Int
+    let numberStyle: LocalMusicTrackNumberStyle
     let isPlaying: Bool
     let action: () async -> Void
 
@@ -454,10 +457,33 @@ private struct LocalMusicTrackRow: View {
     }
 
     private var trackNumber: String {
-        if let trackNumber = track.trackNumber {
-            return "\(trackNumber)"
+        LocalMusicTrackNumberLabel.text(
+            trackNumber: track.trackNumber,
+            index: index,
+            style: numberStyle)
+    }
+}
+
+enum LocalMusicTrackNumberStyle {
+    case albumTrackNumber
+    case listPosition
+}
+
+enum LocalMusicTrackNumberLabel {
+    static func text(
+        trackNumber: Int?,
+        index: Int,
+        style: LocalMusicTrackNumberStyle
+    ) -> String {
+        switch style {
+        case .albumTrackNumber:
+            if let trackNumber {
+                return "\(trackNumber)"
+            }
+            return "\(index + 1)"
+        case .listPosition:
+            return "\(index + 1)"
         }
-        return "\(index + 1)"
     }
 }
 

@@ -157,6 +157,35 @@ enum LocalMusicCatalogMatcher {
     }
 }
 
+enum LocalMusicCatalogArtworkFallback {
+    static func artworkURLString(
+        in items: [AppleMusicCatalogSearchItem],
+        title: String,
+        artist: String?,
+        album: String?
+    ) -> String? {
+        guard let match = LocalMusicCatalogMatcher.bestItem(
+            in: items,
+            kind: .song,
+            title: title,
+            artist: artist,
+            album: album
+        ) else {
+            return nil
+        }
+
+        return validURLString(match.artworkURLString)
+    }
+
+    private static func validURLString(_ value: String?) -> String? {
+        guard let value,
+              URL(string: value) != nil else {
+            return nil
+        }
+        return value
+    }
+}
+
 extension AppleMusicCatalogItemType {
     init?(kind: LocalServiceAppleMusicPlayable.Kind) {
         switch kind {
