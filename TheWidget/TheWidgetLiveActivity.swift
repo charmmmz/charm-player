@@ -123,6 +123,22 @@ struct SonosLiveActivity: Widget {
 private struct LockScreenView: View {
     let context: ActivityViewContext<SonosActivityAttributes>
 
+    @ViewBuilder
+    var body: some View {
+        switch context.state.resolvedLiveActivityPresentation {
+        case .classic:
+            ClassicLockScreenView(context: context)
+        case .widgetCard:
+            WidgetCardLockScreenView(context: context)
+        case .widgetTVRemote:
+            WidgetTVRemoteLockScreenView(context: context)
+        }
+    }
+}
+
+private struct ClassicLockScreenView: View {
+    let context: ActivityViewContext<SonosActivityAttributes>
+
     var body: some View {
         let accent = themeColor(from: context.state.dominantColorHex)
         let extra = context.state.groupMemberCount > 1
@@ -215,6 +231,250 @@ private struct LockScreenView: View {
         }
         .activityBackgroundTint(.clear)
         .activitySystemActionForegroundColor(.white)
+    }
+}
+
+private struct WidgetCardLockScreenView: View {
+    let context: ActivityViewContext<SonosActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        let accent = themeColor(from: state.dominantColorHex)
+        let source = state.playbackSource
+        let extra = state.groupMemberCount > 1
+            ? " + \(state.groupMemberCount - 1)" : ""
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                ArtView(data: state.albumArtThumbnail, size: 58, source: source)
+                    .shadow(color: .black.opacity(0.35), radius: 7, y: 4)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(state.isPlaying ? "NOW PLAYING" : "CONTINUE")
+                            .font(LiveActivityWidgetMeta.font)
+                            .tracking(LiveActivityWidgetMeta.tracking)
+                            .foregroundStyle(.white.opacity(0.46))
+                        if state.isPlaying {
+                            AnimatedWaveform(accent: accent, barCount: 3, height: 7)
+                        }
+                    }
+
+                    Text(state.trackTitle)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    Text(trackSubtitle(state))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+
+                    Text("ON \(context.attributes.speakerName.uppercased())\(extra)")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .tracking(0.5)
+                        .foregroundStyle(accent.opacity(0.75))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                if source != .unknown {
+                    SourceBadgeView(source: source, tintColor: accent, compact: true)
+                }
+            }
+
+            LiveProgressView(state: state)
+
+            WidgetTransportControlsView(state: state, accent: accent)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background {
+            WidgetLiveActivityBackdrop(state: state, accent: accent)
+        }
+        .activityBackgroundTint(.clear)
+        .activitySystemActionForegroundColor(.white)
+    }
+}
+
+private struct WidgetTVRemoteLockScreenView: View {
+    let context: ActivityViewContext<SonosActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        let accent = themeColor(from: state.dominantColorHex)
+        let extra = state.groupMemberCount > 1
+            ? " + \(state.groupMemberCount - 1)" : ""
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ArtView(data: state.albumArtThumbnail, size: 50, source: .tv)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("LIVE ON \(context.attributes.speakerName.uppercased())\(extra)")
+                            .font(LiveActivityWidgetMeta.font)
+                            .tracking(LiveActivityWidgetMeta.tracking)
+                            .foregroundStyle(accent.opacity(0.82))
+                            .lineLimit(1)
+                        if state.isPlaying {
+                            AnimatedWaveform(accent: accent, barCount: 3, height: 7)
+                        }
+                    }
+
+                    Text(state.trackTitle)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    Text(tvLiveSubtitle(state))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.64))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                SourceBadgeView(source: .tv, tintColor: accent, compact: true)
+            }
+
+            LiveProgressView(state: state)
+
+            HStack(spacing: 10) {
+                TVSoundbarControlsView(state: state, accent: accent, compact: false)
+                Spacer(minLength: 0)
+                LiveSourcePill(accent: accent)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background {
+            WidgetLiveActivityBackdrop(state: state, accent: accent)
+        }
+        .activityBackgroundTint(.clear)
+        .activitySystemActionForegroundColor(.white)
+    }
+}
+
+private enum LiveActivityWidgetMeta {
+    static let font = Font.system(size: 8, weight: .semibold, design: .rounded)
+    static let tracking: CGFloat = 0.45
+}
+
+private struct WidgetTransportControlsView: View {
+    let state: SonosActivityAttributes.ContentState
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button(intent: VolumeDownIntent()) {
+                Image(systemName: "speaker.minus.fill")
+                    .font(.caption2.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.52))
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: state.isLiveStream ? 0 : 22) {
+                if state.isLiveStream {
+                    Button(intent: PlayPauseIntent()) {
+                        Image(systemName: state.isPlaying ? "stop.fill" : "play.fill")
+                            .font(.title3.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(accent)
+                } else {
+                    Button(intent: PreviousTrackIntent()) {
+                        Image(systemName: "backward.fill")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(intent: PlayPauseIntent()) {
+                        Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(accent)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(intent: NextTrackIntent()) {
+                        Image(systemName: "forward.fill")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .foregroundStyle(.white.opacity(0.88))
+            .frame(minWidth: 92)
+
+            Spacer(minLength: 0)
+
+            Button(intent: VolumeUpIntent()) {
+                Image(systemName: "speaker.plus.fill")
+                    .font(.caption2.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.52))
+        }
+        .frame(height: 26)
+    }
+}
+
+private struct LiveSourcePill: View {
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(accent)
+                .frame(width: 6, height: 6)
+            Text("LIVE")
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .tracking(1)
+        }
+        .foregroundStyle(.white.opacity(0.86))
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background {
+            Capsule()
+                .fill(.white.opacity(0.09))
+        }
+        .overlay {
+            Capsule()
+                .stroke(accent.opacity(0.42), lineWidth: 1)
+        }
+    }
+}
+
+private struct WidgetLiveActivityBackdrop: View {
+    let state: SonosActivityAttributes.ContentState
+    let accent: Color
+
+    var body: some View {
+        ZStack {
+            if state.playbackSource != .tv,
+               let data = state.albumArtThumbnail,
+               let img = UIImage(data: data) {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .blur(radius: 42)
+                    .scaleEffect(1.55)
+                    .clipped()
+            }
+
+            LinearGradient(
+                colors: [
+                    accent.opacity(state.playbackSource == .tv ? 0.20 : 0.26),
+                    .black.opacity(0.72),
+                    .black.opacity(0.88)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
     }
 }
 
@@ -403,6 +663,18 @@ private struct ArtView: View {
 }
 
 // MARK: - Helpers
+
+private func trackSubtitle(_ state: SonosActivityAttributes.ContentState) -> String {
+    let parts = [state.artist, state.album]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && $0 != "—" }
+    return parts.isEmpty ? "Unknown" : parts.joined(separator: " · ")
+}
+
+private func tvLiveSubtitle(_ state: SonosActivityAttributes.ContentState) -> String {
+    let subtitle = trackSubtitle(state)
+    return subtitle == "Unknown" ? "Live audio" : subtitle
+}
 
 private func themeColor(from hex: String?) -> Color {
     hex.flatMap { Color(hex: $0) } ?? .white

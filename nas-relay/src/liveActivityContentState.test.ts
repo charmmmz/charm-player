@@ -89,6 +89,27 @@ test('Live Activity content hash changes when TV soundbar controls change', () =
   assert.notEqual(nightOff, nightOn);
 });
 
+test('Live Activity content state carries the selected presentation style', async () => {
+  const state = await buildLiveActivityContentState(snapshot({
+    liveActivityStyleRaw: 'widget',
+  }));
+
+  assert.equal(state.liveActivityStyleRaw, 'widget');
+});
+
+test('Live Activity content hash changes when the presentation style changes', () => {
+  const classic = hashLiveActivityContentState({
+    ...baseContentState(),
+    liveActivityStyleRaw: 'classic',
+  });
+  const widget = hashLiveActivityContentState({
+    ...baseContentState(),
+    liveActivityStyleRaw: 'widget',
+  });
+
+  assert.notEqual(classic, widget);
+});
+
 test('Live Activity album art extraction retries after a transient fetch failure', async () => {
   let requestCount = 0;
   const server = http.createServer((_req, res) => {

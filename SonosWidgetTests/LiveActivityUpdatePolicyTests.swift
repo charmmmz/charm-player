@@ -2,6 +2,54 @@ import XCTest
 @testable import SonosWidget
 
 final class LiveActivityUpdatePolicyTests: XCTestCase {
+    func testWidgetLiveActivityStyleUsesWidgetCardForMusicSources() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Between the Bars",
+            artist: "Elliott Smith",
+            album: "Either/Or",
+            isPlaying: true,
+            positionSeconds: 42,
+            durationSeconds: 180,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            liveActivityStyleRaw: LiveActivityStyle.widget.rawValue
+        )
+
+        XCTAssertEqual(state.liveActivityStyle, .widget)
+        XCTAssertEqual(state.resolvedLiveActivityPresentation, .widgetCard)
+    }
+
+    func testWidgetLiveActivityStyleUsesRemoteForTVSources() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "TV Audio",
+            artist: "Dolby Atmos · MAT",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue,
+            liveActivityStyleRaw: LiveActivityStyle.widget.rawValue
+        )
+
+        XCTAssertEqual(state.liveActivityStyle, .widget)
+        XCTAssertEqual(state.resolvedLiveActivityPresentation, .widgetTVRemote)
+    }
+
+    func testClassicLiveActivityStyleKeepsClassicPresentationForTVSources() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "TV Audio",
+            artist: "Dolby Atmos · MAT",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue,
+            liveActivityStyleRaw: LiveActivityStyle.classic.rawValue
+        )
+
+        XCTAssertEqual(state.liveActivityStyle, .classic)
+        XCTAssertEqual(state.resolvedLiveActivityPresentation, .classic)
+    }
+
     func testTVSourceLiveActivityStateCarriesSoundbarControls() {
         let state = SonosActivityAttributes.ContentState(
             trackTitle: "TV",

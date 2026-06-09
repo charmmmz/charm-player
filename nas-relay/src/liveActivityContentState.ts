@@ -54,6 +54,7 @@ export async function buildLiveActivityContentState(
     playbackSourceRaw: snap.playbackSourceRaw ?? null,
     soundbarNightMode: snap.soundbarNightMode ?? null,
     soundbarSpeechEnhancementRawLevel: snap.soundbarSpeechEnhancementRawLevel ?? null,
+    liveActivityStyleRaw: snap.liveActivityStyleRaw ?? null,
   };
 }
 
@@ -71,6 +72,7 @@ export function hashLiveActivityContentState(state: LiveActivityContentState): s
     c: state.dominantColorHex,
     n: state.soundbarNightMode,
     se: state.soundbarSpeechEnhancementRawLevel,
+    sty: state.liveActivityStyleRaw,
   };
   return crypto
     .createHash('sha256')

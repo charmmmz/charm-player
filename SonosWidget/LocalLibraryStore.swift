@@ -337,7 +337,6 @@ final class LocalLibraryStore {
                 catalogArtworkCache.storeURLString(urlString, for: key)
             } else {
                 catalogArtworkMissIDs.insert(key.storageKey)
-                catalogArtworkCache.storeMiss(for: key)
             }
         }
     }

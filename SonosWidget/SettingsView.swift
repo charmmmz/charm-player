@@ -26,6 +26,7 @@ struct SettingsView: View {
     @Bindable private var musicAmbience = MusicAmbienceManager.shared
     @State private var musicAmbienceSetupPresentation = MusicAmbienceSetupPresentationState()
     @State private var settingsPath: [SettingsHubDestination] = []
+    @State private var liveActivityStyle: LiveActivityStyle = SharedStorage.liveActivityStyle
 
     var body: some View {
         NavigationStack(path: $settingsPath) {
@@ -48,6 +49,7 @@ struct SettingsView: View {
                 relayURLDraft = relay.urlString
                 agentURLDraft = agent.urlString
                 agentTokenDraft = agent.tokenString
+                liveActivityStyle = SharedStorage.liveActivityStyle
                 Task { await relay.probeNow() }
                 Task { await agent.probeNow() }
                 musicAmbience.refreshStatus()
@@ -108,6 +110,7 @@ struct SettingsView: View {
         case .hubSetup:
             settingsDetailForm(title: destination.title) {
                 hueBridgeSetupSection
+                liveActivityStyleSection
                 relaySection
                 agentSection
             }
@@ -138,7 +141,7 @@ struct SettingsView: View {
         case .hueAmbience:
             return musicAmbienceStatusSummary
         case .hubSetup:
-            return "\(hueBridgeStatusSummary) · Relay \(relayStatusTitle) · Agent \(agentStatusTitle)"
+            return "\(hueBridgeStatusSummary) · Activity \(liveActivityStyle.displayName) · Relay \(relayStatusTitle)"
         }
     }
 
@@ -593,6 +596,52 @@ struct SettingsView: View {
                 store: hueStore,
                 sonosSpeakers: displayedSpeakers
             )
+        }
+    }
+
+    // MARK: - Live Activity Style
+
+    private var liveActivityStyleBinding: Binding<LiveActivityStyle> {
+        Binding {
+            liveActivityStyle
+        } set: { newStyle in
+            guard liveActivityStyle != newStyle else { return }
+            liveActivityStyle = newStyle
+            manager.updateLiveActivityStyle(newStyle)
+        }
+    }
+
+    @ViewBuilder
+    private var liveActivityStyleSection: some View {
+        Section {
+            Picker("Live Activity Style", selection: liveActivityStyleBinding) {
+                ForEach(LiveActivityStyle.allCases) { style in
+                    Text(style.displayName).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            HStack(spacing: 12) {
+                Image(systemName: liveActivityStyle.systemImage)
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(liveActivityStyle.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(liveActivityStyle.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+        } header: {
+            Text("Live Activity Style")
+        } footer: {
+            Text("Widget style uses the music card for music and automatically switches to the TV remote when the source is live TV.")
         }
     }
 

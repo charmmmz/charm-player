@@ -175,6 +175,21 @@ enum SharedStorage {
         }
     }
 
+    // MARK: - Live Activity Style
+
+    nonisolated static var liveActivityStyle: LiveActivityStyle {
+        get {
+            guard let rawValue = defaults.string(forKey: "liveActivityStyle"),
+                  let style = LiveActivityStyle(rawValue: rawValue) else {
+                return .classic
+            }
+            return style
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: "liveActivityStyle")
+        }
+    }
+
     /// Timestamp after which fetchLiveEntry may overwrite isPlaying from the device.
     /// Set by PlayPauseIntent to prevent the live fetch from reverting the optimistic update.
     nonisolated static var playStateLockUntil: Date {

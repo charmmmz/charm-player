@@ -26,36 +26,101 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         XCTAssertNil(cache.urlString(for: key))
     }
 
-    func testRecentMissesPreventRepeatedLookup() {
+    func testUnsupportedArtworkURLSchemesAreIgnored() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let key = LocalMusicCatalogArtworkKey(kind: .artist, id: "artist-1")
+        let key = LocalMusicCatalogArtworkKey(kind: .album, id: "album-1")
 
-        cache.storeMiss(for: key)
+        cache.storeURLString("musickit://artwork/album-1", for: key)
 
-        XCTAssertTrue(cache.hasRecentMiss(for: key))
+        XCTAssertNil(cache.urlString(for: key))
     }
 
-    func testSnapshotReturnsFreshURLsAndRecentMisses() {
+    func testSnapshotReturnsFreshURLs() {
         var now = Date(timeIntervalSince1970: 1_000)
         let (cache, defaults, suiteName) = makeCache(now: { now }, ttl: 60)
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let freshKey = LocalMusicCatalogArtworkKey(kind: .album, id: "fresh-album")
         let expiredKey = LocalMusicCatalogArtworkKey(kind: .album, id: "expired-album")
-        let missKey = LocalMusicCatalogArtworkKey(kind: .artist, id: "missing-artist")
 
         cache.storeURLString("https://example.com/expired.jpg", for: expiredKey)
         now = Date(timeIntervalSince1970: 1_030)
         cache.storeURLString("https://example.com/fresh.jpg", for: freshKey)
         now = Date(timeIntervalSince1970: 1_061)
-        cache.storeMiss(for: missKey)
 
         let snapshot = cache.snapshot()
 
         XCTAssertEqual(snapshot.urlString(for: freshKey), "https://example.com/fresh.jpg")
         XCTAssertNil(snapshot.urlString(for: expiredKey))
-        XCTAssertTrue(snapshot.hasRecentMiss(for: missKey))
     }
+
+    func testPlannerUsesInMemoryMissesOnlyForTheCurrentLoad() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let item = LocalMusicCatalogArtworkLookupItem(
+            id: "artist-1",
+            kind: .artist,
+            title: "Artist",
+            artist: "Artist",
+            album: nil,
+            directArtworkURLString: nil)
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [item],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [item.key.storageKey],
+            cache: cache)
+
+        XCTAssertTrue(plan.lookupItems.isEmpty)
+    }
+
+    func testPlannerDoesNotLetPersistedMissesPoisonFutureLoads() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let item = LocalMusicCatalogArtworkLookupItem(
+            id: "album-1",
+            kind: .album,
+            title: "Album",
+            artist: "Artist",
+            album: "Album",
+            directArtworkURLString: nil)
+        let legacyMisses = [
+            item.key.storageKey: LegacyCatalogArtworkMissEntry(value: "miss", storedAt: 1_000)
+        ]
+        defaults.set(
+            try! JSONEncoder().encode(legacyMisses),
+            forKey: "LocalMusicCatalogArtworkMissCache.v1")
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [item],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            cache: cache)
+
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
+    }
+
+    func testPlannerFallsBackWhenDirectArtworkURLIsNotWebLoadable() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let item = LocalMusicCatalogArtworkLookupItem(
+            id: "album-1",
+            kind: .album,
+            title: "Album",
+            artist: "Artist",
+            album: "Album",
+            directArtworkURLString: "musickit://artwork/album-1")
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [item],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            cache: cache)
+
+        XCTAssertTrue(plan.immediateURLStrings.isEmpty)
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
+    }
+
 
     func testPlannerPromotesDirectArtworkAndCachedArtworkBeforeLookup() {
         let (cache, defaults, suiteName) = makeCache()
@@ -154,4 +219,9 @@ private actor LocalMusicCatalogArtworkConcurrencyProbe {
     func end() {
         activeCount -= 1
     }
+}
+
+private struct LegacyCatalogArtworkMissEntry: Codable {
+    let value: String
+    let storedAt: TimeInterval
 }

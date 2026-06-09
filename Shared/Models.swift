@@ -801,6 +801,42 @@ struct MusicService: Identifiable, Sendable {
 
 // MARK: - Live Activity
 
+enum LiveActivityStyle: String, Codable, Sendable, CaseIterable, Identifiable {
+    case classic
+    case widget
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .classic: return "Classic"
+        case .widget:  return "Widget"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .classic:
+            return "Current compact player"
+        case .widget:
+            return "Widget card, TV remote when live"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .classic: return "waveform"
+        case .widget:  return "rectangle.inset.filled"
+        }
+    }
+}
+
+enum LiveActivityPresentationStyle: String, Codable, Sendable, Equatable {
+    case classic
+    case widgetCard
+    case widgetTVRemote
+}
+
 struct SonosActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         var trackTitle: String
@@ -826,6 +862,8 @@ struct SonosActivityAttributes: ActivityAttributes {
         var soundbarNightMode: Bool? = nil
         /// Soundbar Speech Enhancement raw level for TV input.
         var soundbarSpeechEnhancementRawLevel: Int? = nil
+        /// User-selected Live Activity style. Optional so old relay pushes decode safely.
+        var liveActivityStyleRaw: String? = nil
     }
     var speakerName: String
 }
@@ -851,6 +889,19 @@ extension SonosActivityAttributes.ContentState {
     /// no next/previous track, and the UI should show a LIVE cue.
     var isLiveSource: Bool {
         isTVSource || isLiveStream
+    }
+
+    var liveActivityStyle: LiveActivityStyle {
+        liveActivityStyleRaw.flatMap(LiveActivityStyle.init(rawValue:))
+            ?? SharedStorage.liveActivityStyle
+    }
+
+    var resolvedLiveActivityPresentation: LiveActivityPresentationStyle {
+        guard liveActivityStyle == .widget else {
+            return .classic
+        }
+
+        return isTVSource ? .widgetTVRemote : .widgetCard
     }
 
     var isSoundbarNightModeEnabled: Bool {

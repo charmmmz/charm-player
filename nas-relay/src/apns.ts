@@ -191,6 +191,7 @@ function summarizeLiveActivityState(state: LiveActivityContentState): Record<str
     artBytes: base64ByteLength(state.albumArtThumbnail),
     groupMemberCount: state.groupMemberCount,
     playbackSourceRaw: state.playbackSourceRaw ?? null,
+    liveActivityStyleRaw: state.liveActivityStyleRaw ?? null,
     hasStartedAt: state.startedAt !== undefined && state.startedAt !== null,
     hasEndsAt: state.endsAt !== undefined && state.endsAt !== null,
   };

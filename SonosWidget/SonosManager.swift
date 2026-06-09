@@ -2396,6 +2396,27 @@ final class SonosManager {
         return previousGroupId != nextGroupId
     }
 
+    func updateLiveActivityStyle(_ style: LiveActivityStyle) {
+        SharedStorage.liveActivityStyle = style
+        WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+
+        let activities = Activity<SonosActivityAttributes>.activities
+        logLiveActivity(action: "style-update-request",
+                        extra: [
+                            "style=\(style.rawValue)",
+                            "activityCount=\(activities.count)"
+                        ])
+
+        Task {
+            for activity in activities {
+                var state = activity.content.state
+                state.liveActivityStyleRaw = style.rawValue
+                await activity.update(
+                    .init(state: state, staleDate: Self.liveActivityStaleDate()))
+            }
+        }
+    }
+
     private func logLiveActivity(action: String,
                                  activityID: String? = nil,
                                  mode: String? = nil,
@@ -2462,6 +2483,7 @@ final class SonosManager {
             "artBytes=\(state.albumArtThumbnail?.count ?? 0)",
             "members=\(state.groupMemberCount)",
             "sourceRaw=\(state.playbackSourceRaw ?? "nil")",
+            "activityStyle=\(state.liveActivityStyleRaw ?? "nil")",
             "hasStartedAt=\(state.startedAt != nil)",
             "hasEndsAt=\(state.endsAt != nil)"
         ]
@@ -2620,7 +2642,8 @@ final class SonosManager {
             groupMemberCount: currentGroupMembers.filter { !$0.isInvisible }.count,
             playbackSourceRaw: source?.rawValue,
             soundbarNightMode: isTVSource ? nightMode : nil,
-            soundbarSpeechEnhancementRawLevel: isTVSource ? speechEnhancement.rawValue : nil
+            soundbarSpeechEnhancementRawLevel: isTVSource ? speechEnhancement.rawValue : nil,
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
         )
     }
 

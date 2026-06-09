@@ -26,6 +26,7 @@ export interface LiveActivityContentState {
   playbackSourceRaw?: string | null;
   soundbarNightMode?: boolean | null;
   soundbarSpeechEnhancementRawLevel?: number | null;
+  liveActivityStyleRaw?: string | null;
 }
 
 /// Minimal projection of what we keep in memory per Sonos coordinator. Built
@@ -41,6 +42,7 @@ export interface SonosGroupSnapshot {
   playbackSourceRaw?: string | null;
   soundbarNightMode?: boolean | null;
   soundbarSpeechEnhancementRawLevel?: number | null;
+  liveActivityStyleRaw?: string | null;
   musicAmbienceEligible?: boolean;
   positionSeconds: number;
   durationSeconds: number;

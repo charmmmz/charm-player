@@ -1,11 +1,16 @@
 import Foundation
 
 nonisolated struct LocalMusicCatalogArtworkKey: Hashable, Sendable {
-    let kind: LocalServiceAppleMusicPlayable.Kind
+    private let kindStorageName: String
     let id: String
 
+    init(kind: LocalServiceAppleMusicPlayable.Kind, id: String) {
+        self.kindStorageName = kind.storageName
+        self.id = id
+    }
+
     var storageKey: String {
-        "\(kind.storageName):\(id)"
+        "\(kindStorageName):\(id)"
     }
 }
 
@@ -19,6 +24,18 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
 
     var key: LocalMusicCatalogArtworkKey {
         LocalMusicCatalogArtworkKey(kind: kind, id: id)
+    }
+}
+
+nonisolated enum LocalMusicArtworkURLStringValidator {
+    static func isLoadableArtworkURLString(_ value: String) -> Bool {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil else {
+            return false
+        }
+        return !value.contains("{") && !value.contains("}")
     }
 }
 
@@ -36,7 +53,6 @@ nonisolated struct LocalMusicCatalogArtworkCache {
     private let now: () -> Date
     private let ttl: TimeInterval
     private let urlStoreKey = "LocalMusicCatalogArtworkURLCache.v1"
-    private let missStoreKey = "LocalMusicCatalogArtworkMissCache.v1"
 
     init(
         defaults: UserDefaults,
@@ -64,20 +80,6 @@ nonisolated struct LocalMusicCatalogArtworkCache {
         store(current, for: urlStoreKey)
     }
 
-    func hasRecentMiss(for key: LocalMusicCatalogArtworkKey) -> Bool {
-        guard let entry = entries(for: missStoreKey)[key.storageKey],
-              isFresh(entry) else {
-            return false
-        }
-        return true
-    }
-
-    func storeMiss(for key: LocalMusicCatalogArtworkKey) {
-        var current = entries(for: missStoreKey)
-        current[key.storageKey] = Entry(value: "miss", storedAt: now().timeIntervalSince1970)
-        store(current, for: missStoreKey)
-    }
-
     func snapshot() -> LocalMusicCatalogArtworkCacheSnapshot {
         var urlStrings: [String: String] = [:]
         for (key, entry) in entries(for: urlStoreKey) {
@@ -87,14 +89,8 @@ nonisolated struct LocalMusicCatalogArtworkCache {
             urlStrings[key] = entry.value
         }
 
-        var missKeys: Set<String> = []
-        for (key, entry) in entries(for: missStoreKey) where isFresh(entry) {
-            missKeys.insert(key)
-        }
-
         return LocalMusicCatalogArtworkCacheSnapshot(
-            urlStringsByStorageKey: urlStrings,
-            missStorageKeys: missKeys
+            urlStringsByStorageKey: urlStrings
         )
     }
 
@@ -116,20 +112,15 @@ nonisolated struct LocalMusicCatalogArtworkCache {
     }
 
     private func isValidURLString(_ value: String) -> Bool {
-        URL(string: value) != nil
+        LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value)
     }
 }
 
 nonisolated struct LocalMusicCatalogArtworkCacheSnapshot {
     let urlStringsByStorageKey: [String: String]
-    let missStorageKeys: Set<String>
 
     func urlString(for key: LocalMusicCatalogArtworkKey) -> String? {
         urlStringsByStorageKey[key.storageKey]
-    }
-
-    func hasRecentMiss(for key: LocalMusicCatalogArtworkKey) -> Bool {
-        missStorageKeys.contains(key.storageKey)
     }
 }
 
@@ -167,7 +158,7 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
                 immediate[key] = cachedURLString
                 continue
             }
-            if inMemoryMissIDs.contains(storageKey) || cacheSnapshot.hasRecentMiss(for: key) {
+            if inMemoryMissIDs.contains(storageKey) {
                 continue
             }
             lookupItems.append(item)
@@ -181,7 +172,7 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
 
     private static func validURLString(_ value: String?) -> String? {
         guard let value,
-              URL(string: value) != nil else {
+              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) else {
             return nil
         }
         return value
@@ -240,7 +231,7 @@ nonisolated enum LocalMusicCatalogArtworkResolver {
 }
 
 private extension LocalServiceAppleMusicPlayable.Kind {
-    var storageName: String {
+    nonisolated var storageName: String {
         switch self {
         case .song:
             return "song"
