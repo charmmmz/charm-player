@@ -76,6 +76,27 @@ enum ShareSonosAPI {
         return grouped.isEmpty ? parseZoneMembersFlat(decoded) : grouped
     }
 
+    static func getTransportInfo(ip: String) async throws -> ShareSpeakerPlaybackStatus? {
+        let xml = try await soap(
+            ip: ip,
+            endpoint: avTransport,
+            service: "AVTransport",
+            action: "GetTransportInfo",
+            body: "<InstanceID>0</InstanceID>")
+        let raw = extractTag("CurrentTransportState", from: xml) ?? ""
+        return ShareSpeakerPlaybackStatus(sonosTransportState: raw)
+    }
+
+    static func getPositionInfo(ip: String) async throws -> ShareSpeakerNowPlaying? {
+        let xml = try await soap(
+            ip: ip,
+            endpoint: avTransport,
+            service: "AVTransport",
+            action: "GetPositionInfo",
+            body: "<InstanceID>0</InstanceID>")
+        return ShareSpeakerNowPlaying(positionInfoXML: xml, speakerIP: ip)
+    }
+
     private static func soap(
         ip: String,
         endpoint: String,

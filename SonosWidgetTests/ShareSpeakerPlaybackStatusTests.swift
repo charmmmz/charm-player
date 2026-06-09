@@ -1,0 +1,93 @@
+import XCTest
+@testable import SonosWidget
+
+final class ShareSpeakerPlaybackStatusTests: XCTestCase {
+    func testMapsSonosTransportStatesToShareLabels() {
+        XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "PLAYING")?.displayText, "Playing")
+        XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "PAUSED_PLAYBACK")?.displayText, "Paused")
+        XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "STOPPED")?.displayText, "Idle")
+        XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "NO_MEDIA_PRESENT")?.displayText, "Idle")
+    }
+
+    func testUnknownTransportStatesDoNotClaimAStatus() {
+        XCTAssertNil(ShareSpeakerPlaybackStatus(sonosTransportState: "TRANSITIONING"))
+        XCTAssertNil(ShareSpeakerPlaybackStatus(sonosTransportState: "SOMETHING_NEW"))
+        XCTAssertNil(ShareSpeakerPlaybackStatus(sonosTransportState: ""))
+    }
+
+    func testFallbackDetailTextAvoidsFakeReadyStatus() {
+        XCTAssertEqual(ShareSpeakerPlaybackStatus.fallbackDetailText(visibleMemberCount: 1), "Tap to play")
+        XCTAssertEqual(ShareSpeakerPlaybackStatus.fallbackDetailText(visibleMemberCount: 2), "2 speakers")
+    }
+
+    func testNowPlayingParsesEscapedSonosMetadata() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackMetaData>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;Assassin&lt;/dc:title&gt;&lt;dc:creator&gt;John Mayer&lt;/dc:creator&gt;&lt;upnp:albumArtURI&gt;https://example.com/cover.jpg&lt;/upnp:albumArtURI&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        let nowPlaying = ShareSpeakerNowPlaying(positionInfoXML: xml)
+
+        XCTAssertEqual(nowPlaying?.displayText, "Assassin - John Mayer")
+        XCTAssertEqual(nowPlaying?.albumArtURLString, "https://example.com/cover.jpg")
+    }
+
+    func testNowPlayingResolvesRelativeAlbumArtAgainstSpeakerIP() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackMetaData>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;Move&lt;/dc:title&gt;&lt;upnp:artist&gt;Drake&lt;/upnp:artist&gt;&lt;upnp:albumArtURI&gt;/getaa?u=x-sonos-http%3atrack%253a123&amp;amp;v=1&lt;/upnp:albumArtURI&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        let nowPlaying = ShareSpeakerNowPlaying(
+            positionInfoXML: xml,
+            speakerIP: "192.168.1.24"
+        )
+
+        XCTAssertEqual(
+            nowPlaying?.albumArtURLString,
+            "http://192.168.1.24:1400/getaa?u=x-sonos-http:track%3a123&v=1"
+        )
+    }
+
+    func testNowPlayingDropsEmptyUnknownMetadata() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackMetaData>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;Unknown&lt;/dc:title&gt;&lt;dc:creator&gt;Unknown&lt;/dc:creator&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        XCTAssertNil(ShareSpeakerNowPlaying(positionInfoXML: xml))
+        XCTAssertNil(ShareSpeakerNowPlaying(title: "  ", artist: "John Mayer"))
+    }
+
+    func testDetailTextPrefersUsefulNowPlayingForActiveSpeakers() {
+        let nowPlaying = ShareSpeakerNowPlaying(title: "Assassin", artist: "John Mayer")
+
+        XCTAssertEqual(
+            ShareSpeakerPlaybackStatus.detailText(
+                status: .playing,
+                nowPlaying: nowPlaying,
+                visibleMemberCount: 1
+            ),
+            "Assassin - John Mayer"
+        )
+        XCTAssertEqual(
+            ShareSpeakerPlaybackStatus.detailText(
+                status: .paused,
+                nowPlaying: nowPlaying,
+                visibleMemberCount: 1
+            ),
+            "Paused - Assassin - John Mayer"
+        )
+        XCTAssertEqual(
+            ShareSpeakerPlaybackStatus.detailText(
+                status: .idle,
+                nowPlaying: nowPlaying,
+                visibleMemberCount: 1
+            ),
+            "Idle"
+        )
+    }
+}

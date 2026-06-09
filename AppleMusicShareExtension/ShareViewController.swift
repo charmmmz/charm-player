@@ -2,6 +2,11 @@ import UIKit
 import UniformTypeIdentifiers
 import UserNotifications
 
+private struct SharePlaybackSnapshot: Sendable {
+    let status: ShareSpeakerPlaybackStatus?
+    let nowPlaying: ShareSpeakerNowPlaying?
+}
+
 final class ShareViewController: UIViewController {
     private let resolver = ShareAppleMusicResolver()
     private let playbackService = ShareSonosPlaybackService()
@@ -9,10 +14,16 @@ final class ShareViewController: UIViewController {
     private var shareURLString: String?
     private var playable: ShareAppleMusicPlayable?
     private var speakerGroups: [ShareSpeakerGroup] = []
+    private var speakerStatuses: [String: ShareSpeakerPlaybackStatus] = [:]
+    private var speakerNowPlaying: [String: ShareSpeakerNowPlaying] = [:]
+    private var speakerArtworkURLs: [String: String] = [:]
+    private var speakerArtworkImages: [String: UIImage] = [:]
     private var selectedGroupID: String?
     private var isPlaying = false
     private var loadTask: Task<Void, Never>?
     private var playTask: Task<Void, Never>?
+    private var statusTask: Task<Void, Never>?
+    private var artworkTask: Task<Void, Never>?
 
     private let gradientLayer = CAGradientLayer()
     private let artworkImageView = UIImageView()
@@ -42,6 +53,8 @@ final class ShareViewController: UIViewController {
     deinit {
         loadTask?.cancel()
         playTask?.cancel()
+        statusTask?.cancel()
+        artworkTask?.cancel()
     }
 
     private func configureView() {
@@ -113,6 +126,7 @@ final class ShareViewController: UIViewController {
         let scrollView = UIScrollView()
         scrollView.showsVerticalScrollIndicator = false
         scrollView.alwaysBounceVertical = false
+        scrollView.delaysContentTouches = false
 
         speakerStack.axis = .vertical
         speakerStack.spacing = 10
@@ -206,6 +220,7 @@ final class ShareViewController: UIViewController {
             shareURLString = urlString
             speakerGroups = AppleMusicShareExtensionStore.cachedSpeakerGroups
             updateSpeakerCards()
+            refreshPlaybackStatuses(for: speakerGroups)
             setStatus("Choose a speaker to start playback.", loading: false)
 
             loadTask = Task { [weak self] in
@@ -223,7 +238,20 @@ final class ShareViewController: UIViewController {
                 let groups = await refreshedGroups
                 await MainActor.run {
                     self.speakerGroups = groups
+                    self.speakerStatuses = self.speakerStatuses.filter { key, _ in
+                        groups.contains(where: { $0.id == key })
+                    }
+                    self.speakerNowPlaying = self.speakerNowPlaying.filter { key, _ in
+                        groups.contains(where: { $0.id == key })
+                    }
+                    self.speakerArtworkURLs = self.speakerArtworkURLs.filter { key, _ in
+                        groups.contains(where: { $0.id == key })
+                    }
+                    self.speakerArtworkImages = self.speakerArtworkImages.filter { key, _ in
+                        groups.contains(where: { $0.id == key })
+                    }
                     self.updateSpeakerCards()
+                    self.refreshPlaybackStatuses(for: groups)
                     if groups.isEmpty {
                         self.setStatus("Open Charm Player once on this Wi-Fi, then share again.", loading: false)
                         self.notifyButton.isHidden = false
@@ -252,6 +280,9 @@ final class ShareViewController: UIViewController {
             let card = SpeakerGroupCard()
             card.configure(
                 group: group,
+                status: speakerStatuses[group.id],
+                nowPlaying: speakerNowPlaying[group.id],
+                artworkImage: speakerArtworkImages[group.id],
                 isSelected: selectedGroupID == group.id,
                 isLoading: isPlaying && selectedGroupID == group.id
             )
@@ -260,6 +291,159 @@ final class ShareViewController: UIViewController {
             }, for: .touchUpInside)
             speakerCards[group.id] = card
             speakerStack.addArrangedSubview(card)
+        }
+    }
+
+    private func refreshPlaybackStatuses(for groups: [ShareSpeakerGroup]) {
+        statusTask?.cancel()
+        guard !groups.isEmpty else {
+            speakerStatuses.removeAll()
+            speakerNowPlaying.removeAll()
+            speakerArtworkURLs.removeAll()
+            speakerArtworkImages.removeAll()
+            artworkTask?.cancel()
+            updateSpeakerCards()
+            return
+        }
+
+        statusTask = Task { [weak self] in
+            var statuses: [String: ShareSpeakerPlaybackStatus] = [:]
+            var nowPlayingByGroup: [String: ShareSpeakerNowPlaying] = [:]
+            await withTaskGroup(
+                of: (String, ShareSpeakerPlaybackStatus?, ShareSpeakerNowPlaying?).self
+            ) { taskGroup in
+                for group in groups {
+                    taskGroup.addTask {
+                        let snapshot = await Self.playbackSnapshot(
+                            for: group.coordinator.playbackIP,
+                            timeoutMilliseconds: 1_600
+                        )
+                        return (group.id, snapshot?.status, snapshot?.nowPlaying)
+                    }
+                }
+
+                for await (groupID, status, nowPlaying) in taskGroup {
+                    if let status {
+                        statuses[groupID] = status
+                    }
+                    if let nowPlaying {
+                        nowPlayingByGroup[groupID] = nowPlaying
+                    }
+                }
+            }
+
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.speakerStatuses = statuses
+                self.speakerNowPlaying = nowPlayingByGroup
+                self.updateSpeakerCards()
+                self.refreshSpeakerArtwork(for: nowPlayingByGroup)
+            }
+        }
+    }
+
+    private static func playbackSnapshot(
+        for ip: String,
+        timeoutMilliseconds: UInt64
+    ) async -> SharePlaybackSnapshot? {
+        await withTaskGroup(of: SharePlaybackSnapshot?.self) { taskGroup in
+            taskGroup.addTask {
+                async let status: ShareSpeakerPlaybackStatus? = try? ShareSonosAPI.getTransportInfo(ip: ip)
+                async let nowPlaying: ShareSpeakerNowPlaying? = try? ShareSonosAPI.getPositionInfo(ip: ip)
+                return await SharePlaybackSnapshot(status: status, nowPlaying: nowPlaying)
+            }
+            taskGroup.addTask {
+                try? await Task.sleep(for: .milliseconds(timeoutMilliseconds))
+                return nil
+            }
+
+            let result = await taskGroup.next() ?? nil
+            taskGroup.cancelAll()
+            return result
+        }
+    }
+
+    private func refreshSpeakerArtwork(for nowPlayingByGroup: [String: ShareSpeakerNowPlaying]) {
+        artworkTask?.cancel()
+
+        let nextURLs = nowPlayingByGroup.compactMapValues(\.albumArtURLString)
+        let previousURLs = speakerArtworkURLs
+        speakerArtworkURLs = nextURLs
+        speakerArtworkImages = speakerArtworkImages.filter { groupID, _ in
+            previousURLs[groupID] == nextURLs[groupID]
+        }
+        updateSpeakerCards()
+
+        let missingURLs = nextURLs.filter { groupID, _ in
+            speakerArtworkImages[groupID] == nil
+        }
+        guard !missingURLs.isEmpty else {
+            return
+        }
+
+        artworkTask = Task { [weak self] in
+            var imageDataByGroup: [String: Data] = [:]
+            await withTaskGroup(of: (String, Data?).self) { taskGroup in
+                for (groupID, urlString) in missingURLs {
+                    taskGroup.addTask {
+                        let data = await Self.albumArtworkData(
+                            from: urlString,
+                            timeoutMilliseconds: 1_000
+                        )
+                        return (groupID, data)
+                    }
+                }
+
+                for await (groupID, data) in taskGroup {
+                    if let data {
+                        imageDataByGroup[groupID] = data
+                    }
+                }
+            }
+
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                for (groupID, data) in imageDataByGroup {
+                    guard self.speakerArtworkURLs[groupID] == missingURLs[groupID],
+                          let image = UIImage(data: data) else {
+                        continue
+                    }
+                    self.speakerArtworkImages[groupID] = image
+                }
+                self.updateSpeakerCards()
+            }
+        }
+    }
+
+    private static func albumArtworkData(
+        from urlString: String,
+        timeoutMilliseconds: UInt64
+    ) async -> Data? {
+        await withTaskGroup(of: Data?.self) { taskGroup in
+            taskGroup.addTask {
+                guard let url = URL(string: urlString) else { return nil }
+                var request = URLRequest(
+                    url: url,
+                    timeoutInterval: Double(timeoutMilliseconds) / 1_000
+                )
+                request.cachePolicy = .returnCacheDataElseLoad
+                guard let (data, response) = try? await URLSession.shared.data(for: request) else {
+                    return nil
+                }
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200..<300).contains(httpResponse.statusCode) {
+                    return nil
+                }
+                return data
+            }
+            taskGroup.addTask {
+                try? await Task.sleep(for: .milliseconds(timeoutMilliseconds))
+                return nil
+            }
+
+            let result = await taskGroup.next() ?? nil
+            taskGroup.cancelAll()
+            return result
         }
     }
 
@@ -501,9 +685,36 @@ private final class SpeakerGroupCard: UIControl {
         nil
     }
 
-    func configure(group: ShareSpeakerGroup, isSelected: Bool, isLoading: Bool) {
+    override var isHighlighted: Bool {
+        didSet {
+            UIView.animate(withDuration: 0.12, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.98, y: 0.98) : .identity
+                self.alpha = self.isHighlighted ? 0.82 : 1
+            }
+        }
+    }
+
+    func configure(
+        group: ShareSpeakerGroup,
+        status: ShareSpeakerPlaybackStatus?,
+        nowPlaying: ShareSpeakerNowPlaying?,
+        artworkImage: UIImage?,
+        isSelected: Bool,
+        isLoading: Bool
+    ) {
         titleLabel.text = group.displayName
-        detailLabel.text = group.detailText
+        detailLabel.text = group.detailText(status: status, nowPlaying: nowPlaying)
+        if let artworkImage {
+            iconView.image = artworkImage
+            iconView.tintColor = nil
+            iconView.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+            iconView.contentMode = .scaleAspectFill
+        } else {
+            iconView.image = UIImage(systemName: "hifispeaker.2.fill")
+            iconView.tintColor = UIColor.white.withAlphaComponent(0.85)
+            iconView.backgroundColor = .clear
+            iconView.contentMode = .center
+        }
         layer.borderColor = (isSelected
             ? UIColor(red: 1.0, green: 0.22, blue: 0.47, alpha: 1)
             : UIColor.white.withAlphaComponent(0.16)).cgColor
@@ -521,8 +732,11 @@ private final class SpeakerGroupCard: UIControl {
         clipsToBounds = true
 
         iconView.tintColor = UIColor.white.withAlphaComponent(0.85)
-        iconView.contentMode = .scaleAspectFit
+        iconView.contentMode = .center
+        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 23, weight: .semibold)
         iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.layer.cornerRadius = 8
+        iconView.clipsToBounds = true
 
         titleLabel.font = .preferredFont(forTextStyle: .headline)
         titleLabel.textColor = .white
@@ -545,6 +759,7 @@ private final class SpeakerGroupCard: UIControl {
         let iconContainer = UIView()
         iconContainer.translatesAutoresizingMaskIntoConstraints = false
         iconContainer.layer.cornerRadius = 8
+        iconContainer.clipsToBounds = true
         iconContainer.backgroundColor = UIColor.white.withAlphaComponent(0.10)
         iconContainer.addSubview(iconView)
 
@@ -566,6 +781,9 @@ private final class SpeakerGroupCard: UIControl {
         stack.alignment = .center
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
+        [stack, iconContainer, textStack, playContainer].forEach {
+            $0.isUserInteractionEnabled = false
+        }
         addSubview(stack)
 
         NSLayoutConstraint.activate([
@@ -577,10 +795,10 @@ private final class SpeakerGroupCard: UIControl {
 
             iconContainer.widthAnchor.constraint(equalToConstant: 48),
             iconContainer.heightAnchor.constraint(equalToConstant: 48),
-            iconView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
-            iconView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 23),
-            iconView.heightAnchor.constraint(equalToConstant: 23),
+            iconView.leadingAnchor.constraint(equalTo: iconContainer.leadingAnchor),
+            iconView.trailingAnchor.constraint(equalTo: iconContainer.trailingAnchor),
+            iconView.topAnchor.constraint(equalTo: iconContainer.topAnchor),
+            iconView.bottomAnchor.constraint(equalTo: iconContainer.bottomAnchor),
 
             playContainer.widthAnchor.constraint(equalToConstant: 42),
             playContainer.heightAnchor.constraint(equalToConstant: 42),

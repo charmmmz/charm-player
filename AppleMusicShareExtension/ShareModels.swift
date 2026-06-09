@@ -253,8 +253,19 @@ struct ShareSpeakerGroup: Equatable, Identifiable, Sendable {
     }
 
     var detailText: String {
+        detailText(status: nil, nowPlaying: nil)
+    }
+
+    func detailText(
+        status: ShareSpeakerPlaybackStatus?,
+        nowPlaying: ShareSpeakerNowPlaying?
+    ) -> String {
         let count = members.filter { !$0.isInvisible }.count
-        return count <= 1 ? "Ready" : "\(count) speakers"
+        return ShareSpeakerPlaybackStatus.detailText(
+            status: status,
+            nowPlaying: nowPlaying,
+            visibleMemberCount: count
+        )
     }
 }
 
