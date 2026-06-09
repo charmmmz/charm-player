@@ -388,7 +388,8 @@ final class ShareViewController: UIViewController {
                     taskGroup.addTask {
                         let data = await Self.albumArtworkData(
                             from: urlString,
-                            timeoutMilliseconds: 1_000
+                            timeoutMilliseconds: ShareSpeakerArtworkLoadPolicy.requestTimeoutMilliseconds,
+                            maxAttempts: ShareSpeakerArtworkLoadPolicy.maxAttempts
                         )
                         return (groupID, data)
                     }
@@ -416,6 +417,23 @@ final class ShareViewController: UIViewController {
     }
 
     private static func albumArtworkData(
+        from urlString: String,
+        timeoutMilliseconds: UInt64,
+        maxAttempts: Int
+    ) async -> Data? {
+        let attempts = max(maxAttempts, 1)
+        for _ in 0..<attempts {
+            if let data = await albumArtworkDataAttempt(
+                from: urlString,
+                timeoutMilliseconds: timeoutMilliseconds
+            ) {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private static func albumArtworkDataAttempt(
         from urlString: String,
         timeoutMilliseconds: UInt64
     ) async -> Data? {

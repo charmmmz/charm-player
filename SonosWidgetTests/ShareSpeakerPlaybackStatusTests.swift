@@ -2,6 +2,11 @@ import XCTest
 @testable import SonosWidget
 
 final class ShareSpeakerPlaybackStatusTests: XCTestCase {
+    func testArtworkLoadPolicyAllowsSlowerSonosArtworkWithRetry() {
+        XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.requestTimeoutMilliseconds, 2_500)
+        XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.maxAttempts, 2)
+    }
+
     func testMapsSonosTransportStatesToShareLabels() {
         XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "PLAYING")?.displayText, "Playing")
         XCTAssertEqual(ShareSpeakerPlaybackStatus(sonosTransportState: "PAUSED_PLAYBACK")?.displayText, "Paused")
