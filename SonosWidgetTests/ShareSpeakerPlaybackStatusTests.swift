@@ -2,6 +2,13 @@ import XCTest
 @testable import SonosWidget
 
 final class ShareSpeakerPlaybackStatusTests: XCTestCase {
+    func testPlaybackVisualIndicatorReplacesLoadingWithSuccessSymbol() {
+        XCTAssertTrue(SharePlaybackVisualIndicator.loading.showsSpinner)
+        XCTAssertNil(SharePlaybackVisualIndicator.loading.systemImageName)
+        XCTAssertFalse(SharePlaybackVisualIndicator.success.showsSpinner)
+        XCTAssertEqual(SharePlaybackVisualIndicator.success.systemImageName, "checkmark.circle.fill")
+    }
+
     func testArtworkLoadPolicyAllowsSlowerSonosArtworkWithRetry() {
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.requestTimeoutMilliseconds, 2_500)
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.maxAttempts, 2)

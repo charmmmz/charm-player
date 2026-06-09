@@ -19,6 +19,7 @@ final class ShareViewController: UIViewController {
     private var speakerArtworkURLs: [String: String] = [:]
     private var speakerArtworkImages: [String: UIImage] = [:]
     private var selectedGroupID: String?
+    private var successfulGroupID: String?
     private var isPlaying = false
     private var loadTask: Task<Void, Never>?
     private var playTask: Task<Void, Never>?
@@ -31,6 +32,7 @@ final class ShareViewController: UIViewController {
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let statusLabel = UILabel()
+    private let statusIconView = UIImageView()
     private let spinner = UIActivityIndicatorView(style: .medium)
     private let speakerStack = UIStackView()
     private let emptyStateLabel = UILabel()
@@ -110,13 +112,18 @@ final class ShareViewController: UIViewController {
         headerStack.addArrangedSubview(artworkContainer)
         headerStack.addArrangedSubview(textStack)
 
-        let statusRow = UIStackView(arrangedSubviews: [spinner, statusLabel])
+        let statusRow = UIStackView(arrangedSubviews: [spinner, statusIconView, statusLabel])
         statusRow.axis = .horizontal
         statusRow.alignment = .center
         statusRow.spacing = 8
 
         spinner.color = UIColor.white.withAlphaComponent(0.75)
         spinner.startAnimating()
+
+        statusIconView.tintColor = UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
+        statusIconView.contentMode = .scaleAspectFit
+        statusIconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        statusIconView.isHidden = true
 
         statusLabel.font = .preferredFont(forTextStyle: .footnote)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.65)
@@ -284,7 +291,8 @@ final class ShareViewController: UIViewController {
                 nowPlaying: speakerNowPlaying[group.id],
                 artworkImage: speakerArtworkImages[group.id],
                 isSelected: selectedGroupID == group.id,
-                isLoading: isPlaying && selectedGroupID == group.id
+                isLoading: isPlaying && selectedGroupID == group.id,
+                isSuccessful: successfulGroupID == group.id
             )
             card.addAction(UIAction { [weak self] _ in
                 self?.startPlayback(on: group)
@@ -478,6 +486,7 @@ final class ShareViewController: UIViewController {
         }
 
         selectedGroupID = group.id
+        successfulGroupID = nil
         isPlaying = true
         updateSpeakerCards()
         setStatus("Starting on \(group.displayName)...", loading: true)
@@ -505,8 +514,7 @@ final class ShareViewController: UIViewController {
                 AppleMusicShareExtensionStore.clearPendingAppleMusicShare()
                 await MainActor.run {
                     self.isPlaying = false
-                    self.setStatus("Playing on \(group.displayName)", loading: false)
-                    self.markSuccess()
+                    self.markSuccess(on: group)
                 }
                 try? await Task.sleep(for: .milliseconds(900))
                 await MainActor.run {
@@ -515,6 +523,7 @@ final class ShareViewController: UIViewController {
             } catch {
                 await MainActor.run {
                     self.isPlaying = false
+                    self.successfulGroupID = nil
                     self.updateSpeakerCards()
                     self.showError(error.localizedDescription)
                     self.notifyButton.isHidden = false
@@ -524,13 +533,18 @@ final class ShareViewController: UIViewController {
     }
 
     private func setStatus(_ text: String, loading: Bool) {
-        statusLabel.text = text
-        statusLabel.textColor = UIColor.white.withAlphaComponent(0.66)
-        loading ? spinner.startAnimating() : spinner.stopAnimating()
-        spinner.isHidden = !loading
+        setStatus(text, indicator: loading ? .loading : .none)
     }
 
-    private func markSuccess() {
+    private func setStatus(_ text: String, indicator: SharePlaybackVisualIndicator) {
+        statusLabel.text = text
+        statusLabel.textColor = UIColor.white.withAlphaComponent(0.66)
+        applyStatusIndicator(indicator)
+    }
+
+    private func markSuccess(on group: ShareSpeakerGroup) {
+        successfulGroupID = group.id
+        setStatus("Playing on \(group.displayName)", indicator: .success)
         statusLabel.textColor = UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
         updateSpeakerCards()
     }
@@ -538,8 +552,19 @@ final class ShareViewController: UIViewController {
     private func showError(_ message: String?) {
         statusLabel.text = message ?? "Something went wrong."
         statusLabel.textColor = UIColor(red: 1.0, green: 0.45, blue: 0.55, alpha: 1)
-        spinner.stopAnimating()
-        spinner.isHidden = true
+        applyStatusIndicator(.none)
+    }
+
+    private func applyStatusIndicator(_ indicator: SharePlaybackVisualIndicator) {
+        indicator.showsSpinner ? spinner.startAnimating() : spinner.stopAnimating()
+        spinner.isHidden = !indicator.showsSpinner
+
+        if let systemImageName = indicator.systemImageName {
+            statusIconView.image = UIImage(systemName: systemImageName)
+            statusIconView.isHidden = false
+        } else {
+            statusIconView.isHidden = true
+        }
     }
 
     private func loadArtwork(from urlString: String?) {
@@ -718,7 +743,8 @@ private final class SpeakerGroupCard: UIControl {
         nowPlaying: ShareSpeakerNowPlaying?,
         artworkImage: UIImage?,
         isSelected: Bool,
-        isLoading: Bool
+        isLoading: Bool,
+        isSuccessful: Bool
     ) {
         titleLabel.text = group.displayName
         detailLabel.text = group.detailText(status: status, nowPlaying: nowPlaying)
@@ -739,9 +765,17 @@ private final class SpeakerGroupCard: UIControl {
         backgroundColor = isSelected
             ? UIColor(red: 0.22, green: 0.06, blue: 0.12, alpha: 0.86)
             : UIColor.white.withAlphaComponent(0.08)
-        playView.isHidden = isLoading
-        spinner.isHidden = !isLoading
-        isLoading ? spinner.startAnimating() : spinner.stopAnimating()
+
+        let indicator: SharePlaybackVisualIndicator = isLoading ? .loading : (isSuccessful ? .success : .play)
+        if let systemImageName = indicator.systemImageName {
+            playView.image = UIImage(systemName: systemImageName)
+        }
+        playView.tintColor = isSuccessful
+            ? UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
+            : .white
+        playView.isHidden = indicator.showsSpinner
+        spinner.isHidden = !indicator.showsSpinner
+        indicator.showsSpinner ? spinner.startAnimating() : spinner.stopAnimating()
     }
 
     private func configure() {
@@ -768,6 +802,7 @@ private final class SpeakerGroupCard: UIControl {
 
         playView.tintColor = .white
         playView.contentMode = .scaleAspectFit
+        playView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
         playView.translatesAutoresizingMaskIntoConstraints = false
 
         spinner.color = .white
@@ -820,10 +855,10 @@ private final class SpeakerGroupCard: UIControl {
 
             playContainer.widthAnchor.constraint(equalToConstant: 42),
             playContainer.heightAnchor.constraint(equalToConstant: 42),
-            playView.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor, constant: 1),
+            playView.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor),
             playView.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor),
-            playView.widthAnchor.constraint(equalToConstant: 16),
-            playView.heightAnchor.constraint(equalToConstant: 16),
+            playView.widthAnchor.constraint(equalToConstant: 22),
+            playView.heightAnchor.constraint(equalToConstant: 22),
             spinner.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor)
         ])
