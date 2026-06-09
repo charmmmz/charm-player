@@ -6,6 +6,7 @@ import Observation
 @Observable
 final class LocalLibraryStore {
     private let client: LocalMusicLibraryClient
+    private let catalogArtworkCache: LocalMusicCatalogArtworkCache
 
     var authorizationStatus = MusicAuthorization.currentStatus
     var snapshot = LocalMusicLibrarySnapshot()
@@ -27,8 +28,12 @@ final class LocalLibraryStore {
         self.init(client: .shared)
     }
 
-    init(client: LocalMusicLibraryClient) {
+    init(
+        client: LocalMusicLibraryClient,
+        catalogArtworkCache: LocalMusicCatalogArtworkCache = .shared
+    ) {
         self.client = client
+        self.catalogArtworkCache = catalogArtworkCache
     }
 
     var displayedSnapshot: LocalMusicLibrarySnapshot {
@@ -259,7 +264,8 @@ final class LocalLibraryStore {
                 kind: .song,
                 title: $0.title,
                 artist: $0.artistName,
-                album: $0.albumTitle)
+                album: $0.albumTitle,
+                directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.albums.map {
             LocalMusicCatalogArtworkLookupItem(
@@ -267,7 +273,8 @@ final class LocalLibraryStore {
                 kind: .album,
                 title: $0.title,
                 artist: $0.artistName,
-                album: $0.title)
+                album: $0.title,
+                directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.artists.map {
             LocalMusicCatalogArtworkLookupItem(
@@ -275,7 +282,8 @@ final class LocalLibraryStore {
                 kind: .artist,
                 title: $0.name,
                 artist: $0.name,
-                album: nil)
+                album: nil,
+                directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.playlists.map {
             LocalMusicCatalogArtworkLookupItem(
@@ -283,18 +291,26 @@ final class LocalLibraryStore {
                 kind: .playlist,
                 title: $0.name,
                 artist: $0.curatorName,
-                album: nil)
+                album: nil,
+                directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
 
         scheduleCatalogArtworkLookup(for: items)
     }
 
     private func scheduleCatalogArtworkLookup(for items: [LocalMusicCatalogArtworkLookupItem]) {
-        let candidates = items.filter { item in
-            let key = Self.catalogArtworkKey(kind: item.kind, id: item.id)
-            return catalogArtworkURLStrings[key] == nil
-                && !catalogArtworkMissIDs.contains(key)
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: items,
+            inMemoryURLStrings: catalogArtworkURLStrings,
+            inMemoryMissIDs: catalogArtworkMissIDs,
+            cache: catalogArtworkCache)
+
+        for (key, urlString) in plan.immediateURLStringsByKey {
+            catalogArtworkURLStrings[key.storageKey] = urlString
+            catalogArtworkCache.storeURLString(urlString, for: key)
         }
+
+        let candidates = plan.lookupItems
         guard !candidates.isEmpty else { return }
 
         artworkLookupTask?.cancel()
@@ -304,20 +320,29 @@ final class LocalLibraryStore {
     }
 
     private func resolveCatalogArtwork(for items: [LocalMusicCatalogArtworkLookupItem]) async {
-        SonosLog.debug(.search, "LocalService resolving catalog artwork for \(items.count) library items")
+        SonosLog.debug(
+            .search,
+            "LocalService resolving catalog artwork for \(items.count) library items " +
+                "with concurrency=\(LocalMusicCatalogArtworkResolver.defaultMaxConcurrentLookups)")
 
-        for item in items {
-            guard !Task.isCancelled else { return }
-            let key = Self.catalogArtworkKey(kind: item.kind, id: item.id)
-            if let urlString = await catalogArtworkURLString(for: item) {
-                catalogArtworkURLStrings[key] = urlString
+        let results = await LocalMusicCatalogArtworkResolver.resolve(items: items) { item in
+            await Self.catalogArtworkURLString(for: item)
+        }
+
+        guard !Task.isCancelled else { return }
+        for result in results {
+            let key = result.item.key
+            if let urlString = result.urlString {
+                catalogArtworkURLStrings[key.storageKey] = urlString
+                catalogArtworkCache.storeURLString(urlString, for: key)
             } else {
-                catalogArtworkMissIDs.insert(key)
+                catalogArtworkMissIDs.insert(key.storageKey)
+                catalogArtworkCache.storeMiss(for: key)
             }
         }
     }
 
-    private func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {
+    private static func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {
         let term = LocalMusicCatalogMatcher.searchTerm(
             kind: item.kind,
             title: item.title,
@@ -340,7 +365,12 @@ final class LocalLibraryStore {
     }
 
     private static func catalogArtworkKey(kind: LocalServiceAppleMusicPlayable.Kind, id: String) -> String {
-        "\(kind):\(id)"
+        LocalMusicCatalogArtworkKey(kind: kind, id: id).storageKey
+    }
+
+    private static func directArtworkURLString(_ artwork: Artwork?) -> String? {
+        guard let artwork else { return nil }
+        return LocalMusicArtworkURL.url(for: artwork, shortSidePixels: 400)?.absoluteString
     }
 
     private func runPlayback(id: String, action: () async throws -> Void) async {
@@ -363,12 +393,4 @@ final class LocalLibraryStore {
         }
         return error.localizedDescription
     }
-}
-
-private struct LocalMusicCatalogArtworkLookupItem {
-    let id: String
-    let kind: LocalServiceAppleMusicPlayable.Kind
-    let title: String
-    let artist: String?
-    let album: String?
 }
