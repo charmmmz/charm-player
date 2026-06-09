@@ -170,10 +170,74 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
 
         let urlString = LocalMusicCatalogArtworkFallback.artworkURLString(
             in: [wrongArtist, exact],
+            kind: .song,
             title: "Comfortable",
             artist: "John Mayer",
             album: "Room for Squares")
 
         XCTAssertEqual(urlString, "https://example.com/exact.jpg")
+    }
+
+    func testArtworkFallbackUsesRequestedCatalogKind() {
+        let matchingSong = AppleMusicCatalogSearchItem(
+            id: "song",
+            type: .song,
+            title: "Kind of Blue",
+            artist: "Miles Davis",
+            album: "Kind of Blue",
+            artworkURLString: "https://example.com/song.jpg",
+            duration: 120)
+        let matchingAlbum = AppleMusicCatalogSearchItem(
+            id: "album",
+            type: .album,
+            title: "Kind of Blue",
+            artist: "Miles Davis",
+            album: "Kind of Blue",
+            artworkURLString: "https://example.com/album.jpg",
+            duration: nil)
+
+        let urlString = LocalMusicCatalogArtworkFallback.artworkURLString(
+            in: [matchingSong, matchingAlbum],
+            kind: .album,
+            title: "Kind of Blue",
+            artist: "Miles Davis",
+            album: "Kind of Blue")
+
+        XCTAssertEqual(urlString, "https://example.com/album.jpg")
+    }
+
+    func testArtworkFallbackSupportsArtistAndPlaylistMatches() {
+        let artist = AppleMusicCatalogSearchItem(
+            id: "artist",
+            type: .artist,
+            title: "Miles Davis",
+            artist: "",
+            album: "",
+            artworkURLString: "https://example.com/artist.jpg",
+            duration: nil)
+        let playlist = AppleMusicCatalogSearchItem(
+            id: "playlist",
+            type: .playlist,
+            title: "Jazz Essentials",
+            artist: "Apple Music Jazz",
+            album: "",
+            artworkURLString: "https://example.com/playlist.jpg",
+            duration: nil)
+
+        let artistURLString = LocalMusicCatalogArtworkFallback.artworkURLString(
+            in: [artist, playlist],
+            kind: .artist,
+            title: "Miles Davis",
+            artist: "Miles Davis",
+            album: nil)
+        let playlistURLString = LocalMusicCatalogArtworkFallback.artworkURLString(
+            in: [artist, playlist],
+            kind: .playlist,
+            title: "Jazz Essentials",
+            artist: "Apple Music Jazz",
+            album: nil)
+
+        XCTAssertEqual(artistURLString, "https://example.com/artist.jpg")
+        XCTAssertEqual(playlistURLString, "https://example.com/playlist.jpg")
     }
 }

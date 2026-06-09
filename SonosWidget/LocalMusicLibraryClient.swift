@@ -199,6 +199,10 @@ struct LocalMusicLibraryClient {
         }
     }
 
+    func songs(for artist: Artist, limit: Int = 100) async throws -> [Song] {
+        try await librarySongs(for: artist, limit: limit)
+    }
+
     func play(artist: Artist) async throws {
         let songs = try await librarySongs(for: artist, limit: 100)
         guard let first = songs.first else {

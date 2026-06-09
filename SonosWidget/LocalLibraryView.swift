@@ -361,22 +361,35 @@ struct LocalLibraryView: View {
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
         case .artist(let artist):
-            Button {
-                Task {
-                    await store.playOnSonos(
-                        playable: LocalServiceAppleMusicPlayable.make(artist: artist),
-                        displayID: artist.id.rawValue,
-                        fallbackKind: .artist,
-                        fallbackTitle: artist.name,
-                        fallbackArtist: artist.name,
+            if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
+                NavigationLink {
+                    LocalMusicArtistDetailView(
+                        artist: artist,
+                        store: store,
                         manager: manager,
                         searchManager: searchManager)
+                } label: {
+                    cardContent(item)
                 }
-            } label: {
-                cardContent(item)
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    Task {
+                        await store.playOnSonos(
+                            playable: LocalServiceAppleMusicPlayable.make(artist: artist),
+                            displayID: artist.id.rawValue,
+                            fallbackKind: .artist,
+                            fallbackTitle: artist.name,
+                            fallbackArtist: artist.name,
+                            manager: manager,
+                            searchManager: searchManager)
+                    }
+                } label: {
+                    cardContent(item)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isStartingPlayback)
             }
-            .buttonStyle(.plain)
-            .disabled(store.isStartingPlayback)
         case .station(let station):
             Button {
                 Task {
@@ -565,6 +578,7 @@ struct LocalLibraryView: View {
                 } label: {
                     rowContent(
                         artwork: album.artwork,
+                        artworkURL: store.catalogArtworkURL(for: album),
                         title: album.title,
                         subtitle: album.artistName,
                         detail: "\(album.trackCount) tracks",
@@ -583,22 +597,44 @@ struct LocalLibraryView: View {
             emptyCategoryContent
         } else {
             ForEach(artists) { artist in
-                playRow(
-                    id: artist.id.rawValue,
-                    artwork: artist.artwork,
-                    title: artist.name,
-                    subtitle: "Artist",
-                    detail: nil,
-                    fallbackSystemImage: "music.mic"
-                ) {
-                    await store.playOnSonos(
-                        playable: LocalServiceAppleMusicPlayable.make(artist: artist),
-                        displayID: artist.id.rawValue,
-                        fallbackKind: .artist,
-                        fallbackTitle: artist.name,
-                        fallbackArtist: artist.name,
-                        manager: manager,
-                        searchManager: searchManager)
+                if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
+                    NavigationLink {
+                        LocalMusicArtistDetailView(
+                            artist: artist,
+                            store: store,
+                            manager: manager,
+                            searchManager: searchManager)
+                    } label: {
+                        rowContent(
+                            artwork: artist.artwork,
+                            artworkURL: store.catalogArtworkURL(for: artist),
+                            title: artist.name,
+                            subtitle: "Artist",
+                            detail: nil,
+                            fallbackSystemImage: "music.mic",
+                            accessory: .chevron
+                        )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    playRow(
+                        id: artist.id.rawValue,
+                        artwork: artist.artwork,
+                        artworkURL: store.catalogArtworkURL(for: artist),
+                        title: artist.name,
+                        subtitle: "Artist",
+                        detail: nil,
+                        fallbackSystemImage: "music.mic"
+                    ) {
+                        await store.playOnSonos(
+                            playable: LocalServiceAppleMusicPlayable.make(artist: artist),
+                            displayID: artist.id.rawValue,
+                            fallbackKind: .artist,
+                            fallbackTitle: artist.name,
+                            fallbackArtist: artist.name,
+                            manager: manager,
+                            searchManager: searchManager)
+                    }
                 }
             }
         }
@@ -619,6 +655,7 @@ struct LocalLibraryView: View {
                 } label: {
                     rowContent(
                         artwork: playlist.artwork,
+                        artworkURL: store.catalogArtworkURL(for: playlist),
                         title: playlist.name,
                         subtitle: playlist.curatorName ?? "Playlist",
                         detail: playlist.shortDescription,
@@ -746,6 +783,32 @@ private enum LocalServiceRowAccessory {
     case progress
 }
 
+enum LocalServiceLibraryItemKind: Equatable {
+    case song
+    case album
+    case artist
+    case playlist
+    case station
+}
+
+enum LocalServiceLibraryPrimaryAction: Equatable {
+    case play
+    case navigate
+}
+
+enum LocalServiceLibraryInteraction {
+    static func primaryAction(
+        for kind: LocalServiceLibraryItemKind
+    ) -> LocalServiceLibraryPrimaryAction {
+        switch kind {
+        case .song, .station:
+            return .play
+        case .album, .artist, .playlist:
+            return .navigate
+        }
+    }
+}
+
 private enum LocalServiceCardItem: Identifiable {
     case song(Song)
     case album(Album)
@@ -832,7 +895,16 @@ private enum LocalServiceCardItem: Identifiable {
         case .song(let song):
             return store.catalogArtworkURL(for: song)
         case .album, .artist, .playlist, .station, .recentlyPlayed, .recommendation:
-            return nil
+            switch self {
+            case .album(let album):
+                return store.catalogArtworkURL(for: album)
+            case .artist(let artist):
+                return store.catalogArtworkURL(for: artist)
+            case .playlist(let playlist):
+                return store.catalogArtworkURL(for: playlist)
+            case .song, .station, .recentlyPlayed, .recommendation:
+                return nil
+            }
         }
     }
 
@@ -886,13 +958,13 @@ private struct LocalLibraryArtworkTile: View {
 
                 fallbackIcon
 
-                if let artworkURL {
-                    remoteArtwork(url: artworkURL)
-                }
-
                 if let artwork {
                     LocalMusicArtworkView(artwork: artwork)
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+
+                if let artworkURL {
+                    remoteArtwork(url: artworkURL)
                 }
             }
         }

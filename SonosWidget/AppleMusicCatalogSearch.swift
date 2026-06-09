@@ -160,13 +160,14 @@ enum LocalMusicCatalogMatcher {
 enum LocalMusicCatalogArtworkFallback {
     static func artworkURLString(
         in items: [AppleMusicCatalogSearchItem],
+        kind: LocalServiceAppleMusicPlayable.Kind,
         title: String,
         artist: String?,
         album: String?
     ) -> String? {
         guard let match = LocalMusicCatalogMatcher.bestItem(
             in: items,
-            kind: .song,
+            kind: kind,
             title: title,
             artist: artist,
             album: album
