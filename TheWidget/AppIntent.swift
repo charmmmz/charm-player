@@ -1,4 +1,5 @@
 import AppIntents
+import ActivityKit
 import WidgetKit
 import Foundation
 
@@ -56,6 +57,69 @@ struct PreviousTrackIntent: AppIntent {
         try? await Task.sleep(for: .milliseconds(800))
         await IntentHelper.refreshCache(playbackIP: ip)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+        return .result()
+    }
+}
+
+// MARK: - TV Soundbar Intents
+
+struct ToggleNightModeIntent: AppIntent {
+    static var title: LocalizedStringResource = "Toggle Night Sound"
+    static var description: IntentDescription = "Turn Sonos Night Sound on or off for TV audio."
+
+    func perform() async throws -> some IntentResult {
+        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        let nextValue = !SharedStorage.cachedSoundbarNightMode
+
+        do {
+            try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nextValue)
+            SharedStorage.cachedSoundbarNightMode = nextValue
+            await IntentHelper.updateLiveActivitySoundbarState(nightMode: nextValue)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+        } catch {
+            await IntentHelper.refreshSoundbarEQ(playbackIP: ip)
+        }
+
+        return .result()
+    }
+}
+
+struct ToggleSpeechEnhancementIntent: AppIntent {
+    static var title: LocalizedStringResource = "Toggle Speech Enhancement"
+    static var description: IntentDescription = "Turn Sonos Speech Enhancement on or off for TV audio."
+
+    func perform() async throws -> some IntentResult {
+        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        let currentLevel = SpeechEnhancementLevel.from(
+            rawLevel: SharedStorage.cachedSoundbarSpeechEnhancementRawLevel)
+        let nextLevel: SpeechEnhancementLevel = currentLevel.isOn ? .off : .low
+
+        do {
+            switch nextLevel {
+            case .off:
+                _ = try? await SonosAPI.setEQ(
+                    ip: ip,
+                    eqType: "SpeechEnhanceEnabled",
+                    enabled: false)
+                try await SonosAPI.setEQLevel(ip: ip, eqType: "DialogLevel", level: 0)
+            case .low, .medium, .high, .max:
+                try await SonosAPI.setEQLevel(
+                    ip: ip,
+                    eqType: "DialogLevel",
+                    level: nextLevel.rawValue)
+                _ = try? await SonosAPI.setEQ(
+                    ip: ip,
+                    eqType: "SpeechEnhanceEnabled",
+                    enabled: true)
+            }
+
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = nextLevel.rawValue
+            await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: nextLevel)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+        } catch {
+            await IntentHelper.refreshSoundbarEQ(playbackIP: ip)
+        }
+
         return .result()
     }
 }
@@ -127,11 +191,54 @@ enum IntentHelper {
                 ?? info.tvFormat?.geekLabel
             SharedStorage.cachedPlaybackSource = info.source.rawValue
             SharedStorage.cachedIsLiveStream = info.isLiveStream
+            if info.source == .tv {
+                await refreshSoundbarEQ(playbackIP: ip)
+            }
 
             if let urlStr = info.albumArtURL, let url = URL(string: urlStr),
                let (data, _) = try? await noProxySession.data(from: url) {
                 SharedStorage.albumArtData = data
             }
+        }
+    }
+
+    static func refreshSoundbarEQ(playbackIP ip: String) async {
+        guard let eq = try? await SonosAPI.getSoundbarEQ(ip: ip) else { return }
+
+        let level: SpeechEnhancementLevel
+        if eq.speechEnabled, eq.dialogLevel > 0 {
+            level = SpeechEnhancementLevel.from(rawLevel: eq.dialogLevel)
+        } else {
+            level = .off
+        }
+
+        SharedStorage.cachedSoundbarNightMode = eq.night
+        SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = level.rawValue
+        await updateLiveActivitySoundbarState(
+            nightMode: eq.night,
+            speechEnhancement: level)
+        WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+    }
+
+    static func updateLiveActivitySoundbarState(
+        nightMode: Bool? = nil,
+        speechEnhancement: SpeechEnhancementLevel? = nil
+    ) async {
+        for activity in Activity<SonosActivityAttributes>.activities {
+            var state = activity.content.state
+            guard state.isTVSource else { continue }
+
+            if let nightMode {
+                state.soundbarNightMode = nightMode
+            }
+            if let speechEnhancement {
+                state.soundbarSpeechEnhancementRawLevel = speechEnhancement.rawValue
+            }
+
+            await activity.update(
+                ActivityContent(
+                    state: state,
+                    staleDate: Date().addingTimeInterval(60 * 60)))
         }
     }
 }

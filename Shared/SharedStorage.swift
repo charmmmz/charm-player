@@ -158,6 +158,23 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "isLiveStream") }
     }
 
+    nonisolated static var cachedSoundbarNightMode: Bool {
+        get { defaults.bool(forKey: "soundbarNightMode") }
+        set { defaults.set(newValue, forKey: "soundbarNightMode") }
+    }
+
+    nonisolated static var cachedSoundbarSpeechEnhancementRawLevel: Int {
+        get {
+            let rawLevel = defaults.object(forKey: "soundbarSpeechEnhancementRawLevel") as? Int ?? 0
+            return SpeechEnhancementLevel.from(rawLevel: rawLevel).rawValue
+        }
+        set {
+            defaults.set(
+                SpeechEnhancementLevel.from(rawLevel: newValue).rawValue,
+                forKey: "soundbarSpeechEnhancementRawLevel")
+        }
+    }
+
     /// Timestamp after which fetchLiveEntry may overwrite isPlaying from the device.
     /// Set by PlayPauseIntent to prevent the live fetch from reverting the optimistic update.
     nonisolated static var playStateLockUntil: Date {

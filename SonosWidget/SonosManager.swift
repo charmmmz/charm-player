@@ -580,6 +580,8 @@ final class SonosManager {
             } else {
                 speechEnhancement = .off
             }
+            SharedStorage.cachedSoundbarNightMode = nightMode
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = speechEnhancement.rawValue
         } catch {
             // Soft-fail: non-soundbars return errors here, and we don't want
             // to surface that — the UI just won't show the panel.
@@ -590,12 +592,16 @@ final class SonosManager {
         guard let ip = selectedSpeaker?.ipAddress else { return }
         let prev = nightMode
         nightMode = !prev
+        SharedStorage.cachedSoundbarNightMode = nightMode
         soundbarEQLockUntil = Date().addingTimeInterval(2)
+        manageLiveActivity()
         do {
             try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nightMode)
         } catch {
             nightMode = prev
+            SharedStorage.cachedSoundbarNightMode = prev
             soundbarEQLockUntil = .distantPast
+            manageLiveActivity()
             errorMessage = error.localizedDescription
         }
     }
@@ -605,7 +611,9 @@ final class SonosManager {
         let prev = speechEnhancement
         guard level != prev else { return }
         speechEnhancement = level
+        SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = level.rawValue
         soundbarEQLockUntil = Date().addingTimeInterval(2)
+        manageLiveActivity()
         // Arc Ultra requires writing both fields. `SpeechEnhanceEnabled` is
         // the master switch; `DialogLevel` carries the 1–4 intensity. The
         // device persists DialogLevel even when disabled (per Sonos UPnP
@@ -624,7 +632,9 @@ final class SonosManager {
             }
         } catch {
             speechEnhancement = prev
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = prev.rawValue
             soundbarEQLockUntil = .distantPast
+            manageLiveActivity()
             errorMessage = error.localizedDescription
         }
     }
@@ -1473,6 +1483,9 @@ final class SonosManager {
             guard selectedSpeaker?.id == expectedSpeakerID else { return false }
 
             applyIncomingTransportState(incomingTransport)
+            if positionInfo.source == .tv {
+                await refreshSoundbarEQ()
+            }
             let incomingTrackInfo = Self.reconciledLANTrackInfo(
                 positionInfo,
                 cachedCloudQuality: cachedCloudQuality,
@@ -2581,6 +2594,8 @@ final class SonosManager {
         // Anchor the timerInterval to the moment the Sonos position was actually fetched,
         // not to Date() which is slightly later. This prevents small jitter on each update.
         let anchor = positionFetchedAt
+        let source = trackInfo?.source
+        let isTVSource = source == .tv
         let startedAt = isPlaying && durationSeconds > 0
             ? anchor.addingTimeInterval(-positionSeconds) : nil
         let endsAt = isPlaying && durationSeconds > 0
@@ -2603,7 +2618,9 @@ final class SonosManager {
             endsAt: endsAt,
             albumArtThumbnail: thumbnail,
             groupMemberCount: currentGroupMembers.filter { !$0.isInvisible }.count,
-            playbackSourceRaw: trackInfo?.source.rawValue
+            playbackSourceRaw: source?.rawValue,
+            soundbarNightMode: isTVSource ? nightMode : nil,
+            soundbarSpeechEnhancementRawLevel: isTVSource ? speechEnhancement.rawValue : nil
         )
     }
 
@@ -2637,6 +2654,10 @@ final class SonosManager {
         SharedStorage.cachedAudioQualityLabel = trackInfo?.audioQuality?.label
             ?? trackInfo?.tvFormat?.geekLabel
         SharedStorage.cachedIsLiveStream = trackInfo?.isLiveStream ?? false
+        if trackInfo?.source == .tv {
+            SharedStorage.cachedSoundbarNightMode = nightMode
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = speechEnhancement.rawValue
+        }
         SharedStorage.cachedGroupMemberCount = currentGroupMembers.filter { !$0.isInvisible }.count
         // Keep cloudGroupId in sync so the widget can call Cloud API independently.
         if let gid = cloudGroupId { SharedStorage.cloudGroupId = gid }

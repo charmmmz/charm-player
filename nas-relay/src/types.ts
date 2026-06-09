@@ -24,6 +24,8 @@ export interface LiveActivityContentState {
   albumArtThumbnail?: string | null; // base64 (Swift Data ↔ JSON)
   groupMemberCount: number;
   playbackSourceRaw?: string | null;
+  soundbarNightMode?: boolean | null;
+  soundbarSpeechEnhancementRawLevel?: number | null;
 }
 
 /// Minimal projection of what we keep in memory per Sonos coordinator. Built
@@ -37,6 +39,8 @@ export interface SonosGroupSnapshot {
   albumArtUri?: string | null;
   isPlaying: boolean;
   playbackSourceRaw?: string | null;
+  soundbarNightMode?: boolean | null;
+  soundbarSpeechEnhancementRawLevel?: number | null;
   musicAmbienceEligible?: boolean;
   positionSeconds: number;
   durationSeconds: number;

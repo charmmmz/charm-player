@@ -61,6 +61,34 @@ test('Live Activity content hash changes when the dominant theme color changes',
   assert.notEqual(withoutColor, withColor);
 });
 
+test('Live Activity content state carries TV soundbar controls', async () => {
+  const state = await buildLiveActivityContentState(snapshot({
+    playbackSourceRaw: 'tv',
+    soundbarNightMode: true,
+    soundbarSpeechEnhancementRawLevel: 2,
+  }));
+
+  assert.equal(state.soundbarNightMode, true);
+  assert.equal(state.soundbarSpeechEnhancementRawLevel, 2);
+});
+
+test('Live Activity content hash changes when TV soundbar controls change', () => {
+  const nightOff = hashLiveActivityContentState({
+    ...baseContentState(),
+    playbackSourceRaw: 'tv',
+    soundbarNightMode: false,
+    soundbarSpeechEnhancementRawLevel: 1,
+  });
+  const nightOn = hashLiveActivityContentState({
+    ...baseContentState(),
+    playbackSourceRaw: 'tv',
+    soundbarNightMode: true,
+    soundbarSpeechEnhancementRawLevel: 1,
+  });
+
+  assert.notEqual(nightOff, nightOn);
+});
+
 test('Live Activity album art extraction retries after a transient fetch failure', async () => {
   let requestCount = 0;
   const server = http.createServer((_req, res) => {

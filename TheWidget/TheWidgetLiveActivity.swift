@@ -11,8 +11,7 @@ struct SonosLiveActivity: Widget {
             // The `dynamicIsland` closure is a function builder body — adding
             // any `let` before the `DynamicIsland(...)` expression turns it
             // into a multi-statement closure that needs an explicit return.
-            let islandSource = context.state.playbackSourceRaw
-                .flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+            let islandSource = context.state.playbackSource
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     ArtView(data: context.state.albumArtThumbnail, size: 50, source: islandSource)
@@ -33,7 +32,7 @@ struct SonosLiveActivity: Widget {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         HStack(spacing: 4) {
-                            Text("ON \(context.attributes.speakerName.uppercased())\(extra)")
+                            Text("\(context.state.isTVSource ? "LIVE ON" : "ON") \(context.attributes.speakerName.uppercased())\(extra)")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(accent.opacity(0.8))
                                 .lineLimit(1)
@@ -61,34 +60,40 @@ struct SonosLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     let accent = themeColor(from: context.state.dominantColorHex)
-                    let isLive = context.state.isLiveStream
                     VStack(spacing: 8) {
                         LiveProgressView(state: context.state)
-                        HStack(spacing: 40) {
-                            if isLive {
-                                Button(intent: PlayPauseIntent()) {
-                                    Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
-                                        .font(.title2)
-                                        .foregroundStyle(accent)
-                                }.buttonStyle(.plain)
-                            } else {
-                                Button(intent: PreviousTrackIntent()) {
-                                    Image(systemName: "backward.fill")
-                                        .font(.callout)
-                                        .foregroundStyle(.white.opacity(0.85))
-                                }.buttonStyle(.plain)
+                        if context.state.isTVSource {
+                            TVSoundbarControlsView(
+                                state: context.state,
+                                accent: accent,
+                                compact: false)
+                        } else {
+                            HStack(spacing: 40) {
+                                if context.state.isLiveStream {
+                                    Button(intent: PlayPauseIntent()) {
+                                        Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
+                                            .font(.title2)
+                                            .foregroundStyle(accent)
+                                    }.buttonStyle(.plain)
+                                } else {
+                                    Button(intent: PreviousTrackIntent()) {
+                                        Image(systemName: "backward.fill")
+                                            .font(.callout)
+                                            .foregroundStyle(.white.opacity(0.85))
+                                    }.buttonStyle(.plain)
 
-                                Button(intent: PlayPauseIntent()) {
-                                    Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.title2)
-                                        .foregroundStyle(accent)
-                                }.buttonStyle(.plain)
+                                    Button(intent: PlayPauseIntent()) {
+                                        Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.title2)
+                                            .foregroundStyle(accent)
+                                    }.buttonStyle(.plain)
 
-                                Button(intent: NextTrackIntent()) {
-                                    Image(systemName: "forward.fill")
-                                        .font(.callout)
-                                        .foregroundStyle(.white.opacity(0.85))
-                                }.buttonStyle(.plain)
+                                    Button(intent: NextTrackIntent()) {
+                                        Image(systemName: "forward.fill")
+                                            .font(.callout)
+                                            .foregroundStyle(.white.opacity(0.85))
+                                    }.buttonStyle(.plain)
+                                }
                             }
                         }
                     }
@@ -122,8 +127,7 @@ private struct LockScreenView: View {
         let accent = themeColor(from: context.state.dominantColorHex)
         let extra = context.state.groupMemberCount > 1
             ? " + \(context.state.groupMemberCount - 1)" : ""
-        let source = context.state.playbackSourceRaw
-            .flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+        let source = context.state.playbackSource
 
         VStack(spacing: 6) {
             // ── Single row: art | text | controls ──
@@ -139,7 +143,7 @@ private struct LockScreenView: View {
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                     HStack(spacing: 5) {
-                        Text("ON \(context.attributes.speakerName.uppercased())\(extra)")
+                        Text("\(context.state.isTVSource ? "LIVE ON" : "ON") \(context.attributes.speakerName.uppercased())\(extra)")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(accent.opacity(0.8))
                             .lineLimit(1)
@@ -151,8 +155,13 @@ private struct LockScreenView: View {
 
                 Spacer(minLength: 0)
 
-                HStack(spacing: 14) {
-                    if context.state.isLiveStream {
+                HStack(spacing: context.state.isTVSource ? 8 : 14) {
+                    if context.state.isTVSource {
+                        TVSoundbarControlsView(
+                            state: context.state,
+                            accent: accent,
+                            compact: true)
+                    } else if context.state.isLiveStream {
                         Button(intent: PlayPauseIntent()) {
                             Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
                                 .font(.title3)
@@ -209,6 +218,91 @@ private struct LockScreenView: View {
     }
 }
 
+// MARK: - TV Soundbar Controls
+
+private struct TVSoundbarControlsView: View {
+    let state: SonosActivityAttributes.ContentState
+    let accent: Color
+    var compact: Bool
+
+    var body: some View {
+        let nightOn = state.isSoundbarNightModeEnabled
+        let speechLevel = state.soundbarSpeechEnhancementLevel
+
+        HStack(spacing: compact ? 8 : 12) {
+            Button(intent: ToggleNightModeIntent()) {
+                TVSoundbarControlContent(
+                    icon: nightOn ? "moon.fill" : "moon",
+                    title: "Night",
+                    value: nightOn ? "On" : "Off",
+                    isOn: nightOn,
+                    accent: accent,
+                    compact: compact)
+            }
+            .buttonStyle(.plain)
+
+            Button(intent: ToggleSpeechEnhancementIntent()) {
+                TVSoundbarControlContent(
+                    icon: speechLevel.isOn ? "text.bubble.fill" : "text.bubble",
+                    title: compact ? "Voice" : "Speech",
+                    value: speechLevel.isOn ? speechLevel.shortLabel : "Off",
+                    isOn: speechLevel.isOn,
+                    accent: accent,
+                    compact: compact)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct TVSoundbarControlContent: View {
+    let icon: String
+    let title: String
+    let value: String
+    let isOn: Bool
+    let accent: Color
+    var compact: Bool
+
+    var body: some View {
+        Group {
+            if compact {
+                VStack(spacing: 2) {
+                    Image(systemName: icon)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .frame(width: 38, height: 34)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(title)
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(value)
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.62))
+                    }
+                    .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+            }
+        }
+        .foregroundStyle(isOn ? accent : .white.opacity(0.78))
+        .background {
+            Capsule()
+                .fill(isOn ? accent.opacity(0.20) : .white.opacity(0.09))
+        }
+        .overlay {
+            Capsule()
+                .stroke(isOn ? accent.opacity(0.55) : .white.opacity(0.14), lineWidth: 1)
+        }
+    }
+}
+
 // MARK: - Animated Waveform (lock screen + expanded DI only)
 // Compact/minimal Dynamic Island does NOT support animation.
 //
@@ -244,7 +338,7 @@ private struct LiveProgressView: View {
     var body: some View {
         let accent = themeColor(from: state.dominantColorHex)
 
-        if state.isLiveStream {
+        if state.isLiveSource {
             HStack(spacing: 6) {
                 Capsule()
                     .fill(.white.opacity(0.18))

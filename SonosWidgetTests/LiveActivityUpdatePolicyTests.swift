@@ -2,6 +2,25 @@ import XCTest
 @testable import SonosWidget
 
 final class LiveActivityUpdatePolicyTests: XCTestCase {
+    func testTVSourceLiveActivityStateCarriesSoundbarControls() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "TV",
+            artist: "Live audio",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue,
+            soundbarNightMode: true,
+            soundbarSpeechEnhancementRawLevel: SpeechEnhancementLevel.medium.rawValue
+        )
+
+        XCTAssertTrue(state.isTVSource)
+        XCTAssertTrue(state.isLiveSource)
+        XCTAssertEqual(state.soundbarSpeechEnhancementLevel, .medium)
+        XCTAssertTrue(state.isSoundbarNightModeEnabled)
+    }
+
     func testAppKeepsUpdatingLocalLiveActivities() {
         XCTAssertTrue(
             SonosManager.shouldPerformLocalLiveActivityUpdate(

@@ -821,17 +821,48 @@ struct SonosActivityAttributes: ActivityAttributes {
         var groupMemberCount: Int = 1
         /// PlaybackSource raw value for displaying streaming service badge.
         var playbackSourceRaw: String? = nil
+        /// Soundbar Night Sound state for TV input. Optional so older relay
+        /// pushes that do not know this field still decode safely.
+        var soundbarNightMode: Bool? = nil
+        /// Soundbar Speech Enhancement raw level for TV input.
+        var soundbarSpeechEnhancementRawLevel: Int? = nil
     }
     var speakerName: String
 }
 
 extension SonosActivityAttributes.ContentState {
+    var playbackSource: PlaybackSource {
+        playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+    }
+
+    var isTVSource: Bool {
+        playbackSource == .tv
+    }
+
     /// Mirror of `TrackInfo.isLiveStream` for Live Activity rendering. We
     /// recompute from the carried fields rather than adding another
     /// stored value to keep the ActivityKit payload size unchanged.
     var isLiveStream: Bool {
-        if playbackSourceRaw == PlaybackSource.tv.rawValue { return false }
+        if isTVSource { return false }
         return durationSeconds <= 0
+    }
+
+    /// TV audio is also a live source from the user's perspective: no seek,
+    /// no next/previous track, and the UI should show a LIVE cue.
+    var isLiveSource: Bool {
+        isTVSource || isLiveStream
+    }
+
+    var isSoundbarNightModeEnabled: Bool {
+        soundbarNightMode ?? SharedStorage.cachedSoundbarNightMode
+    }
+
+    var soundbarSpeechEnhancementLevel: SpeechEnhancementLevel {
+        if let rawLevel = soundbarSpeechEnhancementRawLevel {
+            return SpeechEnhancementLevel.from(rawLevel: rawLevel)
+        }
+        return SpeechEnhancementLevel.from(
+            rawLevel: SharedStorage.cachedSoundbarSpeechEnhancementRawLevel)
     }
 }
 
