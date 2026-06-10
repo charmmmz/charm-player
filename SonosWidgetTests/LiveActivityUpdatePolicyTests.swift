@@ -50,6 +50,25 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertEqual(state.resolvedLiveActivityPresentation, .classic)
     }
 
+    func testLiveActivityStyleLabelsUseSimpleAndRichNames() {
+        XCTAssertEqual(LiveActivityStyle.classic.displayName, "Simple")
+        XCTAssertEqual(LiveActivityStyle.widget.displayName, "Rich")
+    }
+
+    func testLiveActivityStateCarriesAudioQualityLabel() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Waiting On the World to Change",
+            artist: "John Mayer",
+            album: "Continuum",
+            isPlaying: true,
+            positionSeconds: 12,
+            durationSeconds: 240,
+            audioQualityLabel: "Dolby Atmos · MAT"
+        )
+
+        XCTAssertEqual(state.audioQualityLabel, "Dolby Atmos · MAT")
+    }
+
     func testTVSourceLiveActivityStateCarriesSoundbarControls() {
         let state = SonosActivityAttributes.ContentState(
             trackTitle: "TV",

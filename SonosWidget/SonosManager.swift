@@ -2484,6 +2484,7 @@ final class SonosManager {
             "members=\(state.groupMemberCount)",
             "sourceRaw=\(state.playbackSourceRaw ?? "nil")",
             "activityStyle=\(state.liveActivityStyleRaw ?? "nil")",
+            "quality=\(state.audioQualityLabel ?? "nil")",
             "hasStartedAt=\(state.startedAt != nil)",
             "hasEndsAt=\(state.endsAt != nil)"
         ]
@@ -2643,7 +2644,8 @@ final class SonosManager {
             playbackSourceRaw: source?.rawValue,
             soundbarNightMode: isTVSource ? nightMode : nil,
             soundbarSpeechEnhancementRawLevel: isTVSource ? speechEnhancement.rawValue : nil,
-            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue,
+            audioQualityLabel: SharedStorage.cachedAudioQualityLabel
         )
     }
 

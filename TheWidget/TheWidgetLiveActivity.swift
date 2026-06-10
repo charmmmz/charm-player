@@ -251,14 +251,17 @@ private struct WidgetCardLockScreenView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(state.isPlaying ? "NOW PLAYING" : "CONTINUE")
+                        Text("\(state.isPlaying ? "NOW PLAYING" : "CONTINUE") ON \(context.attributes.speakerName.uppercased())\(extra)")
                             .font(LiveActivityWidgetMeta.font)
                             .tracking(LiveActivityWidgetMeta.tracking)
-                            .foregroundStyle(.white.opacity(0.46))
+                            .foregroundStyle(LiveActivityWidgetMeta.textColor)
+                            .lineLimit(1)
                         if state.isPlaying {
                             AnimatedWaveform(accent: accent, barCount: 3, height: 7)
                         }
                     }
+
+                    QualityBadgeRow(quality: state.audioQualityLabel)
 
                     Text(state.trackTitle)
                         .font(.system(size: 17, weight: .bold, design: .rounded))
@@ -268,12 +271,6 @@ private struct WidgetCardLockScreenView: View {
                     Text(trackSubtitle(state))
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.68))
-                        .lineLimit(1)
-
-                    Text("ON \(context.attributes.speakerName.uppercased())\(extra)")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .tracking(0.5)
-                        .foregroundStyle(accent.opacity(0.75))
                         .lineLimit(1)
                 }
 
@@ -316,12 +313,14 @@ private struct WidgetTVRemoteLockScreenView: View {
                         Text("LIVE ON \(context.attributes.speakerName.uppercased())\(extra)")
                             .font(LiveActivityWidgetMeta.font)
                             .tracking(LiveActivityWidgetMeta.tracking)
-                            .foregroundStyle(accent.opacity(0.82))
+                            .foregroundStyle(LiveActivityWidgetMeta.textColor)
                             .lineLimit(1)
                         if state.isPlaying {
                             AnimatedWaveform(accent: accent, barCount: 3, height: 7)
                         }
                     }
+
+                    QualityBadgeRow(quality: state.audioQualityLabel)
 
                     Text(state.trackTitle)
                         .font(.system(size: 16, weight: .bold, design: .rounded))
@@ -360,6 +359,47 @@ private struct WidgetTVRemoteLockScreenView: View {
 private enum LiveActivityWidgetMeta {
     static let font = Font.system(size: 8, weight: .semibold, design: .rounded)
     static let tracking: CGFloat = 0.45
+    static let textColor = Color.white.opacity(0.42)
+    static let badgeTint = Color.white.opacity(0.48)
+    static let qualityBadgeHeight: CGFloat = 9
+}
+
+private struct QualityBadgeRow: View {
+    let quality: String?
+
+    @ViewBuilder
+    var body: some View {
+        if let quality = quality?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quality.isEmpty {
+            let badge = AudioQuality.badgeImageName(forQualityLabel: quality)
+            let companion = AudioQuality.badgeCompanionLabel(forQualityLabel: quality)
+
+            HStack(alignment: .center, spacing: 4) {
+                Text("IN")
+                    .font(LiveActivityWidgetMeta.font)
+                    .tracking(LiveActivityWidgetMeta.tracking)
+                    .foregroundStyle(LiveActivityWidgetMeta.textColor)
+
+                if let badge {
+                    Image(badge)
+                        .resizable()
+                        .renderingMode(.template)
+                        .foregroundStyle(LiveActivityWidgetMeta.badgeTint)
+                        .scaledToFit()
+                        .frame(height: LiveActivityWidgetMeta.qualityBadgeHeight)
+                        .accessibilityHidden(true)
+                }
+
+                if let companion {
+                    Text(companion.uppercased())
+                        .font(LiveActivityWidgetMeta.font)
+                        .tracking(LiveActivityWidgetMeta.tracking)
+                        .foregroundStyle(LiveActivityWidgetMeta.textColor)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
 }
 
 private struct WidgetTransportControlsView: View {

@@ -809,17 +809,17 @@ enum LiveActivityStyle: String, Codable, Sendable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .classic: return "Classic"
-        case .widget:  return "Widget"
+        case .classic: return "Simple"
+        case .widget:  return "Rich"
         }
     }
 
     var subtitle: String {
         switch self {
         case .classic:
-            return "Current compact player"
+            return "Compact Live Activity"
         case .widget:
-            return "Widget card, TV remote when live"
+            return "Artwork, quality, and TV controls"
         }
     }
 
@@ -864,6 +864,8 @@ struct SonosActivityAttributes: ActivityAttributes {
         var soundbarSpeechEnhancementRawLevel: Int? = nil
         /// User-selected Live Activity style. Optional so old relay pushes decode safely.
         var liveActivityStyleRaw: String? = nil
+        /// Audio quality / TV format label for displaying the same badge as the widget.
+        var audioQualityLabel: String? = nil
     }
     var speakerName: String
 }

@@ -191,6 +191,22 @@ test('bridge labels periodic snapshot refreshes for Live Activity calibration pu
   assert.equal(trigger, 'periodic-refresh');
 });
 
+test('bridge snapshots audio quality from Sonos track metadata', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }));
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, losslessPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.audioQualityLabel, 'Lossless');
+});
+
 test('bridge snapshots grouped playback with the coordinator visible member count', async () => {
   const bridge = new SonosBridge(pino({ enabled: false }));
   const coordinator = playbackDevice({
@@ -216,12 +232,71 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
   assert.equal(snapshot?.groupMemberCount, 2);
 });
 
+test('bridge prefers parsed ZoneGroup members over stale coordinator relationships', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }));
+  const coordinator = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  coordinator.Coordinator = coordinator;
+
+  const kitchen = playbackDevice({
+    Host: '192.168.50.26',
+    Name: 'Kitchen',
+    Uuid: 'rincon-kitchen',
+    Coordinator: coordinator,
+  });
+  const move = playbackDevice({
+    Host: '192.168.50.27',
+    Name: 'Move',
+    Uuid: 'rincon-move',
+    Coordinator: coordinator,
+  });
+
+  (bridge as unknown as { manager: { devices: unknown[]; zoneService: unknown } }).manager.devices = [
+    coordinator,
+    kitchen,
+    move,
+  ];
+  (bridge as unknown as { manager: { zoneService: unknown } }).manager.zoneService = {
+    GetParsedZoneGroupState: () => Promise.resolve([
+      zoneGroup(coordinator),
+      zoneGroup(kitchen),
+      zoneGroup(move),
+    ]),
+  };
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(coordinator);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.speakerName, 'Playroom');
+  assert.equal(snapshot?.groupMemberCount, 1);
+});
+
 function positionInfo(title: string): Record<string, string> {
   return {
     RelTime: '00:00:00',
     TrackDuration: '00:03:00',
     TrackURI: 'x-rincon-queue:RINCON_1#0',
     TrackMetaData: `<DIDL-Lite><item><dc:title>${title}</dc:title><dc:creator>Artist</dc:creator><upnp:album>Album</upnp:album><upnp:albumArtURI>/getaa?s=1&amp;u=x-sonos-http%3atrack</upnp:albumArtURI></item></DIDL-Lite>`,
+  };
+}
+
+function losslessPositionInfo(): Record<string, string> {
+  return {
+    ...positionInfo('Blue Train'),
+    TrackMetaData: '<DIDL-Lite><item>'
+      + '<dc:title>Blue Train</dc:title>'
+      + '<dc:creator>John Coltrane</dc:creator>'
+      + '<upnp:album>Blue Train</upnp:album>'
+      + '<upnp:albumArtURI>/getaa?s=1&amp;u=x-file-cifs%3atrack</upnp:albumArtURI>'
+      + '<res protocolInfo="http-get:*:audio/flac:*" sampleFrequency="44100" bitsPerSample="16" nrAudioChannels="2">'
+      + 'http://192.168.50.25:1400/track.flac'
+      + '</res>'
+      + '</item></DIDL-Lite>',
   };
 }
 
@@ -233,12 +308,34 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
-function playbackDevice(fields: Record<string, unknown>): Record<string, unknown> {
+function playbackDevice(
+  fields: Record<string, unknown>,
+  position: Record<string, string> = positionInfo('Blue Train'),
+): Record<string, unknown> {
   return {
     AVTransportService: {
       GetTransportInfo: () => Promise.resolve({ CurrentTransportState: 'PLAYING' }),
-      GetPositionInfo: () => Promise.resolve(positionInfo('Blue Train')),
+      GetPositionInfo: () => Promise.resolve(position),
     },
     ...fields,
+  };
+}
+
+function zoneGroup(device: Record<string, unknown>) {
+  return {
+    groupId: String(device.Uuid),
+    name: String(device.Name),
+    coordinator: zoneMember(device),
+    members: [zoneMember(device)],
+  };
+}
+
+function zoneMember(device: Record<string, unknown>) {
+  return {
+    host: String(device.Host),
+    port: 1400,
+    uuid: String(device.Uuid),
+    name: String(device.Name),
+    Invisible: false,
   };
 }

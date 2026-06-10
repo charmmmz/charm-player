@@ -374,6 +374,7 @@ function summarizeLiveActivityState(state: LiveActivityContentState): Record<str
     groupMemberCount: state.groupMemberCount,
     playbackSourceRaw: state.playbackSourceRaw ?? null,
     liveActivityStyleRaw: state.liveActivityStyleRaw ?? null,
+    audioQualityLabel: state.audioQualityLabel ?? null,
     hasStartedAt: state.startedAt !== undefined && state.startedAt !== null,
     hasEndsAt: state.endsAt !== undefined && state.endsAt !== null,
   };

@@ -641,7 +641,7 @@ struct SettingsView: View {
         } header: {
             Text("Live Activity Style")
         } footer: {
-            Text("Widget style uses the music card for music and automatically switches to the TV remote when the source is live TV.")
+            Text("Rich style uses the music card for music and automatically switches to the TV remote when the source is live TV.")
         }
     }
 

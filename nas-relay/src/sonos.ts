@@ -180,6 +180,10 @@ export class SonosBridge extends EventEmitter {
       const positionSeconds = parseDuration(position.RelTime ?? '00:00:00');
       const durationSeconds = parseDuration(position.TrackDuration ?? '00:00:00');
       const metadata = trackMetadataFromMetadata(position.TrackMetaData);
+      const audioQualityLabel = audioQualityLabelFromMetadata(
+        position.TrackMetaData,
+        playbackSourceRaw,
+      );
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
       // current song in r:streamContent while sonos-ts may cache that raw
@@ -220,6 +224,7 @@ export class SonosBridge extends EventEmitter {
         albumArtUri,
         isPlaying,
         playbackSourceRaw,
+        audioQualityLabel,
         musicAmbienceEligible: isMusicAmbienceEligibleForSnapshot({
           trackTitle,
           artist,
@@ -229,7 +234,7 @@ export class SonosBridge extends EventEmitter {
         }),
         positionSeconds,
         durationSeconds,
-        groupMemberCount: this.groupMemberCountForCoordinator(coordinator, resolvedGroupId),
+        groupMemberCount: await this.groupMemberCountForCoordinator(coordinator, resolvedGroupId),
         sampledAt: new Date(),
       };
 
@@ -254,7 +259,45 @@ export class SonosBridge extends EventEmitter {
     return this.refreshSequences.get(groupId) === sequence;
   }
 
-  private groupMemberCountForCoordinator(coordinator: any, groupId: string): number {
+  private async groupMemberCountForCoordinator(coordinator: any, groupId: string): Promise<number> {
+    const parsedCount = await this.parsedZoneGroupMemberCountForCoordinator(coordinator, groupId);
+    if (parsedCount !== null) {
+      return parsedCount;
+    }
+    return this.inferredGroupMemberCountForCoordinator(coordinator, groupId);
+  }
+
+  private async parsedZoneGroupMemberCountForCoordinator(
+    coordinator: any,
+    groupId: string,
+  ): Promise<number | null> {
+    const coordinatorHost = firstNonEmpty(coordinator.Host, groupId);
+    const coordinatorUuid = firstNonEmpty(coordinator.Uuid);
+    const manager = this.manager as unknown as {
+      LoadAllGroups?: () => Promise<ParsedZoneGroup[]>;
+    };
+
+    if (typeof manager.LoadAllGroups !== 'function') {
+      return null;
+    }
+
+    try {
+      const groups = await manager.LoadAllGroups.call(this.manager);
+      const group = groups.find(candidate =>
+        zoneGroupMatchesCoordinator(candidate, coordinatorHost, coordinatorUuid));
+      if (!group) {
+        return null;
+      }
+
+      const visibleMembers = (group.members ?? [])
+        .filter(member => !isInvisibleDevice(member as unknown as Record<string, unknown>));
+      return Math.max(1, visibleMembers.length);
+    } catch {
+      return null;
+    }
+  }
+
+  private inferredGroupMemberCountForCoordinator(coordinator: any, groupId: string): number {
     let devices: any[] = [];
     try {
       devices = this.manager.Devices as any[];
@@ -360,6 +403,19 @@ export interface SonosTrackMetadata {
   albumArtUri: string | null;
 }
 
+interface ParsedZoneGroup {
+  coordinator?: {
+    host?: string;
+    uuid?: string;
+    Invisible?: boolean;
+  };
+  members?: Array<{
+    host?: string;
+    uuid?: string;
+    Invisible?: boolean;
+  }>;
+}
+
 export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata {
   if (!metadata) {
     return emptyTrackMetadata();
@@ -375,6 +431,153 @@ export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata
     albumArtUri: xmlTagValue(metadata, 'upnp:albumArtURI'),
   };
   return reconcileRadioStreamContent(baseMetadata, xmlTagValue(metadata, 'r:streamContent'));
+}
+
+function audioQualityLabelFromMetadata(
+  metadata: unknown,
+  sourceRaw: string | null,
+): string | null {
+  if (typeof metadata !== 'string') {
+    return null;
+  }
+
+  const resAttributes = xmlElementAttributes(metadata, 'res');
+  if (!resAttributes) {
+    return null;
+  }
+
+  const protocolInfo = xmlAttributeValue(resAttributes, 'protocolInfo');
+  if (!protocolInfo) {
+    return null;
+  }
+
+  return audioQualityLabelFromProtocolInfo({
+    protocolInfo,
+    sampleRate: xmlAttributeValue(resAttributes, 'sampleFrequency'),
+    bitDepth: xmlAttributeValue(resAttributes, 'bitsPerSample'),
+    channels: xmlAttributeValue(resAttributes, 'nrAudioChannels'),
+    streamContent: xmlTagValue(metadata, 'r:streamContent') ?? '',
+    sourceRaw,
+  });
+}
+
+function audioQualityLabelFromProtocolInfo(input: {
+  protocolInfo: string;
+  sampleRate: string | null;
+  bitDepth: string | null;
+  channels: string | null;
+  streamContent: string;
+  sourceRaw: string | null;
+}): string | null {
+  const parts = input.protocolInfo.split(':');
+  if (parts.length < 3) return null;
+
+  const mime = (parts[2] ?? '').toLowerCase();
+  const streamContent = input.streamContent.toLowerCase().trim();
+  let sampleRate = input.sampleRate;
+  let bitDepth = input.bitDepth;
+
+  const streamMatch = input.streamContent.match(/(\d+)\/(\d+\.?\d*)/);
+  if (streamMatch) {
+    bitDepth ??= streamMatch[1] ?? null;
+    if (!sampleRate && streamMatch[2]) {
+      const parsed = Number(streamMatch[2]);
+      sampleRate = Number.isFinite(parsed) && parsed < 1000
+        ? String(Math.round(parsed * 1000))
+        : streamMatch[2];
+    }
+  }
+
+  const codec = audioCodecFromMetadata({
+    mime,
+    streamContent,
+    sampleRate,
+    bitDepth,
+    sourceRaw: input.sourceRaw,
+  });
+  if (!codec) return null;
+
+  const sampleRateNumber = parsePositiveInteger(sampleRate);
+  const bitDepthNumber = parsePositiveInteger(bitDepth);
+  const channelsNumber = parsePositiveInteger(input.channels);
+  const normalizedCodec = codec.toLowerCase();
+  const isAtmos = normalizedCodec.includes('atmos') || (channelsNumber ?? 0) > 2;
+  if (isAtmos) return 'Dolby Atmos';
+
+  const isLossless = isLosslessCodec(normalizedCodec, sampleRateNumber, bitDepthNumber);
+  if (isLossless) {
+    const isHiRes = (sampleRateNumber ?? 0) > 48_000
+      || ((sampleRateNumber ?? 0) >= 48_000 && (bitDepthNumber ?? 0) >= 24);
+    return isHiRes ? 'Hi-Res Lossless' : 'Lossless';
+  }
+
+  return codec.toUpperCase();
+}
+
+function audioCodecFromMetadata(input: {
+  mime: string;
+  streamContent: string;
+  sampleRate: string | null;
+  bitDepth: string | null;
+  sourceRaw: string | null;
+}): string | null {
+  const { mime, streamContent, sampleRate, bitDepth, sourceRaw } = input;
+  if (streamContent.includes('flac')) return 'FLAC';
+  if (streamContent.includes('alac')) return 'ALAC';
+  if (streamContent.includes('pcm')) return 'PCM';
+  if (streamContent.includes('aiff')) return 'AIFF';
+  if (streamContent.includes('wav')) return 'WAV';
+  if (
+    streamContent.includes('dolby')
+    || streamContent.includes('atmos')
+    || streamContent.includes('ac3')
+    || streamContent.includes('ec3')
+  ) {
+    return 'Atmos';
+  }
+  if (streamContent.includes('ogg')) return 'OGG';
+  if (mime.includes('flac')) return 'FLAC';
+  if (mime.includes('wav') || mime.includes('wave')) return 'WAV';
+  if (mime.includes('aiff')) return 'AIFF';
+  if (mime.includes('mp4') || mime.includes('m4a')) {
+    return bitDepth || sampleRate ? 'ALAC' : null;
+  }
+  if (mime.includes('mp3') || mime.includes('mpeg')) {
+    if (sourceRaw === 'library' || sourceRaw === 'radio' || bitDepth || sampleRate) {
+      return 'MP3';
+    }
+    return null;
+  }
+  if (mime.includes('ogg')) return 'OGG';
+  if (mime.includes('wma')) return 'WMA';
+  return mime.replace(/^audio\//, '').toUpperCase();
+}
+
+function isLosslessCodec(
+  normalizedCodec: string,
+  sampleRate: number | null,
+  bitDepth: number | null,
+): boolean {
+  if (
+    normalizedCodec.includes('hi-res')
+    || normalizedCodec.includes('hires')
+    || normalizedCodec.includes('hi res')
+  ) {
+    return true;
+  }
+  if (
+    normalizedCodec === 'lossless'
+    || normalizedCodec.includes('lossless')
+    || normalizedCodec.includes('flac')
+    || normalizedCodec.includes('alac')
+    || normalizedCodec.includes('wav')
+    || normalizedCodec.includes('aiff')
+    || normalizedCodec.includes('pcm')
+  ) {
+    return true;
+  }
+  return (normalizedCodec === 'aac' || normalizedCodec.includes('mp4') || normalizedCodec.includes('m4a'))
+    && (bitDepth !== null || sampleRate !== null);
 }
 
 function trackMetadataFromTrackObject(metadata: unknown): SonosTrackMetadata {
@@ -492,9 +695,30 @@ function isInvisibleDevice(device: Record<string, unknown>): boolean {
   return device.Invisible === true || device.invisible === true || device.isInvisible === true;
 }
 
+function zoneGroupMatchesCoordinator(
+  group: ParsedZoneGroup,
+  coordinatorHost: string,
+  coordinatorUuid: string,
+): boolean {
+  const groupCoordinator = group.coordinator ?? {};
+  const groupCoordinatorHost = firstObjectString(groupCoordinator.host);
+  const groupCoordinatorUuid = firstObjectString(groupCoordinator.uuid);
+
+  return Boolean(
+    (coordinatorHost && groupCoordinatorHost === coordinatorHost)
+      || (coordinatorUuid && groupCoordinatorUuid === coordinatorUuid),
+  );
+}
+
 function looksLikeRadioStreamContent(value: string): boolean {
   const upper = value.toUpperCase();
   return upper.startsWith('TYPE=') || upper.includes('|TITLE ') || upper.includes('|TITLE=');
+}
+
+function xmlElementAttributes(xml: string, tag: string): string | null {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = xml.match(new RegExp(`<${escapedTag}\\s+([^>]*)>`, 'i'));
+  return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
 }
 
 function xmlTagValue(xml: string, tag: string): string | null {
@@ -502,6 +726,19 @@ function xmlTagValue(xml: string, tag: string): string | null {
   const match = xml.match(new RegExp(`<${escapedTag}[^>]*>([^<]+)<\\/${escapedTag}>`, 'i'));
   const value = match?.[1] ? decodeXmlEntities(match[1]).trim() : '';
   return value.length > 0 ? value : null;
+}
+
+function xmlAttributeValue(attributes: string, name: string): string | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = attributes.match(new RegExp(`${escapedName}\\s*=\\s*(['"])(.*?)\\1`, 'i'));
+  const value = match?.[2] ? decodeXmlEntities(match[2]).trim() : '';
+  return value.length > 0 ? value : null;
+}
+
+function parsePositiveInteger(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string {

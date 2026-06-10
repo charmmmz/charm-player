@@ -110,6 +110,27 @@ test('Live Activity content hash changes when the presentation style changes', (
   assert.notEqual(classic, widget);
 });
 
+test('Live Activity content state carries the audio quality label', async () => {
+  const state = await buildLiveActivityContentState(snapshot({
+    audioQualityLabel: 'Dolby Atmos · MAT',
+  }));
+
+  assert.equal(state.audioQualityLabel, 'Dolby Atmos · MAT');
+});
+
+test('Live Activity content hash changes when the audio quality label changes', () => {
+  const lossless = hashLiveActivityContentState({
+    ...baseContentState(),
+    audioQualityLabel: 'Lossless',
+  });
+  const atmos = hashLiveActivityContentState({
+    ...baseContentState(),
+    audioQualityLabel: 'Dolby Atmos · MAT',
+  });
+
+  assert.notEqual(lossless, atmos);
+});
+
 test('Live Activity album art extraction retries after a transient fetch failure', async () => {
   let requestCount = 0;
   const server = http.createServer((_req, res) => {
