@@ -241,6 +241,26 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(playlistURLString, "https://example.com/playlist.jpg")
     }
 
+    func testArtworkFallbackRejectsNonLoadableArtworkURLString() {
+        let playlist = AppleMusicCatalogSearchItem(
+            id: "playlist",
+            type: .playlist,
+            title: "Spatial Audio",
+            artist: "Apple Music",
+            album: "",
+            artworkURLString: "musicKit://artwork/library/example/400x400?aat=Features%2Fv4%2Fcover.png",
+            duration: nil)
+
+        let urlString = LocalMusicCatalogArtworkFallback.artworkURLString(
+            in: [playlist],
+            kind: .playlist,
+            title: "Spatial Audio",
+            artist: "Apple Music",
+            album: nil)
+
+        XCTAssertNil(urlString)
+    }
+
     func testPlaylistCatalogIDExtractorPrefersAppleMusicURL() {
         let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
             rawID: "p.library-only",

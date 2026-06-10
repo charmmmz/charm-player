@@ -14,12 +14,18 @@ struct LocalMusicAlbumDetailView: View {
     @State private var errorMessage: String?
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
+    @State private var actionInFlight: LocalMusicDetailAction?
+
+    @Environment(\.openURL) private var openURL
 
     private var displayAlbum: Album { detailedAlbum ?? album }
     private var coverURL: URL? {
         displayAlbum.artwork.flatMap {
             LocalMusicArtworkURL.url(for: $0, shortSidePixels: 600)
         } ?? store.catalogArtworkURL(for: displayAlbum) ?? store.catalogArtworkURL(for: album)
+    }
+    private var detailActions: [LocalMusicDetailAction] {
+        LocalMusicDetailActions.album(hasAppleMusicURL: displayAlbum.url != nil)
     }
     private var tracks: [Track] {
         guard let tracks = detailedAlbum?.tracks else { return [] }
@@ -95,34 +101,56 @@ struct LocalMusicAlbumDetailView: View {
 
     private var actionBar: some View {
         HStack(spacing: 12) {
-            Button {
-                Task {
-                    await store.playOnSonos(
-                        playable: LocalServiceAppleMusicPlayable.make(album: displayAlbum),
-                        displayID: displayAlbum.id.rawValue,
-                        fallbackKind: .album,
-                        fallbackTitle: displayAlbum.title,
-                        fallbackArtist: displayAlbum.artistName,
-                        fallbackAlbum: displayAlbum.title,
-                        manager: manager,
-                        searchManager: searchManager)
+            ForEach(detailActions, id: \.self) { action in
+                LocalMusicDetailActionButton(
+                    action: action,
+                    tint: actionTint,
+                    isActive: isActionActive(action),
+                    isDisabled: isActionDisabled(action)
+                ) {
+                    performAction(action)
                 }
-            } label: {
-                Label("Play", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(store.isStartingPlayback)
-
-            if let url = displayAlbum.url {
-                Link(destination: url) {
-                    Image(systemName: "music.note")
-                        .frame(width: 44, height: 34)
-                }
-                .buttonStyle(.bordered)
             }
         }
         .padding(.horizontal)
+    }
+
+    private var actionTint: Color {
+        themeColor ?? manager.albumArtDominantColor ?? .white.opacity(0.15)
+    }
+
+    private func isActionActive(_ action: LocalMusicDetailAction) -> Bool {
+        actionInFlight == action ||
+            (store.isStartingPlayback && store.activePlaybackItemID == displayID(for: action))
+    }
+
+    private func isActionDisabled(_ action: LocalMusicDetailAction) -> Bool {
+        (actionInFlight != nil && actionInFlight != action) ||
+            (store.isStartingPlayback && !isActionActive(action))
+    }
+
+    private func displayID(for action: LocalMusicDetailAction) -> String {
+        switch action {
+        case .shuffle:
+            return "\(displayAlbum.id.rawValue):shuffle"
+        case .play, .playStation, .openAppleMusic:
+            return displayAlbum.id.rawValue
+        }
+    }
+
+    private func performAction(_ action: LocalMusicDetailAction) {
+        switch action {
+        case .play:
+            playAlbum(shuffle: false, action: action)
+        case .shuffle:
+            playAlbum(shuffle: true, action: action)
+        case .openAppleMusic:
+            if let url = displayAlbum.url {
+                openURL(url)
+            }
+        case .playStation:
+            break
+        }
     }
 
     @ViewBuilder
@@ -194,6 +222,38 @@ struct LocalMusicAlbumDetailView: View {
             themeColor = nil
         }
     }
+
+    private func playAlbum(shuffle: Bool, action: LocalMusicDetailAction) {
+        guard actionInFlight == nil, !store.isStartingPlayback else { return }
+        actionInFlight = action
+
+        Task {
+            await setSonosShuffleMode(shuffle)
+            await store.playOnSonos(
+                playable: LocalServiceAppleMusicPlayable.make(album: displayAlbum),
+                displayID: displayID(for: action),
+                fallbackKind: .album,
+                fallbackTitle: displayAlbum.title,
+                fallbackArtist: displayAlbum.artistName,
+                fallbackAlbum: displayAlbum.title,
+                manager: manager,
+                searchManager: searchManager)
+            withAnimation(.easeOut(duration: 0.2)) {
+                actionInFlight = nil
+            }
+        }
+    }
+
+    private func setSonosShuffleMode(_ enabled: Bool) async {
+        guard let ip = manager.selectedSpeaker?.playbackIP else { return }
+        let current = try? await SonosAPI.getPlayMode(ip: ip)
+        if enabled || current?.shuffle == true {
+            try? await SonosAPI.setPlayMode(
+                ip: ip,
+                shuffle: enabled,
+                repeat: current?.repeat ?? .off)
+        }
+    }
 }
 
 struct LocalMusicPlaylistDetailView: View {
@@ -232,7 +292,10 @@ struct LocalMusicPlaylistDetailView: View {
         }
         .background(detailBackground.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadDetails() }
+        .task {
+            logPlaylistDetailState(stage: "open", playlist: displayPlaylist)
+            await loadDetails()
+        }
         .task(id: coverURL) { await loadCoverImage(from: coverURL) }
     }
 
@@ -250,7 +313,8 @@ struct LocalMusicPlaylistDetailView: View {
             LocalMusicDetailArtwork(
                 artwork: displayPlaylist.artwork,
                 artworkURL: coverURL,
-                fallbackSystemImage: "music.note.list"
+                fallbackSystemImage: "music.note.list",
+                diagnosticLabel: "playlist-detail title='\(displayPlaylist.name)' id='\(displayPlaylist.id.rawValue)'"
             )
 
             VStack(spacing: 5) {
@@ -356,31 +420,97 @@ struct LocalMusicPlaylistDetailView: View {
         defer { isLoading = false }
 
         do {
-            detailedPlaylist = try await LocalMusicLibraryClient.shared.playlistDetails(for: playlist)
+            SonosLog.debug(
+                .localService,
+                "Playlist detail load start \(playlistDiagnosticSummary(playlist))")
+            let detailed = try await LocalMusicLibraryClient.shared.playlistDetails(for: playlist)
+            detailedPlaylist = detailed
+            SonosLog.debug(
+                .localService,
+                "Playlist detail load success tracks=\(detailed.tracks?.count ?? 0) " +
+                    "\(playlistDiagnosticSummary(detailed)) coverURL=\(diagnosticURLStatus(coverURL?.absoluteString))")
         } catch {
             errorMessage = error.localizedDescription
+            SonosLog.error(
+                .localService,
+                "Playlist detail load failed \(playlistDiagnosticSummary(playlist)) error=\(error)")
         }
     }
 
     private func loadCoverImage(from url: URL?) async {
         guard let url else {
+            SonosLog.debug(
+                .localService,
+                "Playlist detail cover download skipped \(playlistDiagnosticSummary(displayPlaylist)) reason=no-cover-url")
             coverImage = nil
             themeColor = nil
             return
         }
 
         do {
+            SonosLog.debug(
+                .localService,
+                "Playlist detail cover download start \(playlistDiagnosticSummary(displayPlaylist)) " +
+                    "url=\(diagnosticURLStatus(url.absoluteString))")
             let (data, _) = try await URLSession.shared.data(from: url)
             guard !Task.isCancelled else { return }
             let image = UIImage(data: data)
+            let dominantColor = image?.dominantColor()
             coverImage = image
-            themeColor = image?.dominantColor()
+            themeColor = dominantColor
+            SonosLog.debug(
+                .localService,
+                "Playlist detail cover download success \(playlistDiagnosticSummary(displayPlaylist)) " +
+                    "bytes=\(data.count) image=\(image != nil) dominantColor=\(dominantColor != nil) " +
+                    "url=\(diagnosticURLStatus(url.absoluteString))")
         } catch {
             guard !Task.isCancelled else { return }
-            SonosLog.error(.playlistDetail, "Local Music cover image load failed: \(error)")
+            SonosLog.error(
+                .localService,
+                "Playlist detail cover download failed \(playlistDiagnosticSummary(displayPlaylist)) " +
+                    "url=\(diagnosticURLStatus(url.absoluteString)) error=\(error)")
             coverImage = nil
             themeColor = nil
         }
+    }
+
+    private func logPlaylistDetailState(stage: String, playlist: Playlist) {
+        SonosLog.debug(
+            .localService,
+            "Playlist detail state stage=\(stage) \(playlistDiagnosticSummary(playlist)) " +
+                "coverURL=\(diagnosticURLStatus(coverURL?.absoluteString))")
+    }
+
+    private func playlistDiagnosticSummary(_ playlist: Playlist) -> String {
+        let rawID = playlist.id.rawValue
+        let urlString = playlist.url?.absoluteString
+        let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
+            rawID: rawID,
+            urlString: urlString)
+        let directArtworkURLString = playlist.artwork.flatMap {
+            LocalMusicArtworkURL.url(for: $0, shortSidePixels: 600)?.absoluteString
+        }
+        let dimensions: String
+        if let artwork = playlist.artwork {
+            dimensions = "\(artwork.maximumWidth)x\(artwork.maximumHeight)"
+        } else {
+            dimensions = "nil"
+        }
+
+        return "title='\(playlist.name)' rawID='\(rawID)' catalogID=\(diagnosticValue(catalogID)) " +
+            "curator=\(diagnosticValue(playlist.curatorName)) url=\(diagnosticValue(urlString)) " +
+            "artworkDimensions=\(dimensions) directArtwork=\(diagnosticURLStatus(directArtworkURLString))"
+    }
+
+    private func diagnosticValue(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "nil" }
+        return "'\(value)'"
+    }
+
+    private func diagnosticURLStatus(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "nil" }
+        let status = LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) ? "loadable" : "not-loadable"
+        return "\(status)('\(value)')"
     }
 }
 
@@ -395,11 +525,17 @@ struct LocalMusicArtistDetailView: View {
     @State private var errorMessage: String?
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
+    @State private var actionInFlight: LocalMusicDetailAction?
+
+    @Environment(\.openURL) private var openURL
 
     private var coverURL: URL? {
         artist.artwork.flatMap {
             LocalMusicArtworkURL.url(for: $0, shortSidePixels: 600)
         } ?? store.catalogArtworkURL(for: artist)
+    }
+    private var detailActions: [LocalMusicDetailAction] {
+        LocalMusicDetailActions.artist(hasAppleMusicURL: artist.url != nil)
     }
 
     var body: some View {
@@ -445,6 +581,9 @@ struct LocalMusicArtistDetailView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
+                SourceBadgeView(source: .appleMusic, tintColor: nil)
+                    .padding(.top, 2)
+
                 if !isLoading {
                     Text("\(songs.count) songs")
                         .font(.caption)
@@ -457,24 +596,55 @@ struct LocalMusicArtistDetailView: View {
     }
 
     private var actionBar: some View {
-        Button {
-            Task {
-                await store.playOnSonos(
-                    playable: LocalServiceAppleMusicPlayable.make(artist: artist),
-                    displayID: artist.id.rawValue,
-                    fallbackKind: .artist,
-                    fallbackTitle: artist.name,
-                    fallbackArtist: artist.name,
-                    manager: manager,
-                    searchManager: searchManager)
+        HStack(spacing: 12) {
+            ForEach(detailActions, id: \.self) { action in
+                LocalMusicDetailActionButton(
+                    action: action,
+                    tint: actionTint,
+                    isActive: isActionActive(action),
+                    isDisabled: isActionDisabled(action)
+                ) {
+                    performAction(action)
+                }
             }
-        } label: {
-            Label("Play", systemImage: "play.fill")
-                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .disabled(store.isStartingPlayback)
         .padding(.horizontal)
+    }
+
+    private var actionTint: Color {
+        themeColor ?? manager.albumArtDominantColor ?? .white.opacity(0.15)
+    }
+
+    private func isActionActive(_ action: LocalMusicDetailAction) -> Bool {
+        actionInFlight == action ||
+            (store.isStartingPlayback && store.activePlaybackItemID == displayID(for: action))
+    }
+
+    private func isActionDisabled(_ action: LocalMusicDetailAction) -> Bool {
+        (actionInFlight != nil && actionInFlight != action) ||
+            (store.isStartingPlayback && !isActionActive(action))
+    }
+
+    private func displayID(for action: LocalMusicDetailAction) -> String {
+        switch action {
+        case .playStation:
+            return "\(artist.id.rawValue):station"
+        case .play, .shuffle, .openAppleMusic:
+            return artist.id.rawValue
+        }
+    }
+
+    private func performAction(_ action: LocalMusicDetailAction) {
+        switch action {
+        case .playStation:
+            playArtistStation()
+        case .openAppleMusic:
+            if let url = artist.url {
+                openURL(url)
+            }
+        case .play, .shuffle:
+            break
+        }
     }
 
     @ViewBuilder
@@ -545,12 +715,81 @@ struct LocalMusicArtistDetailView: View {
             themeColor = nil
         }
     }
+
+    private func playArtistStation() {
+        guard actionInFlight == nil, !store.isStartingPlayback else { return }
+        actionInFlight = .playStation
+
+        Task {
+            await store.playOnSonos(
+                playable: LocalServiceAppleMusicPlayable.make(artist: artist),
+                displayID: displayID(for: .playStation),
+                fallbackKind: .artist,
+                fallbackTitle: artist.name,
+                fallbackArtist: artist.name,
+                manager: manager,
+                searchManager: searchManager)
+            withAnimation(.easeOut(duration: 0.2)) {
+                actionInFlight = nil
+            }
+        }
+    }
+}
+
+private struct LocalMusicDetailActionButton: View {
+    let action: LocalMusicDetailAction
+    let tint: Color?
+    let isActive: Bool
+    let isDisabled: Bool
+    let perform: () -> Void
+
+    var body: some View {
+        Button(action: perform) {
+            HStack(spacing: 7) {
+                if isActive {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else {
+                    Image(systemName: action.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                }
+
+                if !action.isCompact {
+                    Text(action.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: action.isCompact ? nil : .infinity)
+            .frame(width: action.isCompact ? 52 : nil, height: 44)
+            .background(tint ?? .white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.45 : 1)
+        .accessibilityLabel(action.title)
+    }
 }
 
 private struct LocalMusicDetailArtwork: View {
     let artwork: Artwork?
     let artworkURL: URL?
     let fallbackSystemImage: String
+    let diagnosticLabel: String?
+
+    init(
+        artwork: Artwork?,
+        artworkURL: URL?,
+        fallbackSystemImage: String,
+        diagnosticLabel: String? = nil
+    ) {
+        self.artwork = artwork
+        self.artworkURL = artworkURL
+        self.fallbackSystemImage = fallbackSystemImage
+        self.diagnosticLabel = diagnosticLabel
+    }
 
     var body: some View {
         ZStack {
@@ -560,12 +799,12 @@ private struct LocalMusicDetailArtwork: View {
             fallbackIcon
 
             if let artwork {
-                LocalMusicArtworkView(artwork: artwork)
+                LocalMusicArtworkView(artwork: artwork, diagnosticLabel: diagnosticLabel)
                     .frame(width: 240, height: 240)
             }
 
             if let artworkURL {
-                remoteArtwork(url: artworkURL)
+                LocalMusicDetailRemoteArtworkView(url: artworkURL, diagnosticLabel: diagnosticLabel)
                     .frame(width: 240, height: 240)
             }
         }
@@ -580,16 +819,51 @@ private struct LocalMusicDetailArtwork: View {
             .foregroundStyle(.secondary)
     }
 
-    private func remoteArtwork(url: URL) -> some View {
+}
+
+private struct LocalMusicDetailRemoteArtworkView: View {
+    let url: URL
+    let diagnosticLabel: String?
+
+    @State private var didLogSuccess = false
+    @State private var didLogFailure = false
+
+    var body: some View {
         AsyncImage(url: url) { phase in
             if let image = phase.image {
                 image
                     .resizable()
                     .scaledToFit()
+                    .onAppear { logSuccessIfNeeded() }
+            } else if case .failure(let error) = phase {
+                Color.clear
+                    .onAppear { logFailureIfNeeded(error) }
             } else {
                 Color.clear
             }
         }
+    }
+
+    private func logSuccessIfNeeded() {
+        guard !didLogSuccess,
+              let diagnosticLabel else {
+            return
+        }
+        didLogSuccess = true
+        SonosLog.debug(
+            .localService,
+            "Detail remote artwork image loaded \(diagnosticLabel) url='\(url.absoluteString)'")
+    }
+
+    private func logFailureIfNeeded(_ error: Error) {
+        guard !didLogFailure,
+              let diagnosticLabel else {
+            return
+        }
+        didLogFailure = true
+        SonosLog.error(
+            .localService,
+            "Detail remote artwork image failed \(diagnosticLabel) url='\(url.absoluteString)' error=\(error)")
     }
 }
 

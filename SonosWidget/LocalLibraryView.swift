@@ -503,7 +503,8 @@ struct LocalLibraryView: View {
             LocalLibraryArtworkTile(
                 artwork: item.artwork,
                 artworkURL: item.catalogArtworkURL(using: store),
-                fallbackSystemImage: item.fallbackSystemImage
+                fallbackSystemImage: item.fallbackSystemImage,
+                diagnosticLabel: item.artworkDiagnosticLabel
             )
             .frame(width: 138, height: 138)
 
@@ -660,7 +661,8 @@ struct LocalLibraryView: View {
                         subtitle: playlist.curatorName ?? "Playlist",
                         detail: playlist.shortDescription,
                         fallbackSystemImage: "music.note.list",
-                        accessory: .chevron
+                        accessory: .chevron,
+                        diagnosticLabel: "playlist-row title='\(playlist.name)' id='\(playlist.id.rawValue)'"
                     )
                 }
                 .buttonStyle(.plain)
@@ -711,13 +713,15 @@ struct LocalLibraryView: View {
         subtitle: String,
         detail: String?,
         fallbackSystemImage: String,
-        accessory: LocalServiceRowAccessory
+        accessory: LocalServiceRowAccessory,
+        diagnosticLabel: String? = nil
     ) -> some View {
         HStack(spacing: 12) {
             LocalLibraryArtworkTile(
                 artwork: artwork,
                 artworkURL: artworkURL,
-                fallbackSystemImage: fallbackSystemImage
+                fallbackSystemImage: fallbackSystemImage,
+                diagnosticLabel: diagnosticLabel
             )
             .frame(width: 56, height: 56)
 
@@ -912,6 +916,33 @@ private enum LocalServiceCardItem: Identifiable {
         }
     }
 
+    var artworkDiagnosticLabel: String? {
+        switch self {
+        case .playlist(let playlist):
+            return "playlist-card title='\(playlist.name)' id='\(playlist.id.rawValue)'"
+        case .recentlyPlayed(let item):
+            switch item {
+            case .playlist:
+                return "recent-playlist-card title='\(item.title)' id='\(item.id.rawValue)'"
+            case .album, .station:
+                return nil
+            @unknown default:
+                return nil
+            }
+        case .recommendation(let item):
+            switch item {
+            case .playlist:
+                return "recommendation-playlist-card title='\(item.title)' id='\(item.id.rawValue)'"
+            case .album, .station:
+                return nil
+            @unknown default:
+                return nil
+            }
+        case .song, .album, .artist, .station:
+            return nil
+        }
+    }
+
     private func recentlyPlayedFallbackTitle(_ item: RecentlyPlayedMusicItem) -> String {
         switch item {
         case .album: return "Album"
@@ -953,6 +984,9 @@ private struct LocalLibraryArtworkTile: View {
     let artwork: Artwork?
     let artworkURL: URL?
     let fallbackSystemImage: String
+    let diagnosticLabel: String?
+
+    @State private var didLogMissingSources = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -963,16 +997,19 @@ private struct LocalLibraryArtworkTile: View {
                 fallbackIcon
 
                 if let artwork {
-                    LocalMusicArtworkView(artwork: artwork)
+                    LocalMusicArtworkView(artwork: artwork, diagnosticLabel: diagnosticLabel)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 }
 
                 if let artworkURL {
-                    remoteArtwork(url: artworkURL)
+                    LocalLibraryRemoteArtworkView(url: artworkURL, diagnosticLabel: diagnosticLabel)
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onAppear {
+            logMissingSourcesIfNeeded()
+        }
     }
 
     private var fallbackIcon: some View {
@@ -981,16 +1018,63 @@ private struct LocalLibraryArtworkTile: View {
             .foregroundStyle(.secondary)
     }
 
-    private func remoteArtwork(url: URL) -> some View {
+    private func logMissingSourcesIfNeeded() {
+        guard !didLogMissingSources,
+              artwork == nil,
+              artworkURL == nil,
+              let diagnosticLabel else {
+            return
+        }
+        didLogMissingSources = true
+        SonosLog.debug(
+            .localService,
+            "Artwork tile placeholder no-sources \(diagnosticLabel)")
+    }
+}
+
+private struct LocalLibraryRemoteArtworkView: View {
+    let url: URL
+    let diagnosticLabel: String?
+
+    @State private var didLogSuccess = false
+    @State private var didLogFailure = false
+
+    var body: some View {
         AsyncImage(url: url) { phase in
             if let image = phase.image {
                 image
                     .resizable()
                     .scaledToFit()
+                    .onAppear { logSuccessIfNeeded() }
+            } else if case .failure(let error) = phase {
+                Color.clear
+                    .onAppear { logFailureIfNeeded(error) }
             } else {
                 Color.clear
             }
         }
+    }
+
+    private func logSuccessIfNeeded() {
+        guard !didLogSuccess,
+              let diagnosticLabel else {
+            return
+        }
+        didLogSuccess = true
+        SonosLog.debug(
+            .localService,
+            "Remote artwork image loaded \(diagnosticLabel) url='\(url.absoluteString)'")
+    }
+
+    private func logFailureIfNeeded(_ error: Error) {
+        guard !didLogFailure,
+              let diagnosticLabel else {
+            return
+        }
+        didLogFailure = true
+        SonosLog.error(
+            .localService,
+            "Remote artwork image failed \(diagnosticLabel) url='\(url.absoluteString)' error=\(error)")
     }
 }
 

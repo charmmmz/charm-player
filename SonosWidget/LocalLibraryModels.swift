@@ -86,3 +86,50 @@ enum LocalServiceSectionKind: String, CaseIterable, Identifiable, Sendable {
         }
     }
 }
+
+enum LocalMusicDetailAction: Equatable, Hashable, Sendable {
+    case play
+    case shuffle
+    case playStation
+    case openAppleMusic
+
+    var title: String {
+        switch self {
+        case .play: return "Play"
+        case .shuffle: return "Shuffle"
+        case .playStation: return "Play Station"
+        case .openAppleMusic: return "Apple Music"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .play: return "play.fill"
+        case .shuffle: return "shuffle"
+        case .playStation: return "antenna.radiowaves.left.and.right"
+        case .openAppleMusic: return "music.note"
+        }
+    }
+
+    var isCompact: Bool {
+        self == .openAppleMusic
+    }
+}
+
+enum LocalMusicDetailActions {
+    static func album(hasAppleMusicURL: Bool) -> [LocalMusicDetailAction] {
+        var actions: [LocalMusicDetailAction] = [.play, .shuffle]
+        if hasAppleMusicURL {
+            actions.append(.openAppleMusic)
+        }
+        return actions
+    }
+
+    static func artist(hasAppleMusicURL: Bool) -> [LocalMusicDetailAction] {
+        var actions: [LocalMusicDetailAction] = [.playStation]
+        if hasAppleMusicURL {
+            actions.append(.openAppleMusic)
+        }
+        return actions
+    }
+}

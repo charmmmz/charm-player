@@ -29,6 +29,7 @@ enum SonosLog {
         case artistDetail   = "ArtistDetail"
         case albumDetail    = "AlbumDetail"
         case playlistDetail = "PlaylistDetail"
+        case localService   = "LocalService"
         case nowPlaying     = "NowPlaying"
         case parseCloudIds  = "parseCloudIds"
         case navItem        = "NavItem"
@@ -37,13 +38,13 @@ enum SonosLog {
     /// Always logged. Use sparingly for unexpected failures worth reporting.
     @inline(__always)
     static func error(_ category: Category, _ message: @autoclosure () -> String) {
-        print("[\(category.rawValue)] ERROR: \(message())")
+        emit(category, suffix: " ERROR:", message())
     }
 
     /// Always logged. Use for operational signal (success, counts, state).
     @inline(__always)
     static func info(_ category: Category, _ message: @autoclosure () -> String) {
-        print("[\(category.rawValue)] \(message())")
+        emit(category, suffix: nil, message())
     }
 
     /// Compiled out of Release builds. Use for high-volume traces and
@@ -51,7 +52,59 @@ enum SonosLog {
     @inline(__always)
     static func debug(_ category: Category, _ message: @autoclosure () -> String) {
         #if DEBUG
-        print("[\(category.rawValue)] \(message())")
+        emit(category, suffix: nil, message())
         #endif
     }
+
+    private static func emit(_ category: Category, suffix: String?, _ message: String) {
+        let line = "[\(category.rawValue)]\(suffix ?? "") \(message)"
+        print(line)
+        writeDiagnosticLine(line, category: category)
+    }
+
+    private static func writeDiagnosticLine(_ line: String, category: Category) {
+        #if DEBUG
+        guard diagnosticCategories.contains(category),
+              let fileURL = diagnosticFileURL(),
+              let data = "\(diagnosticTimestamp()) \(line)\n".data(using: .utf8) else {
+            return
+        }
+
+        diagnosticQueue.async {
+            do {
+                try FileManager.default.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+
+                if !FileManager.default.fileExists(atPath: fileURL.path) {
+                    let header = "SonosWidget DEBUG diagnostics\n"
+                    try header.write(to: fileURL, atomically: true, encoding: .utf8)
+                }
+
+                let handle = try FileHandle(forWritingTo: fileURL)
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } catch {
+                // Diagnostics must never affect app behavior.
+            }
+        }
+        #endif
+    }
+
+    #if DEBUG
+    private static let diagnosticCategories: Set<Category> = [.localService]
+    private static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
+
+    private static func diagnosticFileURL() -> URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("sonos-diagnostics.log")
+    }
+
+    private static func diagnosticTimestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
+    #endif
 }

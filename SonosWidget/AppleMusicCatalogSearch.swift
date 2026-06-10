@@ -208,7 +208,7 @@ enum LocalMusicCatalogArtworkFallback {
 
     private static func validURLString(_ value: String?) -> String? {
         guard let value,
-              URL(string: value) != nil else {
+              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) else {
             return nil
         }
         return value
@@ -340,6 +340,14 @@ struct AppleMusicCatalogSearchClient {
     }
 
     private static func artworkURLString(_ artwork: Artwork?) -> String? {
-        artwork?.url(width: 400, height: 400)?.absoluteString
+        validArtworkURLString(artwork?.url(width: 400, height: 400)?.absoluteString)
+    }
+
+    private static func validArtworkURLString(_ value: String?) -> String? {
+        guard let value,
+              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) else {
+            return nil
+        }
+        return value
     }
 }
