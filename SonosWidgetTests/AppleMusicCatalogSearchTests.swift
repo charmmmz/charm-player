@@ -240,4 +240,28 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(artistURLString, "https://example.com/artist.jpg")
         XCTAssertEqual(playlistURLString, "https://example.com/playlist.jpg")
     }
+
+    func testPlaylistCatalogIDExtractorPrefersAppleMusicURL() {
+        let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
+            rawID: "p.library-only",
+            urlString: "https://music.apple.com/us/playlist/feeling-happy/pl.u-11zBJkBtxxE?l=en")
+
+        XCTAssertEqual(catalogID, "pl.u-11zBJkBtxxE")
+    }
+
+    func testPlaylistCatalogIDExtractorAcceptsNamespacedCatalogID() {
+        let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
+            rawID: "playlist:pl.u-11zBJkBtxxE",
+            urlString: nil)
+
+        XCTAssertEqual(catalogID, "pl.u-11zBJkBtxxE")
+    }
+
+    func testPlaylistCatalogIDExtractorRejectsLibraryOnlyID() {
+        let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
+            rawID: "p.library-only",
+            urlString: nil)
+
+        XCTAssertNil(catalogID)
+    }
 }

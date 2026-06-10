@@ -157,6 +157,34 @@ enum LocalMusicCatalogMatcher {
     }
 }
 
+enum LocalMusicCatalogIDExtractor {
+    static func playlistCatalogID(rawID: String, urlString: String?) -> String? {
+        if let urlString,
+           let link = AppleMusicShareLinkParser.parse(urlString),
+           link.kind == .playlist {
+            return link.catalogID
+        }
+
+        if let link = AppleMusicShareLinkParser.parse(rawID),
+           link.kind == .playlist {
+            return link.catalogID
+        }
+
+        return rawPlaylistCatalogID(rawID)
+    }
+
+    private static func rawPlaylistCatalogID(_ value: String) -> String? {
+        let decoded = value.removingPercentEncoding ?? value
+        let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = trimmed
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? trimmed
+
+        return suffix.hasPrefix("pl.") ? suffix : nil
+    }
+}
+
 enum LocalMusicCatalogArtworkFallback {
     static func artworkURLString(
         in items: [AppleMusicCatalogSearchItem],
@@ -219,18 +247,7 @@ struct AppleMusicCatalogSearchClient {
     static let shared = AppleMusicCatalogSearchClient()
 
     func search(term: String, limit: Int = 8) async throws -> [AppleMusicCatalogSearchItem] {
-        switch MusicAuthorization.currentStatus {
-        case .authorized:
-            break
-        case .notDetermined:
-            guard await MusicAuthorization.request() == .authorized else {
-                throw AppleMusicCatalogSearchError.authorizationDenied
-            }
-        case .denied, .restricted:
-            throw AppleMusicCatalogSearchError.authorizationDenied
-        @unknown default:
-            throw AppleMusicCatalogSearchError.authorizationDenied
-        }
+        try await ensureAuthorized()
 
         var request = MusicCatalogSearchRequest(
             term: term,
@@ -245,6 +262,33 @@ struct AppleMusicCatalogSearchClient {
         items.append(contentsOf: response.artists.map(Self.item(from:)))
         items.append(contentsOf: response.playlists.map(Self.item(from:)))
         return items
+    }
+
+    func playlistArtworkURLString(catalogID: String) async throws -> String? {
+        try await ensureAuthorized()
+
+        var request = MusicCatalogResourceRequest<Playlist>(
+            matching: \.id,
+            equalTo: MusicItemID(catalogID)
+        )
+        request.limit = 1
+        let response = try await request.response()
+        return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+    }
+
+    private func ensureAuthorized() async throws {
+        switch MusicAuthorization.currentStatus {
+        case .authorized:
+            return
+        case .notDetermined:
+            guard await MusicAuthorization.request() == .authorized else {
+                throw AppleMusicCatalogSearchError.authorizationDenied
+            }
+        case .denied, .restricted:
+            throw AppleMusicCatalogSearchError.authorizationDenied
+        @unknown default:
+            throw AppleMusicCatalogSearchError.authorizationDenied
+        }
     }
 
     private static func item(from song: Song) -> AppleMusicCatalogSearchItem {

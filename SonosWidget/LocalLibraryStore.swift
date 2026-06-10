@@ -330,6 +330,9 @@ final class LocalLibraryStore {
             LocalMusicCatalogArtworkLookupItem(
                 id: $0.id.rawValue,
                 kind: .playlist,
+                catalogID: LocalMusicCatalogIDExtractor.playlistCatalogID(
+                    rawID: $0.id.rawValue,
+                    urlString: $0.url?.absoluteString),
                 title: $0.name,
                 artist: $0.curatorName,
                 album: nil,
@@ -380,6 +383,9 @@ final class LocalLibraryStore {
         LocalMusicCatalogArtworkLookupItem(
             id: id ?? playlist.id.rawValue,
             kind: .playlist,
+            catalogID: LocalMusicCatalogIDExtractor.playlistCatalogID(
+                rawID: id ?? playlist.id.rawValue,
+                urlString: playlist.url?.absoluteString),
             title: playlist.name,
             artist: playlist.curatorName,
             album: nil,
@@ -430,6 +436,21 @@ final class LocalLibraryStore {
     }
 
     private static func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {
+        if item.kind == .playlist,
+           let catalogID = item.catalogID {
+            do {
+                if let urlString = try await AppleMusicCatalogSearchClient.shared.playlistArtworkURLString(
+                    catalogID: catalogID
+                ) {
+                    return urlString
+                }
+            } catch {
+                SonosLog.debug(
+                    .search,
+                    "LocalService catalog playlist artwork direct lookup failed for '\(catalogID)': \(error)")
+            }
+        }
+
         let term = LocalMusicCatalogMatcher.searchTerm(
             kind: item.kind,
             title: item.title,

@@ -17,10 +17,29 @@ nonisolated struct LocalMusicCatalogArtworkKey: Hashable, Sendable {
 nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
     let id: String
     let kind: LocalServiceAppleMusicPlayable.Kind
+    let catalogID: String?
     let title: String
     let artist: String?
     let album: String?
     let directArtworkURLString: String?
+
+    init(
+        id: String,
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        catalogID: String? = nil,
+        title: String,
+        artist: String?,
+        album: String?,
+        directArtworkURLString: String?
+    ) {
+        self.id = id
+        self.kind = kind
+        self.catalogID = catalogID
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.directArtworkURLString = directArtworkURLString
+    }
 
     var key: LocalMusicCatalogArtworkKey {
         LocalMusicCatalogArtworkKey(kind: kind, id: id)
