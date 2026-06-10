@@ -6,6 +6,7 @@ import ActivityKit
 
 @main
 struct SonosWidgetApp: App {
+    @UIApplicationDelegateAdaptor(SonosWidgetAppDelegate.self) private var appDelegate
 
     static let bgRefreshID = "com.charm.SonosWidget.refresh"
 
@@ -113,5 +114,41 @@ struct SonosWidgetApp: App {
     private static func shortLiveActivityIdentifier(_ value: String) -> String {
         guard value.count > 14 else { return value }
         return "\(value.prefix(8))…\(value.suffix(4))"
+    }
+}
+
+final class SonosWidgetAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppOrientationController.supportedInterfaceOrientations
+    }
+}
+
+enum AppOrientationController {
+    private(set) static var supportedInterfaceOrientations: UIInterfaceOrientationMask = .portrait
+
+    @MainActor
+    static func setPlayerLandscapeAllowed(_ allowed: Bool) {
+        let nextMask: UIInterfaceOrientationMask = allowed
+            ? [.portrait, .landscapeLeft, .landscapeRight]
+            : .portrait
+        supportedInterfaceOrientations = nextMask
+
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene,
+                  windowScene.activationState != .unattached else { continue }
+
+            windowScene.windows.forEach {
+                $0.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            }
+
+            if !allowed {
+                windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+                    #if DEBUG
+                    print("[Orientation] portrait request failed: \(error.localizedDescription)")
+                    #endif
+                }
+            }
+        }
     }
 }

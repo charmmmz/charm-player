@@ -59,6 +59,7 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
+            syncPlayerOrientationPolicy()
             manager.startAutoRefresh()
             // Kick the relay watchdog so the Live Activity path can flip to
             // APNs mode the moment the NAS is reachable, without making the
@@ -72,8 +73,16 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             routePendingAppleMusicShareToHomeIfNeeded()
+            syncPlayerOrientationPolicy()
+        }
+        .onChange(of: manager.isConfigured) { _, _ in
+            syncPlayerOrientationPolicy()
+        }
+        .onChange(of: manager.showFullPlayer) { _, _ in
+            syncPlayerOrientationPolicy()
         }
         .onDisappear {
+            AppOrientationController.setPlayerLandscapeAllowed(false)
             manager.stopAutoRefresh()
             RelayManager.shared.stopPeriodicProbe()
         }
@@ -84,6 +93,10 @@ struct ContentView: View {
         if pendingAppleMusicShare != nil {
             selectedTab = .home
         }
+    }
+
+    private func syncPlayerOrientationPolicy() {
+        AppOrientationController.setPlayerLandscapeAllowed(manager.isConfigured && manager.showFullPlayer)
     }
 }
 
