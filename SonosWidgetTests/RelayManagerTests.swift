@@ -3,6 +3,31 @@ import XCTest
 
 @MainActor
 final class RelayManagerTests: XCTestCase {
+    func testLiveActivityHintRequestEncodesRelayContract() throws {
+        let body = RelayClient.LiveActivityHintBody(
+            groupId: "192.168.50.25",
+            trackTitle: "Between the Bars",
+            artist: "Elliott Smith",
+            album: "Either/Or",
+            playbackSourceRaw: "appleMusic",
+            audioQualityLabel: "Lossless",
+            liveActivityStyleRaw: "widget"
+        )
+
+        let data = try JSONEncoder().encode(body)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: String]
+        )
+
+        XCTAssertEqual(json["groupId"], "192.168.50.25")
+        XCTAssertEqual(json["trackTitle"], "Between the Bars")
+        XCTAssertEqual(json["artist"], "Elliott Smith")
+        XCTAssertEqual(json["album"], "Either/Or")
+        XCTAssertEqual(json["playbackSourceRaw"], "appleMusic")
+        XCTAssertEqual(json["audioQualityLabel"], "Lossless")
+        XCTAssertEqual(json["liveActivityStyleRaw"], "widget")
+    }
+
     func testHealthResponseDecodesUnknownHueAmbienceRenderModeAsNil() throws {
         let data = Data("""
         {

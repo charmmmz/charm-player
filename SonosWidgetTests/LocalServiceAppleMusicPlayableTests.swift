@@ -108,4 +108,53 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         XCTAssertEqual(playable?.artworkURLString, "https://example.com/cover.jpg")
         XCTAssertEqual(playable?.duration, 312)
     }
+
+    func testStationNormalizesAppleMusicShareURL() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .station,
+            rawID: "library-station-id",
+            playParameterCandidates: [
+                "https://music.apple.com/us/station/apple-music-chill/ra.1740614260"
+            ],
+            title: "Apple Music Chill",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        XCTAssertEqual(playable?.catalogID, "radio:ra.1740614260")
+        XCTAssertEqual(playable?.sonosObjectID, "radio:ra.1740614260")
+        XCTAssertEqual(playable?.cloudType, "PROGRAM")
+    }
+
+    func testStationNormalizesBareStationID() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .station,
+            rawID: "library-station-id",
+            playParameterCandidates: ["1740614260"],
+            title: "Apple Music Chill",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        XCTAssertEqual(playable?.catalogID, "radio:ra.1740614260")
+    }
+
+    func testStationNormalizesStationNamespace() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .station,
+            rawID: "library-station-id",
+            playParameterCandidates: ["station:ra.1740614260"],
+            title: "Apple Music Chill",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        XCTAssertEqual(playable?.catalogID, "radio:ra.1740614260")
+    }
 }

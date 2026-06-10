@@ -97,6 +97,9 @@ final class SonosManager {
     /// can temporarily fall back to local updates without losing the old token
     /// needed for unregister cleanup.
     private var liveActivityRelayWriterReady: Bool = false
+    /// Last metadata packet POSTed to the NAS relay for fields it cannot
+    /// reliably derive from UPnP, keyed so polling does not spam the LAN.
+    private var lastLiveActivityRelayHintSignature: String?
     private var albumArtTask: Task<Void, Never>?
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var backgroundKeepaliveTask: Task<Void, Never>?
@@ -427,6 +430,7 @@ final class SonosManager {
         cachedCloudQuality = nil
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
+        lastLiveActivityRelayHintSignature = nil
         prefetchTask?.cancel()
         prefetchTask = nil
         queueArtCache.removeAllObjects()
@@ -2039,13 +2043,14 @@ final class SonosManager {
     /// Cloud the single source of truth as long as the user is logged in.
     private func enrichAudioQualityFromCloud() async {
         let trackKey = Self.cloudQualityTrackKey(for: trackInfo)
+        let loggedIn = SonosAuth.shared.isLoggedIn
 
         let needsEnrich: Bool = {
             // Logged in → Sonos Cloud is authoritative. Always refresh once
             // per track change (throttled below by the same-track cooldown)
             // so we catch Dolby Atmos, lossless flags, etc. that UPnP
             // systematically mis-labels.
-            if SonosAuth.shared.isLoggedIn { return true }
+            if loggedIn { return true }
 
             guard let quality = trackInfo?.audioQuality else { return true }
             let codec = quality.codec.lowercased()
@@ -2053,14 +2058,46 @@ final class SonosManager {
                 || codec.contains("octet-stream")
         }()
 
-        guard needsEnrich,
-              !isEnrichingQuality,
-              transportState == .playing,
-              SonosAuth.shared.isLoggedIn else { return }
+        logAudioQualityDiagnostic(action: "cloud-enrich-check", extra: [
+            "needs=\(needsEnrich)",
+            "isEnriching=\(isEnrichingQuality)",
+            "transport=\(transportState)",
+            "loggedIn=\(loggedIn)",
+            "trackKey=\(Self.liveActivityLogValue(trackKey ?? "nil"))",
+            "currentQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))",
+            "source=\(trackInfo?.source.rawValue ?? "nil")"
+        ])
+
+        guard needsEnrich else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=not-needed"])
+            return
+        }
+        guard !isEnrichingQuality else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=in-flight"])
+            return
+        }
+        guard transportState == .playing else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: [
+                "reason=not-playing",
+                "transport=\(transportState)"
+            ])
+            return
+        }
+        guard loggedIn else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=not-logged-in"])
+            return
+        }
 
         // New track → fetch immediately; same track → respect cooldown
         if trackKey == lastEnrichedTrackKey {
-            guard Date().timeIntervalSince(lastCloudQualityAttempt) > Self.cloudQualityRefreshCooldown else { return }
+            let age = Date().timeIntervalSince(lastCloudQualityAttempt)
+            guard age > Self.cloudQualityRefreshCooldown else {
+                logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: [
+                    "reason=cooldown",
+                    "age=\(String(format: "%.1f", age))"
+                ])
+                return
+            }
         }
 
         isEnrichingQuality = true
@@ -2070,8 +2107,14 @@ final class SonosManager {
         if cloudGroupId == nil {
             await resolveCloudGroupId()
         }
-        guard let groupId = cloudGroupId,
-              let token = await SonosAuth.shared.validAccessToken() else { return }
+        guard let groupId = cloudGroupId else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=missing-cloud-group"])
+            return
+        }
+        guard let token = await SonosAuth.shared.validAccessToken() else {
+            logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=missing-token"])
+            return
+        }
 
         do {
             let metadata = try await fetchPlaybackMetadata(token: token, groupId: groupId)
@@ -2081,13 +2124,36 @@ final class SonosManager {
                 if let trackKey = Self.cloudQualityTrackKey(for: trackInfo) {
                     cachedCloudQuality = (trackKey: trackKey, quality: mapped)
                 }
+                logAudioQualityDiagnostic(action: "cloud-enrich-success", extra: [
+                    "groupId=\(Self.liveActivityLogValue(groupId))",
+                    "rawCodec=\(Self.liveActivityLogValue(quality.codec ?? "nil"))",
+                    "rawLossless=\(quality.lossless.map { String($0) } ?? "nil")",
+                    "rawImmersive=\(quality.immersive.map { String($0) } ?? "nil")",
+                    "rawBitDepth=\(quality.bitDepth.map { String($0) } ?? "nil")",
+                    "rawSampleRate=\(quality.sampleRate.map { String($0) } ?? "nil")",
+                    "mapped=\(Self.liveActivityLogValue(mapped.label))"
+                ])
+            } else {
+                let quality = metadata.currentItem?.track?.quality
+                logAudioQualityDiagnostic(action: "cloud-enrich-no-quality", extra: [
+                    "groupId=\(Self.liveActivityLogValue(groupId))",
+                    "hasTrack=\(metadata.currentItem?.track != nil)",
+                    "hasQuality=\(quality != nil)",
+                    "rawCodec=\(Self.liveActivityLogValue(quality?.codec ?? "nil"))",
+                    "rawLossless=\(quality?.lossless.map { String($0) } ?? "nil")",
+                    "rawImmersive=\(quality?.immersive.map { String($0) } ?? "nil")"
+                ])
             }
             lastEnrichedTrackKey = trackKey
         } catch SonosCloudError.unauthorized {
+            logAudioQualityDiagnostic(action: "cloud-enrich-failed", extra: ["reason=unauthorized"])
             _ = await SonosAuth.shared.refreshAccessToken()
         } catch {
             lastEnrichedTrackKey = trackKey
             SonosLog.error(.sonosCloud, "playbackMetadata error: \(error)")
+            logAudioQualityDiagnostic(action: "cloud-enrich-failed", extra: [
+                "reason=\(Self.liveActivityLogValue(error.localizedDescription))"
+            ])
         }
     }
 
@@ -2406,6 +2472,7 @@ final class SonosManager {
                             "style=\(style.rawValue)",
                             "activityCount=\(activities.count)"
                         ])
+        pushLiveActivityRelayHintIfNeeded(force: true, includeStyleOnly: true)
 
         Task {
             for activity in activities {
@@ -2545,6 +2612,7 @@ final class SonosManager {
                                               activityID: activity.id,
                                               mode: "relay-token", token: hex,
                                               groupId: groupId, relayURL: url)
+                        self?.pushLiveActivityRelayHintIfNeeded(force: true, includeStyleOnly: true)
                     }
                 } catch {
                     await MainActor.run {
@@ -2569,6 +2637,137 @@ final class SonosManager {
         selectedSpeaker?.playbackIP
     }
 
+    private func pushLiveActivityRelayHintIfNeeded(
+        force: Bool = false,
+        includeStyleOnly: Bool = false
+    ) {
+        guard RelayManager.shared.isAvailable else {
+            logLiveActivity(action: "hint-skip",
+                            mode: "relay-token",
+                            reason: "relay-unavailable",
+                            extra: [
+                                "force=\(force)",
+                                "includeStyleOnly=\(includeStyleOnly)"
+                            ])
+            return
+        }
+        guard let url = RelayManager.shared.url else {
+            logLiveActivity(action: "hint-skip",
+                            mode: "relay-token",
+                            reason: "missing-relay-url",
+                            extra: [
+                                "force=\(force)",
+                                "includeStyleOnly=\(includeStyleOnly)"
+                            ])
+            return
+        }
+        guard let groupId = liveActivityGroupId() else {
+            logLiveActivity(action: "hint-skip",
+                            mode: "relay-token",
+                            reason: "missing-group-id",
+                            relayURL: url,
+                            extra: [
+                                "force=\(force)",
+                                "includeStyleOnly=\(includeStyleOnly)"
+                            ])
+            return
+        }
+
+        let qualityLabel = Self.trimmedLiveActivityHintValue(SharedStorage.cachedAudioQualityLabel)
+        guard qualityLabel != nil || includeStyleOnly else {
+            logLiveActivity(action: "hint-skip",
+                            mode: "relay-token",
+                            reason: "no-quality-label",
+                            groupId: groupId,
+                            relayURL: url,
+                            extra: [
+                                "force=\(force)",
+                                "track=\(Self.liveActivityLogValue(trackInfo?.title ?? "nil"))",
+                                "source=\(trackInfo?.source.rawValue ?? "nil")",
+                                "trackQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))",
+                                "cachedQuality=\(Self.liveActivityLogValue(SharedStorage.cachedAudioQualityLabel ?? "nil"))"
+                            ])
+            return
+        }
+
+        let body = RelayClient.LiveActivityHintBody(
+            groupId: groupId,
+            trackTitle: Self.trimmedLiveActivityHintValue(trackInfo?.title),
+            artist: Self.trimmedLiveActivityHintValue(trackInfo?.artist),
+            album: Self.trimmedLiveActivityHintValue(trackInfo?.album),
+            playbackSourceRaw: Self.trimmedLiveActivityHintValue(trackInfo?.source.rawValue),
+            audioQualityLabel: qualityLabel,
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
+        )
+        let signature = [
+            body.groupId,
+            body.trackTitle ?? "",
+            body.artist ?? "",
+            body.album ?? "",
+            body.playbackSourceRaw ?? "",
+            body.audioQualityLabel ?? "",
+            body.liveActivityStyleRaw ?? ""
+        ].joined(separator: "\u{1F}")
+
+        guard force || signature != lastLiveActivityRelayHintSignature else {
+            logLiveActivity(action: "hint-skip",
+                            mode: "relay-token",
+                            reason: "duplicate-signature",
+                            groupId: groupId,
+                            relayURL: url,
+                            extra: [
+                                "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
+                                "source=\(body.playbackSourceRaw ?? "nil")",
+                                "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))",
+                                "style=\(body.liveActivityStyleRaw ?? "nil")"
+                            ])
+            return
+        }
+        lastLiveActivityRelayHintSignature = signature
+
+        logLiveActivity(action: "hint-post-request",
+                        mode: "relay-token",
+                        groupId: groupId,
+                        relayURL: url,
+                        extra: [
+                            "force=\(force)",
+                            "includeStyleOnly=\(includeStyleOnly)",
+                            "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
+                            "artist=\(Self.liveActivityLogValue(body.artist ?? "nil"))",
+                            "album=\(Self.liveActivityLogValue(body.album ?? "nil"))",
+                            "source=\(body.playbackSourceRaw ?? "nil")",
+                            "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))",
+                            "style=\(body.liveActivityStyleRaw ?? "nil")"
+                        ])
+
+        Task { [weak self] in
+            do {
+                try await RelayClient.postLiveActivityHint(baseURL: url, body: body)
+                await MainActor.run {
+                    self?.logLiveActivity(action: "hint-post-success",
+                                          mode: "relay-token",
+                                          groupId: groupId,
+                                          relayURL: url,
+                                          extra: [
+                                            "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
+                                            "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))"
+                                          ])
+                }
+            } catch {
+                await MainActor.run {
+                    if self?.lastLiveActivityRelayHintSignature == signature {
+                        self?.lastLiveActivityRelayHintSignature = nil
+                    }
+                    self?.logLiveActivity(action: "hint-post-failed",
+                                          mode: "relay-token",
+                                          reason: error.localizedDescription,
+                                          groupId: groupId,
+                                          relayURL: url)
+                }
+            }
+        }
+    }
+
     func stopLiveActivity() {
         // Only end activities when we actually have a reference — this prevents
         // accidentally killing a valid activity on app launch before state is fetched.
@@ -2576,6 +2775,7 @@ final class SonosManager {
         currentActivity = nil
         currentActivityUsesRelay = false
         liveActivityRelayWriterReady = false
+        lastLiveActivityRelayHintSignature = nil
         pushTokenTask?.cancel()
         pushTokenTask = nil
         let tokenToUnregister = lastRegisteredPushToken
@@ -2597,6 +2797,7 @@ final class SonosManager {
         currentActivity = nil
         currentActivityUsesRelay = false
         liveActivityRelayWriterReady = false
+        lastLiveActivityRelayHintSignature = nil
         pushTokenTask?.cancel()
         pushTokenTask = nil
         let tokenToUnregister = lastRegisteredPushToken
@@ -2676,8 +2877,19 @@ final class SonosManager {
         // "Multichannel PCM · 5.1", …) and the Atmos badge logic, which
         // already keys off `label.contains("atmos")`, still picks up the
         // right mark.
-        SharedStorage.cachedAudioQualityLabel = trackInfo?.audioQuality?.label
+        let audioQualityLabel = trackInfo?.audioQuality?.label
             ?? trackInfo?.tvFormat?.geekLabel
+        SharedStorage.cachedAudioQualityLabel = audioQualityLabel
+        logLiveActivity(action: "quality-cache-write",
+                        extra: [
+                            "track=\(Self.liveActivityLogValue(trackInfo?.title ?? "nil"))",
+                            "source=\(trackInfo?.source.rawValue ?? "nil")",
+                            "trackQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))",
+                            "tvFormat=\(Self.liveActivityLogValue(trackInfo?.tvFormat?.geekLabel ?? "nil"))",
+                            "cachedQuality=\(Self.liveActivityLogValue(audioQualityLabel ?? "nil"))",
+                            "relayAvailable=\(RelayManager.shared.isAvailable)",
+                            "relayWriterReady=\(liveActivityRelayWriterReady)"
+                        ])
         SharedStorage.cachedIsLiveStream = trackInfo?.isLiveStream ?? false
         if trackInfo?.source == .tv {
             SharedStorage.cachedSoundbarNightMode = nightMode
@@ -2692,6 +2904,26 @@ final class SonosManager {
             lastWidgetTrackTitle = currentTitle
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
+
+        pushLiveActivityRelayHintIfNeeded()
+    }
+
+    private static func trimmedLiveActivityHintValue(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private func logAudioQualityDiagnostic(action: String, extra: [String] = []) {
+        var parts = [
+            "audio_quality_diag",
+            "action=\(action)",
+            "track=\(Self.liveActivityLogValue(trackInfo?.title ?? "nil"))",
+            "artist=\(Self.liveActivityLogValue(trackInfo?.artist ?? "nil"))",
+            "source=\(trackInfo?.source.rawValue ?? "nil")",
+            "relayStatus=\(liveActivityRelayStatusLogValue())"
+        ]
+        parts.append(contentsOf: extra)
+        SonosLog.info(.sonosCloud, parts.joined(separator: " "))
     }
 
     private func loadAlbumArt() async {

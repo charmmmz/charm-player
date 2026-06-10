@@ -267,14 +267,37 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
                     $0.hasPrefix("pl.") || $0.hasPrefix("p.") || $0.allSatisfy(\.isNumber)
                 }
         case .station:
-            if candidate.hasPrefix("radio:") {
-                return candidate
-            }
-            if candidate.hasPrefix("ra.") {
-                return "radio:\(candidate)"
-            }
-            return candidate.contains("library") ? nil : candidate
+            return normalizedStationCatalogID(candidate)
         }
+    }
+
+    private static func normalizedStationCatalogID(_ value: String) -> String? {
+        guard let stationID = stationIDSuffix(from: value) else { return nil }
+        return "radio:\(stationID)"
+    }
+
+    private static func stationIDSuffix(from value: String) -> String? {
+        var candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return nil }
+        candidate = candidate.removingPercentEncoding ?? candidate
+        if let fragmentStart = candidate.firstIndex(of: "#") {
+            candidate = String(candidate[..<fragmentStart])
+        }
+        if let queryStart = candidate.firstIndex(of: "?") {
+            candidate = String(candidate[..<queryStart])
+        }
+        candidate = candidate.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        candidate = candidate.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? candidate
+        candidate = candidate.split(separator: ":", omittingEmptySubsequences: true).last.map(String.init) ?? candidate
+        candidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if candidate.hasPrefix("ra."), candidate.count > 3 {
+            return candidate
+        }
+        if !candidate.isEmpty, candidate.allSatisfy(\.isNumber) {
+            return "ra.\(candidate)"
+        }
+        return nil
     }
 
     private static func namespacedObjectID(

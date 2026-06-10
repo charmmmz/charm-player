@@ -902,7 +902,11 @@ private enum LocalServiceCardItem: Identifiable {
                 return store.catalogArtworkURL(for: artist)
             case .playlist(let playlist):
                 return store.catalogArtworkURL(for: playlist)
-            case .song, .station, .recentlyPlayed, .recommendation:
+            case .recentlyPlayed(let item):
+                return store.catalogArtworkURL(for: item)
+            case .recommendation(let item):
+                return store.catalogArtworkURL(for: item)
+            case .song, .station:
                 return nil
             }
         }

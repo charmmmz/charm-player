@@ -175,6 +175,35 @@ enum RelayClient {
         try validate(response)
     }
 
+    // MARK: - Live Activity hints
+
+    /// App-supplied metadata that the relay cannot reliably derive from UPnP.
+    /// In particular, Sonos Cloud is the authoritative source for Apple Music
+    /// audio-quality labels, while the NAS relay usually only sees generic
+    /// `audio/mpeg` transport metadata.
+    struct LiveActivityHintBody: Encodable, Sendable {
+        let groupId: String
+        let trackTitle: String?
+        let artist: String?
+        let album: String?
+        let playbackSourceRaw: String?
+        let audioQualityLabel: String?
+        let liveActivityStyleRaw: String?
+    }
+
+    static func postLiveActivityHint(
+        baseURL: URL,
+        body: LiveActivityHintBody
+    ) async throws {
+        let url = baseURL.appendingPathComponent("/api/live-activity-hints")
+        var request = URLRequest(url: url, timeoutInterval: 3)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await noProxySession.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Helpers
 
     static func validate(_ response: URLResponse) throws {

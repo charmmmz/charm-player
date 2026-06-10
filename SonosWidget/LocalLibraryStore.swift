@@ -73,7 +73,7 @@ final class LocalLibraryStore {
             catalogArtworkURLStrings = [:]
             catalogArtworkMissIDs = []
             hasLoaded = true
-            scheduleCatalogArtworkLookup(for: content.snapshot)
+            scheduleCatalogArtworkLookup(for: content)
         } catch {
             authorizationStatus = MusicAuthorization.currentStatus
             errorMessage = displayMessage(for: error)
@@ -122,6 +122,32 @@ final class LocalLibraryStore {
 
     func catalogArtworkURL(for playlist: Playlist) -> URL? {
         catalogArtworkURL(kind: .playlist, id: playlist.id.rawValue)
+    }
+
+    func catalogArtworkURL(for recentlyPlayed: RecentlyPlayedMusicItem) -> URL? {
+        switch recentlyPlayed {
+        case .album:
+            return catalogArtworkURL(kind: .album, id: recentlyPlayed.id.rawValue)
+        case .playlist:
+            return catalogArtworkURL(kind: .playlist, id: recentlyPlayed.id.rawValue)
+        case .station:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    func catalogArtworkURL(for recommendation: MusicPersonalRecommendation.Item) -> URL? {
+        switch recommendation {
+        case .album:
+            return catalogArtworkURL(kind: .album, id: recommendation.id.rawValue)
+        case .playlist:
+            return catalogArtworkURL(kind: .playlist, id: recommendation.id.rawValue)
+        case .station:
+            return nil
+        @unknown default:
+            return nil
+        }
     }
 
     func play(song: Song) async {
@@ -256,7 +282,22 @@ final class LocalLibraryStore {
             .flatMap(URL.init(string:))
     }
 
+    private func scheduleCatalogArtworkLookup(for content: LocalMusicHomeContent) {
+        var items = Self.artworkLookupItems(for: content.snapshot)
+        items.append(contentsOf: content.recentlyPlayed.compactMap(Self.artworkLookupItem(for:)))
+        for recommendation in content.recommendations {
+            items.append(contentsOf: recommendation.items.compactMap(Self.artworkLookupItem(for:)))
+            items.append(contentsOf: recommendation.albums.map { Self.artworkLookupItem(for: $0) })
+            items.append(contentsOf: recommendation.playlists.map { Self.artworkLookupItem(for: $0) })
+        }
+        scheduleCatalogArtworkLookup(for: items)
+    }
+
     private func scheduleCatalogArtworkLookup(for snapshot: LocalMusicLibrarySnapshot) {
+        scheduleCatalogArtworkLookup(for: Self.artworkLookupItems(for: snapshot))
+    }
+
+    private static func artworkLookupItems(for snapshot: LocalMusicLibrarySnapshot) -> [LocalMusicCatalogArtworkLookupItem] {
         var items: [LocalMusicCatalogArtworkLookupItem] = []
         items.append(contentsOf: snapshot.songs.map {
             LocalMusicCatalogArtworkLookupItem(
@@ -294,8 +335,55 @@ final class LocalLibraryStore {
                 album: nil,
                 directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
+        return items
+    }
 
-        scheduleCatalogArtworkLookup(for: items)
+    private static func artworkLookupItem(for item: RecentlyPlayedMusicItem) -> LocalMusicCatalogArtworkLookupItem? {
+        switch item {
+        case .album(let album):
+            return artworkLookupItem(for: album, id: item.id.rawValue)
+        case .playlist(let playlist):
+            return artworkLookupItem(for: playlist, id: item.id.rawValue)
+        case .station:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    private static func artworkLookupItem(
+        for item: MusicPersonalRecommendation.Item
+    ) -> LocalMusicCatalogArtworkLookupItem? {
+        switch item {
+        case .album(let album):
+            return artworkLookupItem(for: album, id: item.id.rawValue)
+        case .playlist(let playlist):
+            return artworkLookupItem(for: playlist, id: item.id.rawValue)
+        case .station:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    private static func artworkLookupItem(for album: Album, id: String? = nil) -> LocalMusicCatalogArtworkLookupItem {
+        LocalMusicCatalogArtworkLookupItem(
+            id: id ?? album.id.rawValue,
+            kind: .album,
+            title: album.title,
+            artist: album.artistName,
+            album: album.title,
+            directArtworkURLString: Self.directArtworkURLString(album.artwork))
+    }
+
+    private static func artworkLookupItem(for playlist: Playlist, id: String? = nil) -> LocalMusicCatalogArtworkLookupItem {
+        LocalMusicCatalogArtworkLookupItem(
+            id: id ?? playlist.id.rawValue,
+            kind: .playlist,
+            title: playlist.name,
+            artist: playlist.curatorName,
+            album: nil,
+            directArtworkURLString: Self.directArtworkURLString(playlist.artwork))
     }
 
     private func scheduleCatalogArtworkLookup(for items: [LocalMusicCatalogArtworkLookupItem]) {
