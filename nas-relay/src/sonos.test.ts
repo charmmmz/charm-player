@@ -7,6 +7,7 @@ import pino from 'pino';
 import {
   albumArtUriFromMetadata,
   isMusicAmbienceEligibleForSnapshot,
+  localPlaybackQualityFromPlaybackMetadata,
   playbackSourceFromTrackUri,
   SonosBridge,
   trackMetadataFromMetadata,
@@ -95,7 +96,7 @@ test('music ambience eligibility still allows music metadata without a known sou
 });
 
 test('bridge refreshes snapshots when the Sonos library emits real event names', () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   const events = new EventEmitter();
   const refreshedDevices: string[] = [];
   const device = { Name: 'Office', Events: events };
@@ -125,7 +126,7 @@ test('bridge refreshes snapshots when the Sonos library emits real event names',
 });
 
 test('bridge ignores stale snapshot refreshes that complete after a newer refresh', async () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   const staleTransport = deferred<{ CurrentTransportState: string }>();
   const stalePosition = deferred<Record<string, string>>();
   let transportCalls = 0;
@@ -168,7 +169,7 @@ test('bridge ignores stale snapshot refreshes that complete after a newer refres
 });
 
 test('bridge labels periodic snapshot refreshes for Live Activity calibration pushes', async () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   let trigger: string | undefined;
   const device = {
     Host: '192.168.50.25',
@@ -191,8 +192,42 @@ test('bridge labels periodic snapshot refreshes for Live Activity calibration pu
   assert.equal(trigger, 'periodic-refresh');
 });
 
+test('bridge keeps previous live radio song when Sonos temporarily reports only generic track metadata', async () => {
+  const bridge = testBridge();
+  const positions = [
+    liveRadioPositionInfo('TYPE=SNG|TITLE Vanille fraise|ARTIST L’Impératrice|ALBUM Single'),
+    liveRadioPositionInfo(''),
+  ];
+  const device = {
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    CurrentTrack: {
+      Title: 'Single',
+      Artist: 'Apple Music',
+      Album: 'Single',
+    },
+    AVTransportService: {
+      GetTransportInfo: () => Promise.resolve({ CurrentTransportState: 'PLAYING' }),
+      GetPositionInfo: () => Promise.resolve(positions.shift() ?? positions[0]),
+    },
+  };
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.trackTitle, 'Vanille fraise');
+  assert.equal(snapshot?.artist, 'L’Impératrice');
+  assert.equal(snapshot?.album, 'Single');
+});
+
 test('bridge snapshots audio quality from Sonos track metadata', async () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   const device = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -207,8 +242,103 @@ test('bridge snapshots audio quality from Sonos track metadata', async () => {
   assert.equal(snapshot?.audioQualityLabel, 'Lossless');
 });
 
+test('local Control API playback metadata maps lossless and immersive quality labels', () => {
+  assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
+    service: { name: 'Apple Music' },
+    track: {
+      quality: {
+        bitDepth: 24,
+        sampleRate: 48_000,
+        lossless: true,
+        immersive: false,
+      },
+    },
+  }), {
+    label: 'Hi-Res Lossless',
+    serviceName: 'Apple Music',
+    lossless: true,
+    immersive: false,
+    bitDepth: 24,
+    sampleRate: 48_000,
+  });
+
+  assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
+    service: { name: 'Apple Music' },
+    track: {
+      quality: {
+        bitDepth: 24,
+        sampleRate: 48_000,
+        lossless: false,
+        immersive: true,
+      },
+    },
+  })?.label, 'Dolby Atmos');
+});
+
+test('bridge prefers local Control API playback quality over generic track metadata', async () => {
+  const calls: Array<{ host: string; playerId: string }> = [];
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackQuality: async ({ host, playerId }) => {
+        calls.push({ host, playerId });
+        return {
+          label: 'Hi-Res Lossless',
+          serviceName: 'Apple Music',
+          lossless: true,
+          immersive: false,
+          bitDepth: 24,
+          sampleRate: 48_000,
+        };
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  assert.deepEqual(calls, [{
+    host: '192.168.50.25',
+    playerId: 'RINCON_804AF2200FD601400',
+  }]);
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.audioQualityLabel, 'Hi-Res Lossless');
+});
+
+test('local Control API playback quality maps immersive tracks to Dolby Atmos', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackQuality: async () => ({
+        label: 'Dolby Atmos',
+        serviceName: 'Apple Music',
+        lossless: false,
+        immersive: true,
+        bitDepth: 24,
+        sampleRate: 48_000,
+      }),
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.audioQualityLabel, 'Dolby Atmos');
+});
+
 test('bridge snapshots grouped playback with the coordinator visible member count', async () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   const coordinator = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -233,7 +363,7 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
 });
 
 test('bridge prefers parsed ZoneGroup members over stale coordinator relationships', async () => {
-  const bridge = new SonosBridge(pino({ enabled: false }));
+  const bridge = testBridge();
   const coordinator = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -285,6 +415,21 @@ function positionInfo(title: string): Record<string, string> {
   };
 }
 
+function liveRadioPositionInfo(streamContent: string): Record<string, string> {
+  return {
+    RelTime: '00:00:00',
+    TrackDuration: '00:00:00',
+    TrackURI: 'x-sonosapi-hls:hls%3ara.1740614260?sid=204&flags=8232&sn=2',
+    TrackMetaData: '<DIDL-Lite><item>'
+      + '<res protocolInfo="sonos.com-http:*:application/x-mpegURL:*">'
+      + 'x-sonosapi-hls:hls%3ara.1740614260?sid=204&amp;flags=8232&amp;sn=2'
+      + '</res>'
+      + `<r:streamContent>${streamContent}</r:streamContent>`
+      + '<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
+      + '</item></DIDL-Lite>',
+  };
+}
+
 function losslessPositionInfo(): Record<string, string> {
   return {
     ...positionInfo('Blue Train'),
@@ -295,6 +440,22 @@ function losslessPositionInfo(): Record<string, string> {
       + '<upnp:albumArtURI>/getaa?s=1&amp;u=x-file-cifs%3atrack</upnp:albumArtURI>'
       + '<res protocolInfo="http-get:*:audio/flac:*" sampleFrequency="44100" bitsPerSample="16" nrAudioChannels="2">'
       + 'http://192.168.50.25:1400/track.flac'
+      + '</res>'
+      + '</item></DIDL-Lite>',
+  };
+}
+
+function genericAppleMusicPositionInfo(): Record<string, string> {
+  return {
+    ...positionInfo('Call On Me'),
+    TrackURI: 'x-sonos-http:song%3a1839352407.mp4?sid=204&flags=8232&sn=2',
+    TrackMetaData: '<DIDL-Lite><item>'
+      + '<dc:title>Call On Me</dc:title>'
+      + '<dc:creator>Daniel Caesar</dc:creator>'
+      + '<upnp:album>Son of Spergy</upnp:album>'
+      + '<upnp:albumArtURI>/getaa?s=1&amp;u=x-sonos-http%3asong%253a1839352407.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2</upnp:albumArtURI>'
+      + '<res protocolInfo="sonos.com-http:*:audio/mp4:*">'
+      + 'x-sonos-http:song%3a1839352407.mp4?sid=204&amp;flags=8232&amp;sn=2'
       + '</res>'
       + '</item></DIDL-Lite>',
   };
@@ -319,6 +480,10 @@ function playbackDevice(
     },
     ...fields,
   };
+}
+
+function testBridge(): SonosBridge {
+  return new SonosBridge(pino({ enabled: false }), { localControl: null });
 }
 
 function zoneGroup(device: Record<string, unknown>) {

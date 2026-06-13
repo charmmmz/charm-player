@@ -1,5 +1,6 @@
 import { SonosEvents, SonosManager, type SonosDevice } from '@svrooij/sonos';
 import { EventEmitter } from 'node:events';
+import https from 'node:https';
 import type { Logger } from 'pino';
 import type { SonosGroupSnapshot } from './types.js';
 
@@ -10,6 +11,135 @@ export type SonosSnapshotChangeTrigger =
 
 export interface SonosSnapshotChangeContext {
   trigger: SonosSnapshotChangeTrigger;
+}
+
+export interface SonosLocalPlaybackQuality {
+  label: string;
+  serviceName?: string | null;
+  lossless?: boolean | null;
+  immersive?: boolean | null;
+  bitDepth?: number | null;
+  sampleRate?: number | null;
+}
+
+export interface SonosLocalControlClient {
+  playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null>;
+}
+
+export interface SonosBridgeOptions {
+  localControl?: SonosLocalControlClient | null;
+}
+
+interface SonosLocalPlayerInfo {
+  groupId?: string | null;
+}
+
+interface SonosLocalPlaybackMetadata {
+  service?: {
+    name?: string | null;
+    id?: string | null;
+  } | null;
+  track?: {
+    quality?: {
+      bitDepth?: number | null;
+      sampleRate?: number | null;
+      lossless?: boolean | null;
+      immersive?: boolean | null;
+    } | null;
+  } | null;
+}
+
+const SONOS_LOCAL_CONTROL_PORT = 1443;
+const SONOS_LOCAL_CONTROL_API_KEY = '12345678-abcd-1234-5678-123456789000';
+
+class SonosLocalControlApiClient implements SonosLocalControlClient {
+  private readonly groupIdsByPlayerId = new Map<string, string>();
+
+  constructor(
+    private readonly log: Logger,
+    private readonly timeoutMs = 4_000,
+  ) {}
+
+  async playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null> {
+    const cachedGroupId = this.groupIdsByPlayerId.get(input.playerId);
+    if (cachedGroupId) {
+      try {
+        return localPlaybackQualityFromPlaybackMetadata(
+          await this.getPlaybackMetadata(input.host, cachedGroupId),
+        );
+      } catch (err) {
+        this.groupIdsByPlayerId.delete(input.playerId);
+        this.log.debug(
+          { err, host: input.host, playerId: input.playerId, groupId: cachedGroupId },
+          'cached Sonos local Control API group lookup failed',
+        );
+      }
+    }
+
+    const playerInfo = await this.getPlayerInfo(input.host, input.playerId);
+    const groupId = firstObjectString(playerInfo.groupId);
+    if (!groupId) return null;
+
+    this.groupIdsByPlayerId.set(input.playerId, groupId);
+    return localPlaybackQualityFromPlaybackMetadata(
+      await this.getPlaybackMetadata(input.host, groupId),
+    );
+  }
+
+  private async getPlayerInfo(host: string, playerId: string): Promise<SonosLocalPlayerInfo> {
+    return this.getJson<SonosLocalPlayerInfo>(
+      host,
+      `/api/v1/players/${encodeSonosLocalPathSegment(playerId)}/info`,
+    );
+  }
+
+  private async getPlaybackMetadata(host: string, groupId: string): Promise<SonosLocalPlaybackMetadata> {
+    return this.getJson<SonosLocalPlaybackMetadata>(
+      host,
+      `/api/v1/groups/${encodeSonosLocalPathSegment(groupId)}/playbackMetadata`,
+    );
+  }
+
+  private getJson<T>(host: string, path: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname: hostnameForHttpsRequest(host),
+          port: SONOS_LOCAL_CONTROL_PORT,
+          path,
+          method: 'GET',
+          rejectUnauthorized: !isLocalSonosControlHost(host),
+          headers: {
+            Accept: 'application/json',
+            'X-Sonos-Api-Key': SONOS_LOCAL_CONTROL_API_KEY,
+          },
+          timeout: this.timeoutMs,
+        },
+        res => {
+          const chunks: Buffer[] = [];
+          res.on('data', chunk => chunks.push(Buffer.from(chunk)));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              reject(new Error(`Sonos local Control API GET ${path} failed: HTTP ${res.statusCode} ${text}`));
+              return;
+            }
+            try {
+              resolve(JSON.parse(text) as T);
+            } catch (err) {
+              reject(err);
+            }
+          });
+        },
+      );
+
+      req.on('timeout', () => {
+        req.destroy(new Error(`Sonos local Control API GET ${path} timed out`));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
 }
 
 /// Wraps @svrooij/sonos to give us a single clean event stream:
@@ -23,11 +153,15 @@ export class SonosBridge extends EventEmitter {
   private readonly snapshots = new Map<string, SonosGroupSnapshot>();
   private readonly refreshSequences = new Map<string, number>();
   private readonly log: Logger;
+  private readonly localControl: SonosLocalControlClient | null;
   private periodicHandle: NodeJS.Timeout | null = null;
 
-  constructor(log: Logger) {
+  constructor(log: Logger, options: SonosBridgeOptions = {}) {
     super();
     this.log = log.child({ module: 'sonos' });
+    this.localControl = options.localControl === undefined
+      ? new SonosLocalControlApiClient(this.log)
+      : options.localControl;
   }
 
   async start(seedIp: string): Promise<void> {
@@ -180,33 +314,39 @@ export class SonosBridge extends EventEmitter {
       const positionSeconds = parseDuration(position.RelTime ?? '00:00:00');
       const durationSeconds = parseDuration(position.TrackDuration ?? '00:00:00');
       const metadata = trackMetadataFromMetadata(position.TrackMetaData);
-      const audioQualityLabel = audioQualityLabelFromMetadata(
+      const metadataDiagnostic = trackMetadataDiagnostic(position.TrackMetaData);
+      let audioQualityLabel = audioQualityLabelFromMetadata(
         position.TrackMetaData,
         playbackSourceRaw,
       );
+      const localQuality = await this.localControlPlaybackQuality(coordinator, device);
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return;
+      if (localQuality?.label) {
+        audioQualityLabel = localQuality.label;
+      }
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
       // current song in r:streamContent while sonos-ts may cache that raw
       // `TYPE=SNG|TITLE ...` payload as Artist.
-      const trackTitle = firstMeaningfulMetadata(
+      let trackTitle = firstMeaningfulMetadata(
         'title',
         metadata.title,
         coordinator.CurrentTrack?.Title,
         device.CurrentTrack?.Title,
       );
-      const artist = firstMeaningfulMetadata(
+      let artist = firstMeaningfulMetadata(
         'artist',
         metadata.artist,
         coordinator.CurrentTrack?.Artist,
         device.CurrentTrack?.Artist,
       );
-      const album = firstMeaningfulMetadata(
+      let album = firstMeaningfulMetadata(
         'album',
         metadata.album,
         coordinator.CurrentTrack?.Album,
         device.CurrentTrack?.Album,
       );
-      const albumArtUri = absoluteAlbumArtUri(
+      let albumArtUri = absoluteAlbumArtUri(
         coordinator.CurrentTrack?.AlbumArtUri
           ?? coordinator.CurrentTrack?.AlbumArtURI
           ?? device.CurrentTrack?.AlbumArtUri
@@ -214,6 +354,47 @@ export class SonosBridge extends EventEmitter {
           ?? metadata.albumArtUri,
         coordinator.Host ?? device.Host ?? resolvedGroupId,
       );
+
+      const previousSnapshot = this.snapshots.get(resolvedGroupId);
+      const liveStream = isLiveRadioSnapshot({
+        trackUri,
+        durationSeconds,
+        playbackSourceRaw,
+      });
+      const heldPreviousLiveMetadata = shouldHoldPreviousLiveMetadata({
+        liveStream,
+        metadata,
+        metadataDiagnostic,
+        trackTitle,
+        artist,
+        previousSnapshot,
+      });
+      if (heldPreviousLiveMetadata && previousSnapshot) {
+        trackTitle = previousSnapshot.trackTitle;
+        artist = previousSnapshot.artist;
+        album = previousSnapshot.album;
+        albumArtUri = previousSnapshot.albumArtUri ?? albumArtUri;
+      }
+      if (liveStream) {
+        this.log.info(
+          {
+            groupId: resolvedGroupId,
+            trigger,
+            trackUri: summarizeTrackUri(trackUri),
+            didlTitle: metadataDiagnostic.didlTitle,
+            didlArtist: metadataDiagnostic.didlArtist,
+            streamContent: metadataDiagnostic.streamContent,
+            streamTitle: metadataDiagnostic.streamFields.title ?? null,
+            streamArtist: metadataDiagnostic.streamFields.artist ?? null,
+            fallbackTitle: firstObjectString(coordinator.CurrentTrack?.Title, device.CurrentTrack?.Title),
+            fallbackArtist: firstObjectString(coordinator.CurrentTrack?.Artist, device.CurrentTrack?.Artist),
+            finalTitle: trackTitle,
+            finalArtist: artist,
+            heldPreviousLiveMetadata,
+          },
+          'live radio metadata resolved',
+        );
+      }
 
       const snapshot: SonosGroupSnapshot = {
         groupId: resolvedGroupId,
@@ -257,6 +438,43 @@ export class SonosBridge extends EventEmitter {
 
   private isCurrentRefresh(groupId: string, sequence: number): boolean {
     return this.refreshSequences.get(groupId) === sequence;
+  }
+
+  private async localControlPlaybackQuality(
+    coordinator: Record<string, unknown>,
+    device: Record<string, unknown>,
+  ): Promise<SonosLocalPlaybackQuality | null> {
+    if (!this.localControl) return null;
+
+    const host = firstObjectString(coordinator.Host, device.Host);
+    const playerId = firstObjectString(coordinator.Uuid, device.Uuid);
+    if (!host || !playerId) return null;
+
+    try {
+      const quality = await this.localControl.playbackQuality({ host, playerId });
+      if (quality?.label) {
+        this.log.debug(
+          {
+            host,
+            playerId,
+            serviceName: quality.serviceName ?? null,
+            label: quality.label,
+            lossless: quality.lossless ?? null,
+            immersive: quality.immersive ?? null,
+            bitDepth: quality.bitDepth ?? null,
+            sampleRate: quality.sampleRate ?? null,
+          },
+          'Sonos local Control API playback quality resolved',
+        );
+      }
+      return quality;
+    } catch (err) {
+      this.log.debug(
+        { err, host, playerId },
+        'Sonos local Control API playback quality unavailable',
+      );
+      return null;
+    }
   }
 
   private async groupMemberCountForCoordinator(coordinator: any, groupId: string): Promise<number> {
@@ -374,6 +592,20 @@ export function playbackSourceFromTrackUri(trackUri: unknown): string | null {
   return null;
 }
 
+function isLiveRadioSnapshot(input: {
+  trackUri: string;
+  durationSeconds: number;
+  playbackSourceRaw: string | null;
+}): boolean {
+  const uri = input.trackUri.toLowerCase();
+  const liveUri = uri.startsWith('x-sonosapi-hls:')
+    || uri.startsWith('x-sonosapi-stream:')
+    || uri.startsWith('x-sonosapi-radio:')
+    || uri.startsWith('x-rincon-mp3radio:')
+    || uri.startsWith('aac:');
+  return liveUri || (input.durationSeconds <= 0 && input.playbackSourceRaw === 'radio');
+}
+
 export function isMusicAmbienceEligibleForSnapshot(snapshot: {
   trackTitle?: string | null;
   artist?: string | null;
@@ -401,6 +633,14 @@ export interface SonosTrackMetadata {
   artist: string | null;
   album: string | null;
   albumArtUri: string | null;
+}
+
+interface SonosTrackMetadataDiagnostic {
+  didlTitle: string | null;
+  didlArtist: string | null;
+  didlAlbum: string | null;
+  streamContent: string | null;
+  streamFields: Partial<Pick<SonosTrackMetadata, 'title' | 'artist' | 'album'>>;
 }
 
 interface ParsedZoneGroup {
@@ -431,6 +671,35 @@ export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata
     albumArtUri: xmlTagValue(metadata, 'upnp:albumArtURI'),
   };
   return reconcileRadioStreamContent(baseMetadata, xmlTagValue(metadata, 'r:streamContent'));
+}
+
+function trackMetadataDiagnostic(metadata: unknown): SonosTrackMetadataDiagnostic {
+  if (!metadata || typeof metadata !== 'object') {
+    const raw = typeof metadata === 'string' ? metadata : '';
+    const streamContent = xmlTagValue(raw, 'r:streamContent');
+    return {
+      didlTitle: xmlTagValue(raw, 'dc:title'),
+      didlArtist: xmlTagValue(raw, 'dc:creator') ?? xmlTagValue(raw, 'upnp:artist'),
+      didlAlbum: xmlTagValue(raw, 'upnp:album'),
+      streamContent,
+      streamFields: streamContent ? radioStreamContentFields(streamContent) : {},
+    };
+  }
+
+  const track = metadata as Record<string, unknown>;
+  const streamContent = firstObjectString(
+    track.StreamContent,
+    track.streamContent,
+    track.StreamInfo,
+    track.streamInfo,
+  );
+  return {
+    didlTitle: firstObjectString(track.Title, track.title) || null,
+    didlArtist: firstObjectString(track.Artist, track.artist, track.Creator, track.creator) || null,
+    didlAlbum: firstObjectString(track.Album, track.album) || null,
+    streamContent: streamContent || null,
+    streamFields: streamContent ? radioStreamContentFields(streamContent) : {},
+  };
 }
 
 function audioQualityLabelFromMetadata(
@@ -512,6 +781,60 @@ function audioQualityLabelFromProtocolInfo(input: {
   }
 
   return codec.toUpperCase();
+}
+
+export function localPlaybackQualityFromPlaybackMetadata(
+  metadata: SonosLocalPlaybackMetadata,
+): SonosLocalPlaybackQuality | null {
+  const quality = metadata.track?.quality;
+  if (!quality) return null;
+
+  const bitDepth = positiveNumber(quality.bitDepth);
+  const sampleRate = positiveNumber(quality.sampleRate);
+  const label = localPlaybackQualityLabel({
+    bitDepth,
+    sampleRate,
+    lossless: quality.lossless ?? null,
+    immersive: quality.immersive ?? null,
+  });
+  if (!label) return null;
+
+  return {
+    label,
+    serviceName: firstObjectString(metadata.service?.name),
+    lossless: quality.lossless ?? null,
+    immersive: quality.immersive ?? null,
+    bitDepth,
+    sampleRate,
+  };
+}
+
+function localPlaybackQualityLabel(input: {
+  bitDepth: number | null;
+  sampleRate: number | null;
+  lossless: boolean | null;
+  immersive: boolean | null;
+}): string | null {
+  if (input.immersive === true) {
+    return 'Dolby Atmos';
+  }
+
+  if (input.lossless === true) {
+    const hiRes = (input.sampleRate ?? 0) > 48_000
+      || ((input.sampleRate ?? 0) >= 48_000 && (input.bitDepth ?? 0) >= 24);
+    return hiRes ? 'Hi-Res Lossless' : 'Lossless';
+  }
+
+  if (input.lossless === false && input.bitDepth && input.sampleRate) {
+    return `${input.bitDepth}-bit/${formatSampleRate(input.sampleRate)}`;
+  }
+
+  return null;
+}
+
+function formatSampleRate(sampleRate: number): string {
+  const khz = sampleRate / 1000;
+  return `${Number.isInteger(khz) ? khz.toFixed(0) : khz.toFixed(1).replace(/\.0$/, '')} kHz`;
 }
 
 function audioCodecFromMetadata(input: {
@@ -691,6 +1014,45 @@ function firstMeaningfulMetadata(
   return looksLikeRadioStreamContent(fallback) ? '' : fallback;
 }
 
+function shouldHoldPreviousLiveMetadata(input: {
+  liveStream: boolean;
+  metadata: SonosTrackMetadata;
+  metadataDiagnostic: SonosTrackMetadataDiagnostic;
+  trackTitle: string;
+  artist: string;
+  previousSnapshot: SonosGroupSnapshot | undefined;
+}): boolean {
+  if (!input.liveStream || !input.previousSnapshot?.isPlaying) return false;
+  if (input.previousSnapshot.durationSeconds > 0) return false;
+  if (!normalizedMetadata(input.previousSnapshot.trackTitle)) return false;
+  if (input.metadataDiagnostic.streamFields.title || input.metadataDiagnostic.streamFields.artist) return false;
+  if (normalizedMetadata(input.metadata.title) || normalizedMetadata(input.metadata.artist)) return false;
+
+  return !normalizedMetadata(input.trackTitle)
+    || isGenericLiveFallback(input.trackTitle)
+    || isGenericLiveFallback(input.artist);
+}
+
+function isGenericLiveFallback(value: string | null | undefined): boolean {
+  const normalized = normalizedMetadata(value);
+  if (!normalized) return true;
+  return [
+    'single',
+    'song',
+    'track',
+    'music',
+    'apple music',
+    'apple music radio',
+    'radio',
+    'station',
+  ].includes(normalized);
+}
+
+function summarizeTrackUri(trackUri: string): string {
+  if (trackUri.length <= 96) return trackUri;
+  return `${trackUri.slice(0, 80)}…${trackUri.slice(-12)}`;
+}
+
 function isInvisibleDevice(device: Record<string, unknown>): boolean {
   return device.Invisible === true || device.invisible === true || device.isInvisible === true;
 }
@@ -739,6 +1101,37 @@ function parsePositiveInteger(value: string | null): number | null {
   if (!value) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function positiveNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function encodeSonosLocalPathSegment(value: string): string {
+  return encodeURIComponent(value).replaceAll('%3A', ':');
+}
+
+function hostnameForHttpsRequest(host: string): string {
+  const withoutBrackets = host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1)
+    : host;
+  return withoutBrackets.split('%', 1)[0] ?? withoutBrackets;
+}
+
+function isLocalSonosControlHost(host: string): boolean {
+  const normalized = hostnameForHttpsRequest(host).toLowerCase();
+  if (normalized === 'localhost' || normalized.endsWith('.local')) return true;
+  if (normalized.startsWith('192.168.') || normalized.startsWith('10.') || normalized.startsWith('169.254.')) {
+    return true;
+  }
+  if (normalized.startsWith('172.')) {
+    const second = Number.parseInt(normalized.split('.')[1] ?? '', 10);
+    return Number.isInteger(second) && second >= 16 && second <= 31;
+  }
+  return normalized === '::1'
+    || normalized.startsWith('fe80:')
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd');
 }
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string {
