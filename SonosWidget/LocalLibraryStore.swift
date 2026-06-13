@@ -306,6 +306,7 @@ final class LocalLibraryStore {
                 title: $0.title,
                 artist: $0.artistName,
                 album: $0.albumTitle,
+                hasMusicKitArtwork: $0.artwork != nil,
                 directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.albums.map {
@@ -315,6 +316,7 @@ final class LocalLibraryStore {
                 title: $0.title,
                 artist: $0.artistName,
                 album: $0.title,
+                hasMusicKitArtwork: $0.artwork != nil,
                 directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.artists.map {
@@ -324,6 +326,7 @@ final class LocalLibraryStore {
                 title: $0.name,
                 artist: $0.name,
                 album: nil,
+                hasMusicKitArtwork: $0.artwork != nil,
                 directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         items.append(contentsOf: snapshot.playlists.map {
@@ -336,6 +339,7 @@ final class LocalLibraryStore {
                 title: $0.name,
                 artist: $0.curatorName,
                 album: nil,
+                hasMusicKitArtwork: $0.artwork != nil,
                 directArtworkURLString: Self.directArtworkURLString($0.artwork))
         })
         return items
@@ -376,6 +380,7 @@ final class LocalLibraryStore {
             title: album.title,
             artist: album.artistName,
             album: album.title,
+            hasMusicKitArtwork: album.artwork != nil,
             directArtworkURLString: Self.directArtworkURLString(album.artwork))
     }
 
@@ -400,6 +405,7 @@ final class LocalLibraryStore {
             title: playlist.name,
             artist: playlist.curatorName,
             album: nil,
+            hasMusicKitArtwork: playlist.artwork != nil,
             directArtworkURLString: directArtworkURLString)
     }
 

@@ -100,7 +100,7 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
     }
 
-    func testPlannerFallsBackWhenDirectArtworkURLIsNotWebLoadable() {
+    func testPlannerSkipsFallbackWhenMusicKitArtworkURLIsNotWebLoadable() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let item = LocalMusicCatalogArtworkLookupItem(
@@ -118,22 +118,36 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
             cache: cache)
 
         XCTAssertTrue(plan.immediateURLStrings.isEmpty)
-        XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
+        XCTAssertTrue(plan.lookupItems.isEmpty)
     }
 
-
-    func testPlannerPromotesDirectArtworkAndCachedArtworkBeforeLookup() {
+    func testPlannerSkipsCachedArtworkWhenMusicKitArtworkIsAlreadyPresent() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let direct = LocalMusicCatalogArtworkLookupItem(
-            id: "song-1",
-            kind: .song,
-            title: "Song",
+        let item = LocalMusicCatalogArtworkLookupItem(
+            id: "album-with-artwork",
+            kind: .album,
+            title: "Album",
             artist: "Artist",
             album: "Album",
             directArtworkURLString: "https://example.com/direct.jpg")
+        cache.storeURLString("https://example.com/cached-wrong.jpg", for: item.key)
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [item],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            cache: cache)
+
+        XCTAssertTrue(plan.immediateURLStrings.isEmpty)
+        XCTAssertTrue(plan.lookupItems.isEmpty)
+    }
+
+    func testPlannerUsesCachedArtworkBeforeLookupWhenMusicKitArtworkIsMissing() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let cached = LocalMusicCatalogArtworkLookupItem(
-            id: "album-1",
+            id: "album-without-artwork",
             kind: .album,
             title: "Album",
             artist: "Artist",
@@ -149,14 +163,11 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         cache.storeURLString("https://example.com/cached.jpg", for: cached.key)
 
         let plan = LocalMusicCatalogArtworkPlan.make(
-            items: [direct, cached, missing],
+            items: [cached, missing],
             inMemoryURLStrings: [:],
             inMemoryMissIDs: [],
             cache: cache)
 
-        XCTAssertEqual(
-            plan.immediateURLStrings[direct.key.storageKey],
-            "https://example.com/direct.jpg")
         XCTAssertEqual(
             plan.immediateURLStrings[cached.key.storageKey],
             "https://example.com/cached.jpg")

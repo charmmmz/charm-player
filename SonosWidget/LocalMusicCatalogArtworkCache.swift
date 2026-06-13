@@ -21,6 +21,7 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
     let title: String
     let artist: String?
     let album: String?
+    let hasMusicKitArtwork: Bool
     let directArtworkURLString: String?
 
     init(
@@ -30,6 +31,7 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
         title: String,
         artist: String?,
         album: String?,
+        hasMusicKitArtwork: Bool? = nil,
         directArtworkURLString: String?
     ) {
         self.id = id
@@ -38,6 +40,7 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
         self.title = title
         self.artist = artist
         self.album = album
+        self.hasMusicKitArtwork = hasMusicKitArtwork ?? (directArtworkURLString != nil)
         self.directArtworkURLString = directArtworkURLString
     }
 
@@ -169,10 +172,7 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
             if inMemoryURLStrings[storageKey] != nil {
                 continue
             }
-            if let directArtworkURLString = validURLString(item.directArtworkURLString) {
-                immediate[key] = directArtworkURLString
-                continue
-            }
+            if item.hasMusicKitArtwork { continue }
             if let cachedURLString = cacheSnapshot.urlString(for: key) {
                 immediate[key] = cachedURLString
                 continue
@@ -189,13 +189,6 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
         )
     }
 
-    private static func validURLString(_ value: String?) -> String? {
-        guard let value,
-              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) else {
-            return nil
-        }
-        return value
-    }
 }
 
 nonisolated struct LocalMusicCatalogArtworkLookupResult: Sendable {

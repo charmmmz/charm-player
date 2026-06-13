@@ -843,8 +843,7 @@ enum LocalServiceCardArtworkMetrics {
         maximumWidth: Int? = nil,
         maximumHeight: Int? = nil
     ) -> LocalMusicArtworkURL.ContentMode {
-        guard isStationLike,
-              let maximumWidth,
+        guard let maximumWidth,
               let maximumHeight,
               maximumWidth > 1,
               maximumHeight > 1 else {

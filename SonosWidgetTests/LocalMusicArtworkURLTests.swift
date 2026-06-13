@@ -110,12 +110,12 @@ final class LocalMusicArtworkURLTests: XCTestCase {
             .fit)
     }
 
-    func testNonStationCardsFitWideArtwork() {
+    func testNonStationCardsFillWideArtworkFromCenter() {
         XCTAssertEqual(
             LocalServiceCardArtworkMetrics.contentMode(
                 isStationLike: false,
                 maximumWidth: 4320,
                 maximumHeight: 1080),
-            .fit)
+            .fill)
     }
 }
