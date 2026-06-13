@@ -3,6 +3,58 @@ import UIKit
 @testable import SonosWidget
 
 final class LiveActivityUpdatePolicyTests: XCTestCase {
+    func testAutoRefreshUsesWatchdogCadenceWhenLANEventsAreSubscribed() {
+        let plan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: true,
+            cycle: 0
+        )
+
+        XCTAssertTrue(plan.refreshState)
+        XCTAssertTrue(plan.refreshGroups)
+        XCTAssertEqual(plan.sleepSeconds, 30)
+    }
+
+    func testAutoRefreshKeepsFastCadenceWhenLANEventsAreNotSubscribed() {
+        let firstPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: false,
+            cycle: 0
+        )
+        let secondPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: false,
+            cycle: 1
+        )
+
+        XCTAssertTrue(firstPlan.refreshState)
+        XCTAssertFalse(firstPlan.refreshGroups)
+        XCTAssertEqual(firstPlan.sleepSeconds, 3)
+        XCTAssertTrue(secondPlan.refreshState)
+        XCTAssertTrue(secondPlan.refreshGroups)
+        XCTAssertEqual(secondPlan.sleepSeconds, 3)
+    }
+
+    func testAutoRefreshKeepsCloudRefreshRateLimited() {
+        let firstPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .cloud,
+            hasLANEventSubscriptions: false,
+            cycle: 0
+        )
+        let secondPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .cloud,
+            hasLANEventSubscriptions: false,
+            cycle: 1
+        )
+
+        XCTAssertTrue(firstPlan.refreshState)
+        XCTAssertFalse(firstPlan.refreshGroups)
+        XCTAssertEqual(firstPlan.sleepSeconds, 3)
+        XCTAssertFalse(secondPlan.refreshState)
+        XCTAssertTrue(secondPlan.refreshGroups)
+        XCTAssertEqual(secondPlan.sleepSeconds, 3)
+    }
+
     func testWidgetLiveActivityStyleUsesWidgetCardForMusicSources() {
         let state = SonosActivityAttributes.ContentState(
             trackTitle: "Between the Bars",

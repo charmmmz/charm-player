@@ -84,12 +84,9 @@ final class SonosManager {
 
     let discovery = SonosDiscovery()
 
-    /// Main polling loop (transport state, track info, volume). Kept as an
-    /// async `Task` rather than `Timer.scheduledTimer` so it survives run
-    /// loop mode changes — a `.default`-mode timer pauses while the user is
-    /// interacting with another tab's ScrollView or the tab bar's liquid
-    /// glass collapse animation, which is why the mini-player used to
-    /// freeze when not on the Home tab.
+    /// Main refresh loop. When LAN events are subscribed this becomes a
+    /// low-frequency watchdog; otherwise it keeps the historical polling
+    /// cadence so Cloud mode and pre-subscription LAN still stay fresh.
     private var refreshTask: Task<Void, Never>?
     private var positionTask: Task<Void, Never>?
     private var eventSubscriptionTask: Task<Void, Never>?
@@ -106,6 +103,8 @@ final class SonosManager {
     /// `refreshState` ticks (e.g. user scrubbing) doesn't fan out to a
     /// burst of `nowplaying` requests.
     private static let cloudQualityRefreshCooldown: TimeInterval = 15
+    private static let fastRefreshIntervalSeconds = 3
+    private static let lanEventWatchdogRefreshIntervalSeconds = 30
     private static let sonosEventSubscriptionTimeout = 600
     private static let sonosEventServices: [SonosEventService] = [
         .avTransport,
@@ -186,6 +185,12 @@ final class SonosManager {
     enum ConnectionState { case connected, disconnected, reconnecting }
     enum SpeakerGroupDropIntent: Equatable { case reorderBefore, merge, reorderAfter }
     enum SpeakerGroupReorderPlacement: Equatable { case before, after }
+
+    struct AutoRefreshPlan: Equatable {
+        var refreshState: Bool
+        var refreshGroups: Bool
+        var sleepSeconds: Int
+    }
 
     var isPlaying: Bool { transportState == .playing }
     var isConfigured: Bool { selectedSpeaker != nil }
@@ -2352,6 +2357,33 @@ final class SonosManager {
 
     private var groupRefreshCounter = 0
 
+    static func autoRefreshPlan(
+        transportBackend: TransportBackend,
+        hasLANEventSubscriptions: Bool,
+        cycle: Int
+    ) -> AutoRefreshPlan {
+        if transportBackend == .lan && hasLANEventSubscriptions {
+            return AutoRefreshPlan(
+                refreshState: true,
+                refreshGroups: true,
+                sleepSeconds: lanEventWatchdogRefreshIntervalSeconds
+            )
+        }
+
+        let refreshGroups = !cycle.isMultiple(of: 2)
+        let refreshState = transportBackend != .cloud || cycle.isMultiple(of: 2)
+        return AutoRefreshPlan(
+            refreshState: refreshState,
+            refreshGroups: refreshGroups,
+            sleepSeconds: fastRefreshIntervalSeconds
+        )
+    }
+
+    private var hasActiveLANEventSubscriptions: Bool {
+        transportBackend == .lan
+            && eventSubscriptions.subscription(for: .avTransport) != nil
+    }
+
     func startAutoRefresh() {
         stopAutoRefresh()
 
@@ -2359,22 +2391,19 @@ final class SonosManager {
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                // Cloud polling is rate-limited and higher-latency than LAN —
-                // refresh every other tick in cloud mode for ~6s cadence vs
-                // ~3s on LAN. (Same policy as the old Timer-based loop.)
-                let shouldRefresh = self.transportBackend != .cloud
-                    || self.groupRefreshCounter % 2 == 0
-                if shouldRefresh {
+                let plan = Self.autoRefreshPlan(
+                    transportBackend: self.transportBackend,
+                    hasLANEventSubscriptions: self.hasActiveLANEventSubscriptions,
+                    cycle: self.groupRefreshCounter
+                )
+                if plan.refreshState {
                     await self.refreshState()
                 }
-                self.groupRefreshCounter += 1
-                // `refreshAllGroupStatuses` internally routes to either
-                // UPnP getZoneGroupState (LAN) or SonosCloudAPI.getGroups
-                // (cloud) — both are cheap enough to run every other tick.
-                if self.groupRefreshCounter % 2 == 0 {
+                if plan.refreshGroups {
                     await self.refreshAllGroupStatuses()
                 }
-                try? await Task.sleep(for: .seconds(3))
+                self.groupRefreshCounter += 1
+                try? await Task.sleep(for: .seconds(plan.sleepSeconds))
             }
         }
 
