@@ -156,6 +156,7 @@ export class SonosBridge extends EventEmitter {
   private readonly manager = new SonosManager();
   private readonly snapshots = new Map<string, SonosGroupSnapshot>();
   private readonly refreshSequences = new Map<string, number>();
+  private readonly localQualityLogSignatures = new Map<string, string>();
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
   private periodicHandle: NodeJS.Timeout | null = null;
@@ -363,9 +364,12 @@ export class SonosBridge extends EventEmitter {
 
       if (shouldSuppressTransientNonPlayingSnapshot({
         options,
+        trigger,
         previousSnapshot,
+        trackTitle,
         isPlaying,
         positionSeconds,
+        durationSeconds,
       })) {
         this.log.info(
           {
@@ -375,7 +379,7 @@ export class SonosBridge extends EventEmitter {
             previousTitle: previousSnapshot?.trackTitle ?? null,
             transientTitle: trackTitle,
           },
-          'suppressed transient Sonos skip snapshot',
+          'suppressed transient Sonos transition snapshot',
         );
         return false;
       }
@@ -478,29 +482,49 @@ export class SonosBridge extends EventEmitter {
 
     try {
       const quality = await this.localControl.playbackQuality({ host, playerId });
-      if (quality?.label) {
-        this.log.debug(
-          {
-            host,
-            playerId,
-            serviceName: quality.serviceName ?? null,
-            label: quality.label,
-            lossless: quality.lossless ?? null,
-            immersive: quality.immersive ?? null,
-            bitDepth: quality.bitDepth ?? null,
-            sampleRate: quality.sampleRate ?? null,
-          },
-          'Sonos local Control API playback quality resolved',
-        );
-      }
+      this.logLocalControlPlaybackQuality({ host, playerId, quality });
       return quality;
     } catch (err) {
-      this.log.debug(
-        { err, host, playerId },
-        'Sonos local Control API playback quality unavailable',
-      );
+      this.logLocalControlPlaybackQuality({ host, playerId, err });
       return null;
     }
+  }
+
+  private logLocalControlPlaybackQuality(input: {
+    host: string;
+    playerId: string;
+    quality?: SonosLocalPlaybackQuality | null;
+    err?: unknown;
+  }): void {
+    const status = input.quality?.label ? 'resolved' : input.err ? 'error' : 'missing';
+    const fields = {
+      source: 'relay',
+      action: 'local-control-quality',
+      status,
+      host: input.host,
+      playerId: input.playerId,
+      serviceName: input.quality?.serviceName ?? null,
+      label: input.quality?.label ?? null,
+      lossless: input.quality?.lossless ?? null,
+      immersive: input.quality?.immersive ?? null,
+      bitDepth: input.quality?.bitDepth ?? null,
+      sampleRate: input.quality?.sampleRate ?? null,
+      error: input.err ? errorSummary(input.err) : null,
+    };
+    const signature = JSON.stringify(fields);
+    const key = `${input.host}|${input.playerId}`;
+    if (this.localQualityLogSignatures.get(key) === signature) {
+      this.log.debug(fields, 'Sonos local Control API playback quality unchanged');
+      return;
+    }
+
+    this.localQualityLogSignatures.set(key, signature);
+    this.log.info(
+      fields,
+      status === 'resolved'
+        ? 'Sonos local Control API playback quality resolved'
+        : 'Sonos local Control API playback quality unavailable',
+    );
   }
 
   private async groupMemberCountForCoordinator(coordinator: any, groupId: string): Promise<number> {
@@ -1061,14 +1085,28 @@ function shouldHoldPreviousLiveMetadata(input: {
 
 function shouldSuppressTransientNonPlayingSnapshot(input: {
   options: RefreshSnapshotOptions;
+  trigger: SonosSnapshotChangeTrigger;
   previousSnapshot: SonosGroupSnapshot | undefined;
+  trackTitle: string;
   isPlaying: boolean;
   positionSeconds: number;
+  durationSeconds: number;
 }): boolean {
-  return input.options.suppressTransientNonPlaying === true
-    && input.previousSnapshot?.isPlaying === true
-    && input.isPlaying === false
-    && input.positionSeconds <= 1;
+  if (input.previousSnapshot?.isPlaying !== true) return false;
+  if (input.isPlaying) return false;
+  if (input.positionSeconds > 1) return false;
+  if (input.options.suppressTransientNonPlaying === true) return true;
+  if (input.trigger !== 'sonos-change') return false;
+  if (input.durationSeconds <= 0) return false;
+
+  const previousTitle = normalizedMetadata(input.previousSnapshot.trackTitle);
+  const transientTitle = normalizedMetadata(input.trackTitle);
+  return Boolean(previousTitle && transientTitle && previousTitle !== transientTitle);
+}
+
+function errorSummary(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  return String(err);
 }
 
 function isGenericLiveFallback(value: string | null | undefined): boolean {

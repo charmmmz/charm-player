@@ -206,6 +206,90 @@ test('bridge suppresses transient paused snapshots immediately after skip comman
   assert.equal(bridge.current('192.168.50.25')?.trackTitle, 'Blue Train');
 });
 
+test('bridge suppresses transient paused snapshots during automatic track transitions', async () => {
+  const bridge = testBridge();
+  let transportState = 'PLAYING';
+  let position = positionInfo('Blue Train');
+  const snapshots: Array<{ isPlaying: boolean; title: string }> = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, position);
+  device.Coordinator = device;
+  device.AVTransportService = {
+    GetTransportInfo: () => Promise.resolve({ CurrentTransportState: transportState }),
+    GetPositionInfo: () => Promise.resolve(position),
+  };
+
+  bridge.on('change', snapshot => {
+    snapshots.push({ isPlaying: snapshot.isPlaying, title: snapshot.trackTitle });
+  });
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  transportState = 'PAUSED_PLAYBACK';
+  position = {
+    ...positionInfo('Momentary Transition'),
+    RelTime: '00:00:00',
+  };
+
+  const emitted = await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  assert.equal(emitted, false);
+  assert.deepEqual(snapshots, [{ isPlaying: true, title: 'Blue Train' }]);
+  assert.equal(bridge.current('192.168.50.25')?.isPlaying, true);
+  assert.equal(bridge.current('192.168.50.25')?.trackTitle, 'Blue Train');
+});
+
+test('bridge still emits real pauses for the current track', async () => {
+  const bridge = testBridge();
+  let transportState = 'PLAYING';
+  let position = {
+    ...positionInfo('Blue Train'),
+    RelTime: '00:00:12',
+  };
+  const snapshots: Array<{ isPlaying: boolean; title: string }> = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, position);
+  device.Coordinator = device;
+  device.AVTransportService = {
+    GetTransportInfo: () => Promise.resolve({ CurrentTransportState: transportState }),
+    GetPositionInfo: () => Promise.resolve(position),
+  };
+
+  bridge.on('change', snapshot => {
+    snapshots.push({ isPlaying: snapshot.isPlaying, title: snapshot.trackTitle });
+  });
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  transportState = 'PAUSED_PLAYBACK';
+  position = {
+    ...positionInfo('Blue Train'),
+    RelTime: '00:00:12',
+  };
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  assert.deepEqual(snapshots, [
+    { isPlaying: true, title: 'Blue Train' },
+    { isPlaying: false, title: 'Blue Train' },
+  ]);
+  assert.equal(bridge.current('192.168.50.25')?.isPlaying, false);
+});
+
 test('bridge labels periodic snapshot refreshes for Live Activity calibration pushes', async () => {
   const bridge = testBridge();
   let trigger: string | undefined;
@@ -375,6 +459,30 @@ test('local Control API playback quality maps immersive tracks to Dolby Atmos', 
   assert.equal(snapshot?.audioQualityLabel, 'Dolby Atmos');
 });
 
+test('bridge logs local Control API quality diagnostics when no label is available', async () => {
+  const { logger, lines } = captureLogger();
+  const bridge = new SonosBridge(logger, {
+    localControl: {
+      playbackQuality: async () => null,
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  assert.equal(lines.some(line =>
+    line.includes('"action":"local-control-quality"')
+    && line.includes('"status":"missing"')
+    && line.includes('"host":"192.168.50.25"')
+  ), true);
+});
+
 test('bridge snapshots grouped playback with the coordinator visible member count', async () => {
   const bridge = testBridge();
   const coordinator = playbackDevice({
@@ -522,6 +630,16 @@ function playbackDevice(
 
 function testBridge(): SonosBridge {
   return new SonosBridge(pino({ enabled: false }), { localControl: null });
+}
+
+function captureLogger(): { logger: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  const destination = {
+    write: (line: string) => {
+      lines.push(line);
+    },
+  };
+  return { logger: pino({ level: 'info' }, destination), lines };
 }
 
 function zoneGroup(device: Record<string, unknown>) {

@@ -27,8 +27,8 @@ import {
   type LiveActivityHintRequest,
 } from './liveActivityHints.js';
 import {
+  LiveActivityPushInFlightRegistry,
   shouldForceLiveActivityCalibration,
-  shouldPushLiveActivityUpdate,
 } from './liveActivityPushPolicy.js';
 import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
 
@@ -86,6 +86,7 @@ async function main(): Promise<void> {
   const sonos = new SonosBridge(log);
   await sonos.start(SEED_IP!);
   const liveActivityHints = new LiveActivityHintStore();
+  const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
 
   // ---- snapshot → APNs pipeline ----------------------------------------
   type LiveActivityPushTrigger = SonosSnapshotChangeContext['trigger'] | 'register-initial' | 'app-hint';
@@ -119,7 +120,7 @@ async function main(): Promise<void> {
     const enrichedSnap = hintResult.snapshot;
     const state = await buildLiveActivityContentState(enrichedSnap);
     const hash = hashLiveActivityContentState(state);
-    log.info(
+    log.debug(
       {
         source: 'relay',
         action: 'state-built',
@@ -135,15 +136,15 @@ async function main(): Promise<void> {
 
     // Skip no-op pushes for normal Sonos events. Periodic refreshes are a
     // deliberate low-frequency calibration path for position/timerInterval.
-    const targets = matching.filter(t => shouldPushLiveActivityUpdate(t, hash, { force }));
+    const targets = liveActivityPushesInFlight.acquire(matching, hash, { force });
     if (targets.length === 0) {
-      log.info(
+      log.debug(
         {
           source: 'relay',
           action: 'skip',
           trigger,
           force,
-          reason: 'last-sent-hash-match',
+          reason: 'last-sent-hash-match-or-in-flight',
           groupId: snap.groupId,
           registeredTokens: matching.length,
           hash,
@@ -154,31 +155,35 @@ async function main(): Promise<void> {
       return;
     }
 
-    const result = await apns.pushUpdate(
-      targets.map(t => t.token),
-      state,
-    );
-    for (const t of targets) {
-      tokens.recordSent(t.token, hash);
-    }
-    for (const dead of result.unregistered) tokens.unregister(dead);
+    try {
+      const result = await apns.pushUpdate(
+        targets.map(t => t.token),
+        state,
+      );
+      for (const t of targets) {
+        tokens.recordSent(t.token, hash);
+      }
+      for (const dead of result.unregistered) tokens.unregister(dead);
 
-    log.info(
-      {
-        source: 'relay',
-        action: 'apns-update',
-        trigger,
-        force,
-        groupId: snap.groupId,
-        tokenCount: targets.length,
-        sent: result.sent,
-        failed: result.failed,
-        unregistered: result.unregistered.map(shortToken),
-        hash,
-        state: summarizeLiveActivityState(state),
-      },
-      'live_activity',
-    );
+      log.info(
+        {
+          source: 'relay',
+          action: 'apns-update',
+          trigger,
+          force,
+          groupId: snap.groupId,
+          tokenCount: targets.length,
+          sent: result.sent,
+          failed: result.failed,
+          unregistered: result.unregistered.map(shortToken),
+          hash,
+          state: summarizeLiveActivityState(state),
+        },
+        'live_activity',
+      );
+    } finally {
+      liveActivityPushesInFlight.release(targets, hash);
+    }
   }
 
   sonos.on('change', async (

@@ -159,7 +159,7 @@ export class ApnsClient {
       this.log.error({ err }, 'APNs send threw');
       result.failed = tokens.length;
     }
-    this.log.info(
+    this.log.debug(
       {
         source: 'relay',
         action: 'apns-send-result',
