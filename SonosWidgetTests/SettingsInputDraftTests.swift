@@ -56,4 +56,34 @@ final class MiniPlayerLayoutMetricsTests: XCTestCase {
     func testNonLandscapeCompactMiniPlayerKeepsFullWidth() {
         XCTAssertNil(MiniPlayerLayoutMetrics.maxWidth(isLandscapeCompact: false))
     }
+
+    func testHomeActionsClearSystemAccessoryMiniPlayer() {
+        XCTAssertEqual(
+            MiniPlayerLayoutMetrics.homeActionBottomPadding(
+                isMiniPlayerVisible: true,
+                usesSystemAccessory: true
+            ),
+            66
+        )
+    }
+
+    func testHomeActionsKeepCompactPaddingWhenMiniPlayerIsAlreadyInset() {
+        XCTAssertEqual(
+            MiniPlayerLayoutMetrics.homeActionBottomPadding(
+                isMiniPlayerVisible: true,
+                usesSystemAccessory: false
+            ),
+            16
+        )
+    }
+
+    func testHomeActionsKeepCompactPaddingWhenMiniPlayerIsHidden() {
+        XCTAssertEqual(
+            MiniPlayerLayoutMetrics.homeActionBottomPadding(
+                isMiniPlayerVisible: false,
+                usesSystemAccessory: true
+            ),
+            16
+        )
+    }
 }

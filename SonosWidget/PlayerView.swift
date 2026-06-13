@@ -198,12 +198,7 @@ struct PlayerView: View {
         .overlay(alignment: .bottomTrailing) {
             homeActionZone
                 .padding(.trailing, 20)
-                // The mini-player no longer lives inside this view's bounds —
-                // it's attached above the tab bar via safeAreaInset / the
-                // iOS 26 tab accessory, so the ScrollView's overlay already
-                // bottoms out just above the mini-player. A small breathing
-                // margin is all that's needed.
-                .padding(.bottom, 16)
+                .padding(.bottom, homeActionBottomPadding)
         }
         .toast($homeToastMessage)
         .onAppear {
@@ -348,6 +343,21 @@ struct PlayerView: View {
                         isSeparateZoneTargeted = targeted
                     }
                 }
+        }
+    }
+
+    private var homeActionBottomPadding: CGFloat {
+        MiniPlayerLayoutMetrics.homeActionBottomPadding(
+            isMiniPlayerVisible: manager.isConfigured && !manager.showFullPlayer,
+            usesSystemAccessory: usesSystemMiniPlayerAccessory
+        )
+    }
+
+    private var usesSystemMiniPlayerAccessory: Bool {
+        if #available(iOS 26.0, *) {
+            true
+        } else {
+            false
         }
     }
 
@@ -2381,9 +2391,28 @@ private struct ThumblessSlider: View {
 
 enum MiniPlayerLayoutMetrics {
     static let landscapeCompactMaxWidth: CGFloat = 620
+    static let homeActionDefaultBottomPadding: CGFloat = 16
+    static let systemAccessoryMiniPlayerHeight: CGFloat = 44
+    static let systemAccessoryMiniPlayerBottomGap: CGFloat = 8
+    static let homeActionMiniPlayerGap: CGFloat = 14
+    static let homeActionSystemAccessoryBottomPadding =
+        systemAccessoryMiniPlayerHeight
+        + systemAccessoryMiniPlayerBottomGap
+        + homeActionMiniPlayerGap
 
     static func maxWidth(isLandscapeCompact: Bool) -> CGFloat? {
         isLandscapeCompact ? landscapeCompactMaxWidth : nil
+    }
+
+    static func homeActionBottomPadding(
+        isMiniPlayerVisible: Bool,
+        usesSystemAccessory: Bool
+    ) -> CGFloat {
+        if isMiniPlayerVisible && usesSystemAccessory {
+            homeActionSystemAccessoryBottomPadding
+        } else {
+            homeActionDefaultBottomPadding
+        }
     }
 }
 
