@@ -4,6 +4,35 @@ import SwiftUI
 import WidgetKit
 import ActivityKit
 
+enum LiveActivityArtworkThumbnail {
+    static let maxBytes = 1_200
+
+    private static let candidates: [(edge: CGFloat, quality: CGFloat)] = [
+        (48, 0.50),
+        (42, 0.42),
+        (36, 0.34),
+        (30, 0.28),
+        (24, 0.22)
+    ]
+
+    static func make(from image: UIImage?) -> Data? {
+        guard let image else { return nil }
+
+        for candidate in candidates {
+            let size = CGSize(width: candidate.edge, height: candidate.edge)
+            guard let thumbnail = image.preparingThumbnail(of: size),
+                  let data = thumbnail.jpegData(compressionQuality: candidate.quality)
+            else { continue }
+
+            if data.count <= maxBytes {
+                return data
+            }
+        }
+
+        return nil
+    }
+}
+
 @Observable
 final class SonosManager {
     var speakers: [SonosPlayer] = []
@@ -93,8 +122,8 @@ final class SonosManager {
     private var consecutiveFailures = 0
     private var currentActivity: Activity<SonosActivityAttributes>?
     /// Mirrors the `pushType` we asked for when creating `currentActivity`.
-    /// Used to detect a relay-availability flip and rebuild the activity in
-    /// the new mode (token push vs local update) without leaking the old.
+    /// Used for diagnostics and relay token cleanup only; an existing Live
+    /// Activity keeps being updated locally even if relay availability changes.
     private var currentActivityUsesRelay: Bool = false
     /// Long-lived task draining `Activity.pushTokenUpdates` for the relay.
     /// Cancelled on activity end / mode switch so we don't double-register
@@ -2326,10 +2355,6 @@ final class SonosManager {
     func startAutoRefresh() {
         stopAutoRefresh()
 
-        // Clean up any Live Activities that survived a force-quit.
-        // manageLiveActivity() will recreate one if music is still playing.
-        endAllActivities()
-
         groupRefreshCounter = 0
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -2369,13 +2394,6 @@ final class SonosManager {
                 _ = await self?.probeBackend()
             }
         }
-        // End Live Activity when the app is killed so it doesn't linger on Lock Screen.
-        // Note: willTerminate is NOT guaranteed on force-quit; endAllActivities() on
-        // next launch (above) is the reliable fallback.
-        NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            self?.endAllActivities()
-        }
     }
 
     func stopAutoRefresh() {
@@ -2389,8 +2407,6 @@ final class SonosManager {
             name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.removeObserver(self,
             name: UIApplication.willEnterForegroundNotification, object: nil)
-        NotificationCenter.default.removeObserver(self,
-            name: UIApplication.willTerminateNotification, object: nil)
     }
 
     // MARK: - Background Keepalive for Live Activity
@@ -2618,7 +2634,26 @@ final class SonosManager {
             return
         }
 
-        let shouldKeep = isPlaying || transportState == .paused || transportState == .transitioning
+        // Reattach to an existing activity if the in-memory reference was lost
+        // after a process relaunch. We keep it alive and continue local
+        // updates regardless of whether it was originally local or push-token.
+        if currentActivity == nil {
+            currentActivity = Activity<SonosActivityAttributes>.activities.first
+            if let currentActivity {
+                currentActivityUsesRelay = RelayManager.shared.isAvailable
+                logLiveActivity(action: "reattach", activityID: currentActivity.id,
+                                mode: currentActivityUsesRelay ? "relay-token" : "local")
+            }
+        }
+
+        let now = Date()
+        let shouldKeep = Self.shouldKeepLiveActivity(
+            isPlaying: isPlaying,
+            transportState: transportState,
+            currentActivityExists: currentActivity != nil,
+            playStateLockUntil: SharedStorage.playStateLockUntil,
+            now: now
+        )
         guard shouldKeep else {
             logLiveActivity(action: "stop-request",
                             mode: currentActivityUsesRelay ? "relay-token" : "local",
@@ -2627,37 +2662,15 @@ final class SonosManager {
             return
         }
 
-        // Reattach to an existing activity if the in-memory reference was lost (app relaunch).
-        if currentActivity == nil {
-            currentActivity = Activity<SonosActivityAttributes>.activities.first
-            if let currentActivity {
-                logLiveActivity(action: "reattach", activityID: currentActivity.id,
-                                mode: currentActivityUsesRelay ? "relay-token" : "local")
-            }
-        }
-
         let useRelay = RelayManager.shared.isAvailable
-
-        // If the relay just came online (or just went away) but we already
-        // own a Live Activity created in the *other* mode, end it. The
-        // create-path below will then build a fresh one in the right mode.
-        if let _ = currentActivity, currentActivityUsesRelay != useRelay {
-            logLiveActivity(action: "recreate-request",
-                            mode: currentActivityUsesRelay ? "relay-token" : "local",
-                            reason: "relay-availability-changed",
-                            extra: ["newRelayAvailable=\(useRelay)"])
-            stopLiveActivity()
-        }
 
         if currentActivity == nil {
             // No existing activity — create one (always, even during TRANSITIONING).
             let state = makeActivityState()
             let attrs = SonosActivityAttributes(speakerName: speaker.name)
             // `staleDate` is refreshed on every `update()` below so an alive
-            // app keeps the activity fresh indefinitely. After force-quit the
-            // app stops refreshing, this date eventually passes, and iOS
-            // marks the activity stale (greyed out) and dismisses it. Without
-            // a stale date force-quit Live Activities can linger for hours.
+            // app keeps the activity fresh indefinitely. If all writers stop,
+            // iOS can age the activity out without us actively killing it.
             let content = ActivityContent(state: state, staleDate: Self.liveActivityStaleDate())
 
             // First try the user's preferred mode. If that's `.token` (relay
@@ -2700,6 +2713,7 @@ final class SonosManager {
                 currentActivity = activity
                 currentActivityUsesRelay = false
                 liveActivityRelayWriterReady = false
+                SharedStorage.liveActivityRelayPushToken = nil
                 logLiveActivity(action: "create", activityID: activity.id, mode: "local",
                                 state: state, extra: ["speaker=\(Self.liveActivityLogValue(speaker.name))"])
             } catch {
@@ -2722,6 +2736,18 @@ final class SonosManager {
             logLiveActivity(action: "skip-update", activityID: currentActivity?.id,
                             mode: currentActivityUsesRelay ? "relay-token" : "local",
                             reason: "transitioning")
+            return
+        }
+
+        guard !Self.shouldSkipLiveActivityContentUpdateDuringPlayStateLock(
+            isPlaying: isPlaying,
+            transportState: transportState,
+            playStateLockUntil: SharedStorage.playStateLockUntil,
+            now: now
+        ) else {
+            logLiveActivity(action: "skip-update", activityID: currentActivity?.id,
+                            mode: currentActivityUsesRelay ? "relay-token" : "local",
+                            reason: "play-state-lock")
             return
         }
 
@@ -2750,8 +2776,8 @@ final class SonosManager {
     }
 
     /// Roll the Live Activity's stale window forward 60 min on every refresh.
-    /// Force-quit-cleanup: iOS will dismiss the activity once this date
-    /// passes without any further `update()`s extending it.
+    /// This is passive ageing only; explicit `end()` calls are reserved for
+    /// user-driven teardown or confirmed playback stop.
     nonisolated static func liveActivityStaleDate() -> Date {
         Date().addingTimeInterval(60 * 60)
     }
@@ -2760,7 +2786,29 @@ final class SonosManager {
         usesRelay: Bool,
         relayWriterReady: Bool
     ) -> Bool {
-        !usesRelay || !relayWriterReady
+        true
+    }
+
+    nonisolated static func shouldKeepLiveActivity(
+        isPlaying: Bool,
+        transportState: TransportState,
+        currentActivityExists: Bool,
+        playStateLockUntil: Date,
+        now: Date = Date()
+    ) -> Bool {
+        if isPlaying || transportState == .paused || transportState == .transitioning {
+            return true
+        }
+        return currentActivityExists && now < playStateLockUntil
+    }
+
+    nonisolated static func shouldSkipLiveActivityContentUpdateDuringPlayStateLock(
+        isPlaying: Bool,
+        transportState: TransportState,
+        playStateLockUntil: Date,
+        now: Date = Date()
+    ) -> Bool {
+        !isPlaying && transportState == .stopped && now < playStateLockUntil
     }
 
     nonisolated static func shouldRecreateLiveActivityForSpeakerChange(
@@ -2917,10 +2965,13 @@ final class SonosManager {
                         baseURL: url,
                         groupId: groupId,
                         token: hex,
+                        clientId: SharedStorage.liveActivityRelayClientID,
+                        activityId: activity.id,
                         speakerName: speakerName
                     )
                     await MainActor.run {
                         self?.lastRegisteredPushToken = hex
+                        SharedStorage.liveActivityRelayPushToken = hex
                         self?.liveActivityRelayWriterReady = true
                         self?.logLiveActivity(action: "register-token-success",
                                               activityID: activity.id,
@@ -3083,8 +3134,9 @@ final class SonosManager {
     }
 
     func stopLiveActivity() {
-        // Only end activities when we actually have a reference — this prevents
-        // accidentally killing a valid activity on app launch before state is fetched.
+        // Only explicit user teardown or confirmed playback stop should call
+        // this. Mode changes and relay availability changes must keep the
+        // existing Activity alive and update it in place.
         guard let activity = currentActivity else { return }
         currentActivity = nil
         currentActivityUsesRelay = false
@@ -3094,36 +3146,13 @@ final class SonosManager {
         pushTokenTask = nil
         let tokenToUnregister = lastRegisteredPushToken
         lastRegisteredPushToken = nil
+        SharedStorage.liveActivityRelayPushToken = nil
         logLiveActivity(action: "end", activityID: activity.id,
                         mode: "local-or-relay", token: tokenToUnregister)
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
         if let token = tokenToUnregister, let url = RelayManager.shared.url {
             logLiveActivity(action: "unregister-token-request", activityID: activity.id,
                             token: token, relayURL: url)
-            Task { try? await RelayClient.unregisterActivity(baseURL: url, token: token) }
-        }
-    }
-
-    /// End ALL Live Activities regardless of in-memory reference.
-    /// Used on app launch and willTerminate to clean up orphaned activities
-    /// that survived a force-quit (where willTerminate is not guaranteed).
-    func endAllActivities() {
-        currentActivity = nil
-        currentActivityUsesRelay = false
-        liveActivityRelayWriterReady = false
-        lastLiveActivityRelayHintSignature = nil
-        pushTokenTask?.cancel()
-        pushTokenTask = nil
-        let tokenToUnregister = lastRegisteredPushToken
-        lastRegisteredPushToken = nil
-        logLiveActivity(action: "end-all", token: tokenToUnregister,
-                        extra: ["activityCount=\(Activity<SonosActivityAttributes>.activities.count)"])
-        for activity in Activity<SonosActivityAttributes>.activities {
-            logLiveActivity(action: "end-all-activity", activityID: activity.id)
-            Task { await activity.end(nil, dismissalPolicy: .immediate) }
-        }
-        if let token = tokenToUnregister, let url = RelayManager.shared.url {
-            logLiveActivity(action: "unregister-token-request", token: token, relayURL: url)
             Task { try? await RelayClient.unregisterActivity(baseURL: url, token: token) }
         }
     }
@@ -3138,12 +3167,7 @@ final class SonosManager {
             ? anchor.addingTimeInterval(-positionSeconds) : nil
         let endsAt = isPlaying && durationSeconds > 0
             ? anchor.addingTimeInterval(durationSeconds - positionSeconds) : nil
-        // Compress album art to a small thumbnail for embedding in ContentState.
-        // Keep under ~2KB to stay well within ActivityKit's ContentState size limit.
-        let thumbnail: Data? = albumArtImage.flatMap {
-            $0.preparingThumbnail(of: CGSize(width: 60, height: 60))?
-                .jpegData(compressionQuality: 0.65)
-        }
+        let thumbnail = LiveActivityArtworkThumbnail.make(from: albumArtImage)
         return .init(
             trackTitle: trackInfo?.title ?? "Not Playing",
             artist: trackInfo?.artist ?? "—",

@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import SonosWidget
 
 final class LiveActivityUpdatePolicyTests: XCTestCase {
@@ -106,11 +107,109 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
-    func testNasOwnsRelayActivityAfterTokenRegistrationSucceeds() {
-        XCTAssertFalse(
+    func testAppKeepsRelayLiveActivityFreshAfterTokenRegistrationSucceeds() {
+        XCTAssertTrue(
             SonosManager.shouldPerformLocalLiveActivityUpdate(
                 usesRelay: true,
                 relayWriterReady: true
+            )
+        )
+    }
+
+    func testLiveActivityPlaybackStateCanBeReplacedFromFreshTrackInfo() throws {
+        let oldState = SonosActivityAttributes.ContentState(
+            trackTitle: "15 Step",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            isPlaying: true,
+            positionSeconds: 180,
+            durationSeconds: 237,
+            dominantColorHex: "#FFE970",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            endsAt: Date(timeIntervalSince1970: 1_057),
+            albumArtThumbnail: Data([1, 2, 3]),
+            groupMemberCount: 2,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            liveActivityStyleRaw: LiveActivityStyle.widget.rawValue,
+            audioQualityLabel: "Lossless"
+        )
+        let freshTrack = TrackInfo(
+            title: "Nude",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            duration: "00:04:15",
+            position: "00:00:11",
+            source: .appleMusic,
+            audioQuality: AudioQuality(
+                codec: "lossless",
+                sampleRate: 44_100,
+                bitDepth: 16,
+                channels: 2,
+                lossless: true
+            )
+        )
+        let now = Date(timeIntervalSince1970: 2_000)
+
+        let updated = LiveActivityPlaybackStateBuilder.replacing(
+            oldState,
+            with: freshTrack,
+            isPlaying: true,
+            now: now,
+            dominantColorHex: "#123456",
+            liveActivityStyleRaw: LiveActivityStyle.widget.rawValue
+        )
+
+        XCTAssertEqual(updated.trackTitle, "Nude")
+        XCTAssertEqual(updated.artist, "Radiohead")
+        XCTAssertEqual(updated.album, "In Rainbows")
+        XCTAssertEqual(updated.positionSeconds, 11)
+        XCTAssertEqual(updated.durationSeconds, 255)
+        XCTAssertEqual(updated.dominantColorHex, "#123456")
+        XCTAssertNil(updated.albumArtThumbnail)
+        XCTAssertEqual(updated.groupMemberCount, 2)
+        XCTAssertEqual(updated.playbackSourceRaw, PlaybackSource.appleMusic.rawValue)
+        XCTAssertEqual(updated.audioQualityLabel, "Lossless")
+        XCTAssertEqual(updated.startedAt, now.addingTimeInterval(-11))
+        XCTAssertEqual(updated.endsAt, now.addingTimeInterval(244))
+    }
+
+    func testKeepsExistingLiveActivityDuringWidgetTrackSkipLock() {
+        let now = Date()
+
+        XCTAssertTrue(
+            SonosManager.shouldKeepLiveActivity(
+                isPlaying: false,
+                transportState: .stopped,
+                currentActivityExists: true,
+                playStateLockUntil: now.addingTimeInterval(5),
+                now: now
+            )
+        )
+    }
+
+    func testDoesNotCreateLiveActivityForStoppedStateBecauseOfExpiredTrackSkipLock() {
+        let now = Date()
+
+        XCTAssertFalse(
+            SonosManager.shouldKeepLiveActivity(
+                isPlaying: false,
+                transportState: .stopped,
+                currentActivityExists: false,
+                playStateLockUntil: now.addingTimeInterval(-1),
+                now: now
+            )
+        )
+    }
+
+    func testSkipsLiveActivityContentUpdateDuringWidgetTrackSkipLock() {
+        let now = Date()
+
+        XCTAssertTrue(
+            SonosManager.shouldSkipLiveActivityContentUpdateDuringPlayStateLock(
+                isPlaying: false,
+                transportState: .stopped,
+                playStateLockUntil: now.addingTimeInterval(5),
+                now: now
             )
         )
     }
@@ -143,5 +242,97 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
                 nextGroupId: "192.168.50.30"
             )
         )
+    }
+
+    func testLiveActivityArtworkThumbnailKeepsSimpleArtworkUnderPayloadBudget() throws {
+        let image = Self.makeSolidImage(color: .systemBlue)
+
+        let thumbnail = try XCTUnwrap(LiveActivityArtworkThumbnail.make(from: image))
+
+        XCTAssertLessThanOrEqual(thumbnail.count, LiveActivityArtworkThumbnail.maxBytes)
+    }
+
+    func testLiveActivityArtworkThumbnailNeverReturnsOversizedBusyArtwork() {
+        let image = Self.makeBusyArtwork()
+
+        let thumbnail = LiveActivityArtworkThumbnail.make(from: image)
+
+        XCTAssertLessThanOrEqual(thumbnail?.count ?? 0, LiveActivityArtworkThumbnail.maxBytes)
+    }
+
+    func testLiveActivityArtworkPrefersMatchingCachedArtworkOverPayloadThumbnail() {
+        let payloadThumbnail = Data([1, 2, 3])
+        let cachedArtwork = Data([4, 5, 6])
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "15 Step",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            isPlaying: true,
+            positionSeconds: 5,
+            durationSeconds: 237,
+            albumArtThumbnail: payloadThumbnail,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
+        )
+
+        let data = LiveActivityArtworkData.resolve(
+            for: state,
+            cachedTrackTitle: "15 Step",
+            cachedArtist: "Radiohead",
+            cachedAlbum: "In Rainbows",
+            cachedPlaybackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            cachedArtworkData: cachedArtwork
+        )
+
+        XCTAssertEqual(data, cachedArtwork)
+    }
+
+    func testLiveActivityArtworkFallsBackToPayloadThumbnailWhenCachedArtworkIsForAnotherTrack() {
+        let payloadThumbnail = Data([1, 2, 3])
+        let cachedArtwork = Data([4, 5, 6])
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "15 Step",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            isPlaying: true,
+            positionSeconds: 5,
+            durationSeconds: 237,
+            albumArtThumbnail: payloadThumbnail,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
+        )
+
+        let data = LiveActivityArtworkData.resolve(
+            for: state,
+            cachedTrackTitle: "Videotape",
+            cachedArtist: "Radiohead",
+            cachedAlbum: "In Rainbows",
+            cachedPlaybackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            cachedArtworkData: cachedArtwork
+        )
+
+        XCTAssertEqual(data, payloadThumbnail)
+    }
+
+    private static func makeSolidImage(color: UIColor) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 240))
+        return renderer.image { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: CGSize(width: 240, height: 240)))
+        }
+    }
+
+    private static func makeBusyArtwork() -> UIImage {
+        let size = CGSize(width: 240, height: 240)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            for y in stride(from: 0, to: Int(size.height), by: 4) {
+                for x in stride(from: 0, to: Int(size.width), by: 4) {
+                    let hue = CGFloat((x * 31 + y * 17) % 255) / 255
+                    let saturation = CGFloat(65 + ((x + y) % 35)) / 100
+                    let brightness = CGFloat(55 + ((x * y) % 45)) / 100
+                    UIColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1).setFill()
+                    context.fill(CGRect(x: x, y: y, width: 4, height: 4))
+                }
+            }
+        }
     }
 }

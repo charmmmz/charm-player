@@ -898,8 +898,8 @@ struct SonosActivityAttributes: ActivityAttributes {
         var startedAt: Date?
         /// When playing: Date() + remainingSeconds. Pair with startedAt for ProgressView(timerInterval:).
         var endsAt: Date?
-        /// Album art compressed to ≤15KB thumbnail, embedded directly so the Live Activity
-        /// renderer (separate process) doesn't need to hit UserDefaults / app group.
+        /// Album art compressed to a tiny thumbnail so ActivityKit's ContentState
+        /// payload stays below its hard size limit.
         var albumArtThumbnail: Data?
         /// Number of speakers in the current group (1 = standalone).
         var groupMemberCount: Int = 1
@@ -918,9 +918,115 @@ struct SonosActivityAttributes: ActivityAttributes {
     var speakerName: String
 }
 
+enum LiveActivityArtworkData {
+    static func resolve(
+        for state: SonosActivityAttributes.ContentState,
+        cachedTrackTitle: String?,
+        cachedArtist: String?,
+        cachedAlbum: String?,
+        cachedPlaybackSourceRaw: String?,
+        cachedArtworkData: Data?
+    ) -> Data? {
+        guard state.playbackSource != .tv else { return nil }
+        guard let cachedArtworkData, !cachedArtworkData.isEmpty else {
+            return state.albumArtThumbnail
+        }
+
+        let stateTitle = normalized(state.trackTitle)
+        let cachedTitle = normalized(cachedTrackTitle)
+        guard !stateTitle.isEmpty,
+              stateTitle != normalized("Not Playing"),
+              stateTitle == cachedTitle else {
+            return state.albumArtThumbnail
+        }
+
+        let stateArtist = normalized(state.artist)
+        let cachedArtist = normalized(cachedArtist)
+        guard !stateArtist.isEmpty,
+              stateArtist != normalized("—"),
+              stateArtist != normalized("-"),
+              stateArtist == cachedArtist else {
+            return state.albumArtThumbnail
+        }
+
+        let stateAlbum = normalized(state.album)
+        let cachedAlbum = normalized(cachedAlbum)
+        if !stateAlbum.isEmpty, !cachedAlbum.isEmpty, stateAlbum != cachedAlbum {
+            return state.albumArtThumbnail
+        }
+
+        let stateSource = normalized(state.playbackSourceRaw)
+        let cachedSource = normalized(cachedPlaybackSourceRaw)
+        if !stateSource.isEmpty, !cachedSource.isEmpty, stateSource != cachedSource {
+            return state.albumArtThumbnail
+        }
+
+        return cachedArtworkData
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+    }
+}
+
+enum LiveActivityPlaybackStateBuilder {
+    nonisolated static func replacing(
+        _ current: SonosActivityAttributes.ContentState,
+        with trackInfo: TrackInfo,
+        isPlaying: Bool,
+        now: Date = Date(),
+        dominantColorHex: String?,
+        liveActivityStyleRaw: String?
+    ) -> SonosActivityAttributes.ContentState {
+        let positionSeconds = trackInfo.positionSeconds
+        let durationSeconds = trackInfo.durationSeconds
+        let startedAt = isPlaying && durationSeconds > 0
+            ? now.addingTimeInterval(-positionSeconds)
+            : nil
+        let endsAt = isPlaying && durationSeconds > 0
+            ? now.addingTimeInterval(durationSeconds - positionSeconds)
+            : nil
+        let isTVSource = trackInfo.source == .tv
+
+        return SonosActivityAttributes.ContentState(
+            trackTitle: trackInfo.title,
+            artist: trackInfo.artist,
+            album: trackInfo.album,
+            isPlaying: isPlaying,
+            positionSeconds: positionSeconds,
+            durationSeconds: durationSeconds,
+            dominantColorHex: dominantColorHex,
+            startedAt: startedAt,
+            endsAt: endsAt,
+            albumArtThumbnail: nil,
+            groupMemberCount: current.groupMemberCount,
+            playbackSourceRaw: trackInfo.source.rawValue,
+            soundbarNightMode: isTVSource ? current.soundbarNightMode : nil,
+            soundbarSpeechEnhancementRawLevel: isTVSource ? current.soundbarSpeechEnhancementRawLevel : nil,
+            liveActivityStyleRaw: liveActivityStyleRaw,
+            audioQualityLabel: trackInfo.audioQuality?.label
+                ?? trackInfo.tvFormat?.geekLabel
+                ?? current.audioQualityLabel
+        )
+    }
+}
+
 extension SonosActivityAttributes.ContentState {
     var playbackSource: PlaybackSource {
         playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+    }
+
+    var preferredAlbumArtData: Data? {
+        LiveActivityArtworkData.resolve(
+            for: self,
+            cachedTrackTitle: SharedStorage.cachedTrackTitle,
+            cachedArtist: SharedStorage.cachedArtist,
+            cachedAlbum: SharedStorage.cachedAlbum,
+            cachedPlaybackSourceRaw: SharedStorage.cachedPlaybackSource,
+            cachedArtworkData: SharedStorage.albumArtData
+        )
     }
 
     var isTVSource: Bool {

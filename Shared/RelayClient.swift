@@ -142,6 +142,8 @@ enum RelayClient {
     private struct RegisterBody: Encodable {
         let groupId: String
         let token: String
+        let clientId: String
+        let activityId: String
         let attributes: Attributes
         struct Attributes: Encodable { let speakerName: String }
     }
@@ -150,6 +152,8 @@ enum RelayClient {
         baseURL: URL,
         groupId: String,
         token: String,
+        clientId: String,
+        activityId: String,
         speakerName: String
     ) async throws {
         let url = baseURL.appendingPathComponent("/api/register-activity")
@@ -159,11 +163,85 @@ enum RelayClient {
         let body = RegisterBody(
             groupId: groupId,
             token: token,
+            clientId: clientId,
+            activityId: activityId,
             attributes: .init(speakerName: speakerName)
         )
         request.httpBody = try JSONEncoder().encode(body)
         let (_, response) = try await noProxySession.data(for: request)
         try validate(response)
+    }
+
+    struct RelayPlaybackState: Decodable, Sendable {
+        let groupId: String
+        let speakerName: String?
+        let trackTitle: String
+        let artist: String
+        let album: String
+        let albumArtUri: String?
+        let isPlaying: Bool
+        let playbackSourceRaw: String?
+        let audioQualityLabel: String?
+        let positionSeconds: Double
+        let durationSeconds: Double
+        let groupMemberCount: Int
+
+        var trackInfo: TrackInfo {
+            TrackInfo(
+                title: trackTitle,
+                artist: artist,
+                album: album,
+                albumArtURL: albumArtUri,
+                duration: Self.sonosTime(from: durationSeconds),
+                position: Self.sonosTime(from: positionSeconds),
+                source: playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown,
+                audioQuality: audioQualityLabel.map { AudioQuality(codec: $0) }
+            )
+        }
+
+        private static func sonosTime(from seconds: Double) -> String {
+            let total = max(0, Int(seconds.rounded()))
+            let hours = total / 3600
+            let minutes = (total % 3600) / 60
+            let secs = total % 60
+            return String(format: "%02d:%02d:%02d", hours, minutes, secs)
+        }
+    }
+
+    private struct LiveActivityCommandBody: Encodable {
+        let groupId: String
+        let token: String
+        let command: String
+        let volume: Int?
+    }
+
+    private struct LiveActivityCommandResponse: Decodable {
+        let ok: Bool
+        let state: RelayPlaybackState?
+    }
+
+    static func sendLiveActivityCommand(
+        baseURL: URL,
+        groupId: String,
+        token: String,
+        command: String,
+        volume: Int? = nil
+    ) async throws -> RelayPlaybackState? {
+        let url = baseURL.appendingPathComponent("/api/live-activity-command")
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            LiveActivityCommandBody(
+                groupId: groupId,
+                token: token,
+                command: command,
+                volume: volume
+            )
+        )
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(LiveActivityCommandResponse.self, from: data).state
     }
 
     static func unregisterActivity(baseURL: URL, token: String) async throws {

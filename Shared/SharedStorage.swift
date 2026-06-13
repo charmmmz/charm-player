@@ -293,6 +293,20 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "relayURL") }
     }
 
+    nonisolated static var liveActivityRelayClientID: String {
+        if let existing = defaults.string(forKey: "liveActivityRelayClientID"), !existing.isEmpty {
+            return existing
+        }
+        let value = UUID().uuidString
+        defaults.set(value, forKey: "liveActivityRelayClientID")
+        return value
+    }
+
+    nonisolated static var liveActivityRelayPushToken: String? {
+        get { defaults.string(forKey: "liveActivityRelayPushToken") }
+        set { defaults.set(newValue, forKey: "liveActivityRelayPushToken") }
+    }
+
     // MARK: - NAS LLM Agent
 
     /// Base URL of the optional Python agent (`nas-agent/`), e.g. `http://192.168.50.10:8790`.

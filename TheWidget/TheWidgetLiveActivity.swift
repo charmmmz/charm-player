@@ -14,7 +14,7 @@ struct SonosLiveActivity: Widget {
             let islandSource = context.state.playbackSource
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    ArtView(data: context.state.albumArtThumbnail, size: 50, source: islandSource)
+                    ArtView(data: context.state.preferredAlbumArtData, size: 50, source: islandSource)
                         .padding(.leading, 2)
                         .padding(.trailing, 6)
                         .frame(maxHeight: .infinity, alignment: .bottom)
@@ -102,7 +102,7 @@ struct SonosLiveActivity: Widget {
                 }
             } compactLeading: {
                 // Compact/minimal views are static-only per Apple docs — no animation supported.
-                ArtView(data: context.state.albumArtThumbnail, size: 20, source: islandSource)
+                ArtView(data: context.state.preferredAlbumArtData, size: 20, source: islandSource)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             } compactTrailing: {
                 // Compact/minimal regions are static-only — no animation supported by Apple.
@@ -111,7 +111,7 @@ struct SonosLiveActivity: Widget {
                     .foregroundStyle(themeColor(from: context.state.dominantColorHex))
                     .padding(.trailing, 4)
             } minimal: {
-                ArtView(data: context.state.albumArtThumbnail, size: 20, source: islandSource)
+                ArtView(data: context.state.preferredAlbumArtData, size: 20, source: islandSource)
                     .clipShape(Circle())
             }
         }
@@ -148,7 +148,7 @@ private struct ClassicLockScreenView: View {
         VStack(spacing: 6) {
             // ── Single row: art | text | controls ──
             HStack(spacing: 12) {
-                ArtView(data: context.state.albumArtThumbnail, size: 48, source: source)
+                ArtView(data: context.state.preferredAlbumArtData, size: 48, source: source)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(context.state.trackTitle)
@@ -213,7 +213,7 @@ private struct ClassicLockScreenView: View {
                 // music session would otherwise tint the lock screen the
                 // wrong color.
                 if source != .tv,
-                   let data = context.state.albumArtThumbnail,
+                   let data = context.state.preferredAlbumArtData,
                    let img = UIImage(data: data) {
                     Image(uiImage: img)
                         .resizable()
@@ -246,7 +246,7 @@ private struct WidgetCardLockScreenView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                ArtView(data: state.albumArtThumbnail, size: 58, source: source)
+                ArtView(data: state.preferredAlbumArtData, size: 58, source: source)
                     .shadow(color: .black.opacity(0.35), radius: 7, y: 4)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -306,7 +306,7 @@ private struct WidgetTVRemoteLockScreenView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                ArtView(data: state.albumArtThumbnail, size: 50, source: .tv)
+                ArtView(data: state.preferredAlbumArtData, size: 50, source: .tv)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -495,7 +495,7 @@ private struct WidgetLiveActivityBackdrop: View {
     var body: some View {
         ZStack {
             if state.playbackSource != .tv,
-               let data = state.albumArtThumbnail,
+               let data = state.preferredAlbumArtData,
                let img = UIImage(data: data) {
                 Image(uiImage: img)
                     .resizable()
