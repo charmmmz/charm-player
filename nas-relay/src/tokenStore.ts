@@ -32,6 +32,7 @@ export class TokenStore {
 
   register(req: RegisterRequest): TokenEntry {
     const existing = this.tokens.get(req.token);
+    const removed = this.pruneSupersededTokens(req);
     const entry: TokenEntry = {
       ...req,
       registeredAt: existing?.registeredAt ?? new Date().toISOString(),
@@ -39,7 +40,13 @@ export class TokenStore {
     };
     this.tokens.set(req.token, entry);
     void this.flush();
-    this.log.info({ token: shortToken(req.token), groupId: req.groupId }, 'registered');
+    this.log.info({
+      token: shortToken(req.token),
+      groupId: req.groupId,
+      clientId: req.clientId ?? null,
+      activityId: req.activityId ?? null,
+      removed,
+    }, 'registered');
     return entry;
   }
 
@@ -58,6 +65,11 @@ export class TokenStore {
       if (entry.groupId === groupId) out.push(entry);
     }
     return out;
+  }
+
+  hasTokenForGroup(groupId: string, token: string): boolean {
+    const entry = this.tokens.get(token);
+    return entry?.groupId === groupId;
   }
 
   /// Update the cached "last shipped hash" so we can skip no-op pushes. Done
@@ -87,6 +99,25 @@ export class TokenStore {
       }, 100);
     });
     return this.flushPromise;
+  }
+
+  private pruneSupersededTokens(req: RegisterRequest): number {
+    if (!req.clientId || !req.activityId) return 0;
+
+    let removed = 0;
+    for (const [token, entry] of this.tokens.entries()) {
+      if (token === req.token) continue;
+      if (entry.groupId !== req.groupId) continue;
+
+      const isSameActivity = entry.clientId === req.clientId
+        && entry.activityId === req.activityId;
+      const isLegacy = !entry.clientId || !entry.activityId;
+      if (isSameActivity || isLegacy) {
+        this.tokens.delete(token);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 }
 

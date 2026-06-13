@@ -246,6 +246,60 @@ test('bridge suppresses transient paused snapshots during automatic track transi
   assert.equal(bridge.current('192.168.50.25')?.trackTitle, 'Blue Train');
 });
 
+test('bridge schedules a settled refresh after suppressing a transient transition snapshot', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    transitionSettleRefreshMs: 10,
+  });
+  let transportState = 'PLAYING';
+  let position = positionInfo('Blue Train');
+  const snapshots: Array<{ isPlaying: boolean; title: string; trigger: string | undefined }> = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, position);
+  device.Coordinator = device;
+  device.AVTransportService = {
+    GetTransportInfo: () => Promise.resolve({ CurrentTransportState: transportState }),
+    GetPositionInfo: () => Promise.resolve(position),
+  };
+
+  bridge.on('change', (snapshot, context) => {
+    snapshots.push({
+      isPlaying: snapshot.isPlaying,
+      title: snapshot.trackTitle,
+      trigger: context?.trigger,
+    });
+  });
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  transportState = 'PAUSED_PLAYBACK';
+  position = {
+    ...positionInfo('Momentary Transition'),
+    RelTime: '00:00:00',
+  };
+
+  const emitted = await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<boolean>;
+  }).refreshSnapshot(device);
+
+  assert.equal(emitted, false);
+
+  transportState = 'PLAYING';
+  position = positionInfo('Bodysnatchers');
+  await delay(25);
+
+  assert.deepEqual(snapshots, [
+    { isPlaying: true, title: 'Blue Train', trigger: 'sonos-change' },
+    { isPlaying: true, title: 'Bodysnatchers', trigger: 'transition-settle-refresh' },
+  ]);
+  bridge.stop();
+});
+
 test('bridge still emits real pauses for the current track', async () => {
   const bridge = testBridge();
   let transportState = 'PLAYING';
@@ -395,6 +449,32 @@ test('local Control API playback metadata maps lossless and immersive quality la
       },
     },
   })?.label, 'Dolby Atmos');
+});
+
+test('local Control API playback metadata accepts currentItem track quality shape', () => {
+  assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
+    container: {
+      service: { name: 'Apple Music' },
+    },
+    currentItem: {
+      track: {
+        service: { name: 'Apple Music' },
+        quality: {
+          bitDepth: 16,
+          sampleRate: 44_100,
+          lossless: true,
+          immersive: false,
+        },
+      },
+    },
+  }), {
+    label: 'Lossless',
+    serviceName: 'Apple Music',
+    lossless: true,
+    immersive: false,
+    bitDepth: 16,
+    sampleRate: 44_100,
+  });
 });
 
 test('bridge prefers local Control API playback quality over generic track metadata', async () => {
@@ -613,6 +693,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     resolve = innerResolve;
   });
   return { promise, resolve };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function playbackDevice(

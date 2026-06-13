@@ -3,6 +3,9 @@ import { test } from 'node:test';
 
 import {
   LiveActivityPushInFlightRegistry,
+  liveActivityHintDiagnosticLogLevel,
+  liveActivityPushResultLogLevel,
+  shouldPushLiveActivitySnapshotAfterHint,
   shouldPushLiveActivityUpdate,
 } from './liveActivityPushPolicy.js';
 import type { TokenEntry } from './types.js';
@@ -43,6 +46,62 @@ test('Live Activity in-flight registry blocks forced duplicate hash pushes', () 
 
   assert.deepEqual(registry.acquire([token], 'same-hash', { force: true }), [token]);
   assert.deepEqual(registry.acquire([token], 'same-hash', { force: true }), []);
+});
+
+test('Live Activity app hints do not force-push stale mismatched snapshots', () => {
+  assert.equal(
+    shouldPushLiveActivitySnapshotAfterHint('app-hint', {
+      hadHint: true,
+      reason: 'mismatch',
+    }),
+    false,
+  );
+});
+
+test('Live Activity app hints push once the relay snapshot matches', () => {
+  assert.equal(
+    shouldPushLiveActivitySnapshotAfterHint('app-hint', {
+      hadHint: true,
+      reason: 'applied',
+    }),
+    true,
+  );
+});
+
+test('Live Activity Sonos events still push snapshots when an old hint mismatches', () => {
+  assert.equal(
+    shouldPushLiveActivitySnapshotAfterHint('sonos-change', {
+      hadHint: true,
+      reason: 'mismatch',
+    }),
+    true,
+  );
+});
+
+test('Live Activity hint diagnostics are debug-only noise by default', () => {
+  assert.equal(
+    liveActivityHintDiagnosticLogLevel({ hadHint: true, reason: 'applied' }),
+    'debug',
+  );
+  assert.equal(
+    liveActivityHintDiagnosticLogLevel({ hadHint: true, reason: 'mismatch' }),
+    'debug',
+  );
+});
+
+test('Live Activity successful periodic push results are logged at debug level', () => {
+  assert.equal(
+    liveActivityPushResultLogLevel('periodic-refresh', { failed: 0, unregisteredCount: 0 }),
+    'debug',
+  );
+  assert.equal(
+    liveActivityPushResultLogLevel('sonos-change', { failed: 0, unregisteredCount: 0 }),
+    'info',
+  );
+  assert.equal(
+    liveActivityPushResultLogLevel('periodic-refresh', { failed: 1, unregisteredCount: 0 }),
+    'info',
+  );
 });
 
 function tokenEntry(overrides: Partial<TokenEntry> = {}): TokenEntry {

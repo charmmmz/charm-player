@@ -14,3 +14,8 @@ test('ignores noisy health checks but keeps other HTTP auto logs enabled', () =>
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/cs2/status' }), false);
   assert.equal(shouldIgnoreHttpAutoLog({ url: undefined }), false);
 });
+
+test('ignores frequent Live Activity hint posts from HTTP auto logging', () => {
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-hints' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-hints?source=app' }), true);
+});

@@ -1,4 +1,7 @@
+import type { LiveActivityHintApplyDiagnostic } from './liveActivityHints.js';
 import type { SonosGroupSnapshot, TokenEntry } from './types.js';
+
+export type LiveActivityLogLevel = 'debug' | 'info';
 
 export interface LiveActivityPushDecisionOptions {
   force?: boolean;
@@ -41,4 +44,27 @@ export class LiveActivityPushInFlightRegistry {
 
 export function shouldForceLiveActivityCalibration(snap: SonosGroupSnapshot): boolean {
   return snap.isPlaying && snap.durationSeconds > 0;
+}
+
+export function shouldPushLiveActivitySnapshotAfterHint(
+  trigger: string,
+  diagnostic: Pick<LiveActivityHintApplyDiagnostic, 'hadHint' | 'reason'>,
+): boolean {
+  return !(trigger === 'app-hint' && diagnostic.hadHint && diagnostic.reason === 'mismatch');
+}
+
+export function liveActivityHintDiagnosticLogLevel(
+  _diagnostic: Pick<LiveActivityHintApplyDiagnostic, 'hadHint' | 'reason'>,
+): LiveActivityLogLevel {
+  return 'debug';
+}
+
+export function liveActivityPushResultLogLevel(
+  trigger: string,
+  result: { failed: number; unregisteredCount: number },
+): LiveActivityLogLevel {
+  if (trigger === 'periodic-refresh' && result.failed === 0 && result.unregisteredCount === 0) {
+    return 'debug';
+  }
+  return 'info';
 }

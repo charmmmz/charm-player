@@ -28,7 +28,10 @@ import {
 } from './liveActivityHints.js';
 import {
   LiveActivityPushInFlightRegistry,
+  liveActivityHintDiagnosticLogLevel,
+  liveActivityPushResultLogLevel,
   shouldForceLiveActivityCalibration,
+  shouldPushLiveActivitySnapshotAfterHint,
 } from './liveActivityPushPolicy.js';
 import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
 
@@ -117,6 +120,21 @@ async function main(): Promise<void> {
 
     const hintResult = liveActivityHints.applyWithDiagnostics(snap);
     logLiveActivityHintDiagnostic(trigger, snap.groupId, hintResult.diagnostic);
+    if (!shouldPushLiveActivitySnapshotAfterHint(trigger, hintResult.diagnostic)) {
+      log.info(
+        {
+          source: 'relay',
+          action: 'skip',
+          trigger,
+          force,
+          reason: 'hint-mismatch-stale-snapshot',
+          groupId: snap.groupId,
+          snapshot: summarizeSnapshot(snap),
+        },
+        'live_activity',
+      );
+      return;
+    }
     const enrichedSnap = hintResult.snapshot;
     const state = await buildLiveActivityContentState(enrichedSnap);
     const hash = hashLiveActivityContentState(state);
@@ -165,7 +183,11 @@ async function main(): Promise<void> {
       }
       for (const dead of result.unregistered) tokens.unregister(dead);
 
-      log.info(
+      const logLevel = liveActivityPushResultLogLevel(trigger, {
+        failed: result.failed,
+        unregisteredCount: result.unregistered.length,
+      });
+      log[logLevel](
         {
           source: 'relay',
           action: 'apns-update',
@@ -263,6 +285,8 @@ async function main(): Promise<void> {
         action: 'register-request',
         groupId: body.groupId,
         token: shortToken(body.token),
+        clientId: body.clientId ?? null,
+        activityId: body.activityId ?? null,
         speakerName: body.attributes?.speakerName ?? null,
       },
       'live_activity',
@@ -270,6 +294,8 @@ async function main(): Promise<void> {
     tokens.register({
       groupId: body.groupId,
       token: body.token,
+      clientId: body.clientId,
+      activityId: body.activityId,
       attributes: body.attributes,
     });
 
@@ -381,6 +407,67 @@ async function main(): Promise<void> {
     res.json({ ok: true, pushed: Boolean(snap) });
   });
 
+  app.post('/api/live-activity-command', async (req, res) => {
+    const groupId = typeof req.body?.groupId === 'string' ? req.body.groupId : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const command = typeof req.body?.command === 'string' ? req.body.command : '';
+    if (!groupId || !token || !command) {
+      res.status(400).json({ ok: false, error: 'groupId, token, and command are required' });
+      return;
+    }
+    if (!tokens.hasTokenForGroup(groupId, token)) {
+      res.status(401).json({ ok: false, error: 'unregistered_live_activity_token' });
+      return;
+    }
+
+    try {
+      switch (command) {
+      case 'play':
+        await sonos.play(groupId);
+        break;
+      case 'pause':
+        await sonos.pause(groupId);
+        break;
+      case 'next':
+        await sonos.next(groupId);
+        break;
+      case 'previous':
+        await sonos.previous(groupId);
+        break;
+      case 'setGroupVolume': {
+        const volume = req.body?.volume;
+        if (typeof volume !== 'number' || Number.isNaN(volume)) {
+          res.status(400).json({ ok: false, error: 'volume must be a number' });
+          return;
+        }
+        await sonos.setGroupVolume(groupId, volume);
+        break;
+      }
+      default:
+        res.status(400).json({ ok: false, error: 'unsupported_command' });
+        return;
+      }
+
+      const snap = sonos.current(groupId);
+      log.info(
+        {
+          source: 'relay',
+          action: 'command',
+          command,
+          groupId,
+          token: shortToken(token),
+          snapshot: snap ? summarizeSnapshot(snap) : null,
+        },
+        'live_activity',
+      );
+      res.json({ ok: true, state: snap ? snapshotJson(snap) : null });
+    } catch (err) {
+      const msg = String(err);
+      log.warn({ err, command, groupId, token: shortToken(token) }, 'Live Activity command failed');
+      res.status(msg.includes('unknown_group') ? 404 : 500).json({ ok: false, error: msg });
+    }
+  });
+
   app.delete('/api/register-activity/:token', (req, res) => {
     const ok = tokens.unregister(req.params.token);
     log.info(
@@ -430,6 +517,24 @@ function summarizeSnapshot(snap: SonosGroupSnapshot): Record<string, unknown> {
   };
 }
 
+function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> {
+  return {
+    groupId: snap.groupId,
+    speakerName: snap.speakerName,
+    trackTitle: snap.trackTitle,
+    artist: snap.artist,
+    album: snap.album,
+    albumArtUri: snap.albumArtUri,
+    isPlaying: snap.isPlaying,
+    playbackSourceRaw: snap.playbackSourceRaw ?? null,
+    audioQualityLabel: snap.audioQualityLabel ?? null,
+    positionSeconds: snap.positionSeconds,
+    durationSeconds: snap.durationSeconds,
+    groupMemberCount: snap.groupMemberCount,
+    sampledAt: snap.sampledAt.toISOString(),
+  };
+}
+
 function summarizeLiveActivityState(state: LiveActivityContentState): Record<string, unknown> {
   return {
     trackTitle: state.trackTitle,
@@ -454,7 +559,8 @@ function logLiveActivityHintDiagnostic(
   diagnostic: LiveActivityHintApplyDiagnostic,
 ): void {
   if (!diagnostic.hadHint) return;
-  log.info(
+  const logLevel = liveActivityHintDiagnosticLogLevel(diagnostic);
+  log[logLevel](
     {
       source: 'relay',
       action: 'hint-apply',

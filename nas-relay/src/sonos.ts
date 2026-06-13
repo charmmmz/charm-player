@@ -7,7 +7,8 @@ import type { SonosGroupSnapshot } from './types.js';
 export type SonosSnapshotChangeTrigger =
   | 'sonos-change'
   | 'periodic-refresh'
-  | 'initial-prime';
+  | 'initial-prime'
+  | 'transition-settle-refresh';
 
 export interface SonosSnapshotChangeContext {
   trigger: SonosSnapshotChangeTrigger;
@@ -28,6 +29,7 @@ export interface SonosLocalControlClient {
 
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
+  transitionSettleRefreshMs?: number;
 }
 
 interface RefreshSnapshotOptions {
@@ -43,12 +45,36 @@ interface SonosLocalPlaybackMetadata {
     name?: string | null;
     id?: string | null;
   } | null;
+  container?: {
+    service?: {
+      name?: string | null;
+      id?: string | null;
+    } | null;
+  } | null;
   track?: {
+    service?: {
+      name?: string | null;
+      id?: string | null;
+    } | null;
     quality?: {
       bitDepth?: number | null;
       sampleRate?: number | null;
       lossless?: boolean | null;
       immersive?: boolean | null;
+    } | null;
+  } | null;
+  currentItem?: {
+    track?: {
+      service?: {
+        name?: string | null;
+        id?: string | null;
+      } | null;
+      quality?: {
+        bitDepth?: number | null;
+        sampleRate?: number | null;
+        lossless?: boolean | null;
+        immersive?: boolean | null;
+      } | null;
     } | null;
   } | null;
 }
@@ -159,6 +185,8 @@ export class SonosBridge extends EventEmitter {
   private readonly localQualityLogSignatures = new Map<string, string>();
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
+  private readonly transitionSettleRefreshMs: number;
+  private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
   private periodicHandle: NodeJS.Timeout | null = null;
 
   constructor(log: Logger, options: SonosBridgeOptions = {}) {
@@ -167,6 +195,7 @@ export class SonosBridge extends EventEmitter {
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
+    this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
   }
 
   async start(seedIp: string): Promise<void> {
@@ -201,6 +230,10 @@ export class SonosBridge extends EventEmitter {
 
   stop(): void {
     if (this.periodicHandle) clearInterval(this.periodicHandle);
+    for (const timer of this.transitionSettleRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.transitionSettleRefreshTimers.clear();
     this.manager.CancelSubscription();
   }
 
@@ -371,7 +404,7 @@ export class SonosBridge extends EventEmitter {
         positionSeconds,
         durationSeconds,
       })) {
-        this.log.info(
+        this.log.debug(
           {
             groupId: resolvedGroupId,
             trigger,
@@ -381,6 +414,7 @@ export class SonosBridge extends EventEmitter {
           },
           'suppressed transient Sonos transition snapshot',
         );
+        this.scheduleTransitionSettleRefresh(coordinator, resolvedGroupId);
         return false;
       }
 
@@ -468,6 +502,20 @@ export class SonosBridge extends EventEmitter {
 
   private isCurrentRefresh(groupId: string, sequence: number): boolean {
     return this.refreshSequences.get(groupId) === sequence;
+  }
+
+  private scheduleTransitionSettleRefresh(device: any, groupId: string): void {
+    if (this.transitionSettleRefreshMs <= 0) return;
+    if (this.transitionSettleRefreshTimers.has(groupId)) return;
+
+    const timer = setTimeout(() => {
+      this.transitionSettleRefreshTimers.delete(groupId);
+      void this.refreshSnapshot(device, 'transition-settle-refresh').catch(err => {
+        this.log.debug({ err, groupId }, 'transition settle refresh failed');
+      });
+    }, this.transitionSettleRefreshMs);
+    timer.unref?.();
+    this.transitionSettleRefreshTimers.set(groupId, timer);
   }
 
   private async localControlPlaybackQuality(
@@ -836,7 +884,8 @@ function audioQualityLabelFromProtocolInfo(input: {
 export function localPlaybackQualityFromPlaybackMetadata(
   metadata: SonosLocalPlaybackMetadata,
 ): SonosLocalPlaybackQuality | null {
-  const quality = metadata.track?.quality;
+  const track = metadata.currentItem?.track ?? metadata.track;
+  const quality = track?.quality;
   if (!quality) return null;
 
   const bitDepth = positiveNumber(quality.bitDepth);
@@ -851,7 +900,11 @@ export function localPlaybackQualityFromPlaybackMetadata(
 
   return {
     label,
-    serviceName: firstObjectString(metadata.service?.name),
+    serviceName: firstObjectString(
+      track?.service?.name,
+      metadata.service?.name,
+      metadata.container?.service?.name,
+    ),
     lossless: quality.lossless ?? null,
     immersive: quality.immersive ?? null,
     bitDepth,
@@ -1096,12 +1149,16 @@ function shouldSuppressTransientNonPlayingSnapshot(input: {
   if (input.isPlaying) return false;
   if (input.positionSeconds > 1) return false;
   if (input.options.suppressTransientNonPlaying === true) return true;
-  if (input.trigger !== 'sonos-change') return false;
+  if (!isTransitionSuppressibleTrigger(input.trigger)) return false;
   if (input.durationSeconds <= 0) return false;
 
   const previousTitle = normalizedMetadata(input.previousSnapshot.trackTitle);
   const transientTitle = normalizedMetadata(input.trackTitle);
   return Boolean(previousTitle && transientTitle && previousTitle !== transientTitle);
+}
+
+function isTransitionSuppressibleTrigger(trigger: SonosSnapshotChangeTrigger): boolean {
+  return trigger === 'sonos-change' || trigger === 'transition-settle-refresh';
 }
 
 function errorSummary(err: unknown): string {
