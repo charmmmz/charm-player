@@ -312,6 +312,88 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertEqual(data, payloadThumbnail)
     }
 
+    func testLiveActivityCompactArtworkPrefersPayloadThumbnailOverMatchingCachedArtwork() {
+        let payloadThumbnail = Data([1, 2, 3])
+        let cachedArtwork = Data([4, 5, 6])
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Details In the Fabric",
+            artist: "Jason Mraz",
+            album: "We Sing. We Dance. We Steal Things.",
+            isPlaying: true,
+            positionSeconds: 5,
+            durationSeconds: 237,
+            albumArtThumbnail: payloadThumbnail,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
+        )
+
+        let data = LiveActivityArtworkData.resolveCompact(
+            for: state,
+            cachedTrackTitle: "Details In the Fabric",
+            cachedArtist: "Jason Mraz",
+            cachedAlbum: "We Sing. We Dance. We Steal Things.",
+            cachedPlaybackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            cachedArtworkData: cachedArtwork
+        )
+
+        XCTAssertEqual(data, payloadThumbnail)
+    }
+
+    func testLiveActivityCompactArtworkFallsBackToMatchingCachedArtworkWhenPayloadIsMissing() {
+        let cachedArtwork = Data([4, 5, 6])
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Details In the Fabric",
+            artist: "Jason Mraz",
+            album: "We Sing. We Dance. We Steal Things.",
+            isPlaying: true,
+            positionSeconds: 5,
+            durationSeconds: 237,
+            albumArtThumbnail: nil,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
+        )
+
+        let data = LiveActivityArtworkData.resolveCompact(
+            for: state,
+            cachedTrackTitle: "Details In the Fabric",
+            cachedArtist: "Jason Mraz",
+            cachedAlbum: "We Sing. We Dance. We Steal Things.",
+            cachedPlaybackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            cachedArtworkData: cachedArtwork
+        )
+
+        XCTAssertEqual(data, cachedArtwork)
+    }
+
+    func testLiveActivityPlaybackLayoutMetricsStayStableAcrossPlayState() {
+        var playing = SonosActivityAttributes.ContentState(
+            trackTitle: "Music For a Sushi Restaurant",
+            artist: "Harry Styles",
+            album: "Harry's House",
+            isPlaying: true,
+            positionSeconds: 42,
+            durationSeconds: 193,
+            startedAt: Date(timeIntervalSince1970: 2_000),
+            endsAt: Date(timeIntervalSince1970: 2_151),
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
+        )
+        var paused = playing
+        paused.isPlaying = false
+        paused.startedAt = nil
+        paused.endsAt = nil
+
+        XCTAssertEqual(
+            LiveActivityLayoutMetrics.progressHeight(for: playing),
+            LiveActivityLayoutMetrics.progressHeight(for: paused)
+        )
+        XCTAssertEqual(LiveActivityLayoutMetrics.progressHeight(for: playing), 12)
+        XCTAssertEqual(
+            LiveActivityLayoutMetrics.waveformWidth(barCount: 3),
+            9,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(LiveActivityLayoutMetrics.transportButtonSlotWidth, 24)
+        XCTAssertEqual(LiveActivityLayoutMetrics.regularTransportClusterWidth, 116)
+    }
+
     private static func makeSolidImage(color: UIColor) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 240))
         return renderer.image { context in

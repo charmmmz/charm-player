@@ -36,9 +36,11 @@ struct SonosLiveActivity: Widget {
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(accent.opacity(0.8))
                                 .lineLimit(1)
-                            if context.state.isPlaying {
-                                AnimatedWaveform(accent: accent, barCount: 3, height: 7)
-                            }
+                            PlaybackWaveformSlot(
+                                isVisible: context.state.isPlaying,
+                                accent: accent,
+                                barCount: 3,
+                                height: 7)
                         }
                         .padding(.top, 1)
                     }
@@ -74,24 +76,36 @@ struct SonosLiveActivity: Widget {
                                         Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
                                             .font(.title2)
                                             .foregroundStyle(accent)
+                                            .frame(
+                                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                                height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
                                 } else {
                                     Button(intent: PreviousTrackIntent()) {
                                         Image(systemName: "backward.fill")
                                             .font(.callout)
                                             .foregroundStyle(.white.opacity(0.85))
+                                            .frame(
+                                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                                height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
 
                                     Button(intent: PlayPauseIntent()) {
                                         Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
                                             .font(.title2)
                                             .foregroundStyle(accent)
+                                            .frame(
+                                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                                height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
 
                                     Button(intent: NextTrackIntent()) {
                                         Image(systemName: "forward.fill")
                                             .font(.callout)
                                             .foregroundStyle(.white.opacity(0.85))
+                                            .frame(
+                                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                                height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
                                 }
                             }
@@ -102,7 +116,7 @@ struct SonosLiveActivity: Widget {
                 }
             } compactLeading: {
                 // Compact/minimal views are static-only per Apple docs — no animation supported.
-                ArtView(data: context.state.preferredAlbumArtData, size: 20, source: islandSource)
+                ArtView(data: context.state.compactAlbumArtData, size: 20, source: islandSource)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             } compactTrailing: {
                 // Compact/minimal regions are static-only — no animation supported by Apple.
@@ -111,7 +125,7 @@ struct SonosLiveActivity: Widget {
                     .foregroundStyle(themeColor(from: context.state.dominantColorHex))
                     .padding(.trailing, 4)
             } minimal: {
-                ArtView(data: context.state.preferredAlbumArtData, size: 20, source: islandSource)
+                ArtView(data: context.state.compactAlbumArtData, size: 20, source: islandSource)
                     .clipShape(Circle())
             }
         }
@@ -163,9 +177,11 @@ private struct ClassicLockScreenView: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(accent.opacity(0.8))
                             .lineLimit(1)
-                        if context.state.isPlaying {
-                            AnimatedWaveform(accent: accent, barCount: 4, height: 8)
-                        }
+                        PlaybackWaveformSlot(
+                            isVisible: context.state.isPlaying,
+                            accent: accent,
+                            barCount: 4,
+                            height: 8)
                     }
                 }
 
@@ -256,9 +272,11 @@ private struct WidgetCardLockScreenView: View {
                             .tracking(LiveActivityWidgetMeta.tracking)
                             .foregroundStyle(LiveActivityWidgetMeta.textColor)
                             .lineLimit(1)
-                        if state.isPlaying {
-                            AnimatedWaveform(accent: accent, barCount: 3, height: 7)
-                        }
+                        PlaybackWaveformSlot(
+                            isVisible: state.isPlaying,
+                            accent: accent,
+                            barCount: 3,
+                            height: 7)
                     }
 
                     QualityBadgeRow(quality: state.audioQualityLabel)
@@ -315,9 +333,11 @@ private struct WidgetTVRemoteLockScreenView: View {
                             .tracking(LiveActivityWidgetMeta.tracking)
                             .foregroundStyle(LiveActivityWidgetMeta.textColor)
                             .lineLimit(1)
-                        if state.isPlaying {
-                            AnimatedWaveform(accent: accent, barCount: 3, height: 7)
-                        }
+                        PlaybackWaveformSlot(
+                            isVisible: state.isPlaying,
+                            accent: accent,
+                            barCount: 3,
+                            height: 7)
                     }
 
                     QualityBadgeRow(quality: state.audioQualityLabel)
@@ -422,6 +442,9 @@ private struct WidgetTransportControlsView: View {
                     Button(intent: PlayPauseIntent()) {
                         Image(systemName: state.isPlaying ? "stop.fill" : "play.fill")
                             .font(.title3.weight(.semibold))
+                            .frame(
+                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                height: LiveActivityLayoutMetrics.transportHeight)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(accent)
@@ -429,6 +452,9 @@ private struct WidgetTransportControlsView: View {
                     Button(intent: PreviousTrackIntent()) {
                         Image(systemName: "backward.fill")
                             .font(.callout.weight(.semibold))
+                            .frame(
+                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                height: LiveActivityLayoutMetrics.transportHeight)
                     }
                     .buttonStyle(.plain)
 
@@ -436,18 +462,26 @@ private struct WidgetTransportControlsView: View {
                         Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(accent)
+                            .frame(
+                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                height: LiveActivityLayoutMetrics.transportHeight)
                     }
                     .buttonStyle(.plain)
 
                     Button(intent: NextTrackIntent()) {
                         Image(systemName: "forward.fill")
                             .font(.callout.weight(.semibold))
+                            .frame(
+                                width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
+                                height: LiveActivityLayoutMetrics.transportHeight)
                     }
                     .buttonStyle(.plain)
                 }
             }
             .foregroundStyle(.white.opacity(0.88))
-            .frame(minWidth: 92)
+            .frame(
+                width: LiveActivityLayoutMetrics.regularTransportClusterWidth,
+                height: LiveActivityLayoutMetrics.transportHeight)
 
             Spacer(minLength: 0)
 
@@ -617,16 +651,40 @@ private struct AnimatedWaveform: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.08)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .bottom, spacing: 1.5) {
+            HStack(alignment: .bottom, spacing: LiveActivityLayoutMetrics.waveformBarSpacing) {
                 ForEach(0..<barCount, id: \.self) { i in
                     let h = 0.25 + 0.75 * abs(sin(t * 5.0 + Double(i) * 1.3))
                     Capsule()
-                        .frame(width: 2, height: height * h)
+                        .frame(
+                            width: LiveActivityLayoutMetrics.waveformBarWidth,
+                            height: height * h)
                 }
             }
-            .frame(height: height)
+            .frame(
+                width: LiveActivityLayoutMetrics.waveformWidth(barCount: barCount),
+                height: height)
             .foregroundStyle(accent)
         }
+    }
+}
+
+private struct PlaybackWaveformSlot: View {
+    let isVisible: Bool
+    let accent: Color
+    var barCount: Int
+    var height: CGFloat
+
+    var body: some View {
+        Group {
+            if isVisible {
+                AnimatedWaveform(accent: accent, barCount: barCount, height: height)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(
+            width: LiveActivityLayoutMetrics.waveformWidth(barCount: barCount),
+            height: height)
     }
 }
 
@@ -638,36 +696,39 @@ private struct LiveProgressView: View {
     var body: some View {
         let accent = themeColor(from: state.dominantColorHex)
 
-        if state.isLiveSource {
-            HStack(spacing: 6) {
-                Capsule()
-                    .fill(.white.opacity(0.18))
-                    .frame(height: 3)
-                Text("LIVE")
-                    .font(.system(size: 9, weight: .heavy))
-                    .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.78))
-                Capsule()
-                    .fill(.white.opacity(0.18))
-                    .frame(height: 3)
-            }
-            .frame(height: 12)
-        } else if state.isPlaying,
-                  let start = state.startedAt,
-                  let end = state.endsAt,
-                  end > Date() {
-            ProgressView(timerInterval: start...end, countsDown: false) {
-                EmptyView()
-            } currentValueLabel: {
-                EmptyView()
-            }
-            .progressViewStyle(.linear)
-            .tint(accent)
-        } else if state.durationSeconds > 0 {
-            ProgressView(value: state.positionSeconds, total: state.durationSeconds)
+        ZStack {
+            if state.isLiveSource {
+                HStack(spacing: 6) {
+                    Capsule()
+                        .fill(.white.opacity(0.18))
+                        .frame(height: 3)
+                    Text("LIVE")
+                        .font(.system(size: 9, weight: .heavy))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.78))
+                    Capsule()
+                        .fill(.white.opacity(0.18))
+                        .frame(height: 3)
+                }
+            } else if state.isPlaying,
+                      let start = state.startedAt,
+                      let end = state.endsAt,
+                      end > Date() {
+                ProgressView(timerInterval: start...end, countsDown: false) {
+                    EmptyView()
+                } currentValueLabel: {
+                    EmptyView()
+                }
                 .progressViewStyle(.linear)
                 .tint(accent)
+            } else if state.durationSeconds > 0 {
+                ProgressView(value: state.positionSeconds, total: state.durationSeconds)
+                    .progressViewStyle(.linear)
+                    .tint(accent)
+            }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: LiveActivityLayoutMetrics.progressHeight(for: state))
     }
 }
 

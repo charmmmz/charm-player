@@ -885,6 +885,25 @@ enum LiveActivityPresentationStyle: String, Codable, Sendable, Equatable {
     case widgetTVRemote
 }
 
+enum LiveActivityLayoutMetrics {
+    static let progressHeight: CGFloat = 12
+    static let waveformBarWidth: CGFloat = 2
+    static let waveformBarSpacing: CGFloat = 1.5
+    static let transportHeight: CGFloat = 26
+    static let transportButtonSlotWidth: CGFloat = 24
+    static let regularTransportClusterWidth: CGFloat = 116
+
+    static func progressHeight(for _: SonosActivityAttributes.ContentState) -> CGFloat {
+        progressHeight
+    }
+
+    static func waveformWidth(barCount: Int) -> CGFloat {
+        guard barCount > 0 else { return 0 }
+        return CGFloat(barCount) * waveformBarWidth
+            + CGFloat(barCount - 1) * waveformBarSpacing
+    }
+}
+
 struct SonosActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         var trackTitle: String
@@ -919,6 +938,29 @@ struct SonosActivityAttributes: ActivityAttributes {
 }
 
 enum LiveActivityArtworkData {
+    static func resolveCompact(
+        for state: SonosActivityAttributes.ContentState,
+        cachedTrackTitle: String?,
+        cachedArtist: String?,
+        cachedAlbum: String?,
+        cachedPlaybackSourceRaw: String?,
+        cachedArtworkData: Data?
+    ) -> Data? {
+        guard state.playbackSource != .tv else { return nil }
+        if let thumbnail = state.albumArtThumbnail, !thumbnail.isEmpty {
+            return thumbnail
+        }
+
+        return resolve(
+            for: state,
+            cachedTrackTitle: cachedTrackTitle,
+            cachedArtist: cachedArtist,
+            cachedAlbum: cachedAlbum,
+            cachedPlaybackSourceRaw: cachedPlaybackSourceRaw,
+            cachedArtworkData: cachedArtworkData
+        )
+    }
+
     static func resolve(
         for state: SonosActivityAttributes.ContentState,
         cachedTrackTitle: String?,
@@ -1020,6 +1062,17 @@ extension SonosActivityAttributes.ContentState {
 
     var preferredAlbumArtData: Data? {
         LiveActivityArtworkData.resolve(
+            for: self,
+            cachedTrackTitle: SharedStorage.cachedTrackTitle,
+            cachedArtist: SharedStorage.cachedArtist,
+            cachedAlbum: SharedStorage.cachedAlbum,
+            cachedPlaybackSourceRaw: SharedStorage.cachedPlaybackSource,
+            cachedArtworkData: SharedStorage.albumArtData
+        )
+    }
+
+    var compactAlbumArtData: Data? {
+        LiveActivityArtworkData.resolveCompact(
             for: self,
             cachedTrackTitle: SharedStorage.cachedTrackTitle,
             cachedArtist: SharedStorage.cachedArtist,
