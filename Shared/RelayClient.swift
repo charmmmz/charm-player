@@ -139,13 +139,30 @@ enum RelayClient {
     // MARK: - Activity registration
 
     /// Sent in the JSON body of `POST /api/register-activity`.
-    private struct RegisterBody: Encodable {
+    struct ActivityRegistrationBody: Encodable, Sendable {
         let groupId: String
         let token: String
         let clientId: String
         let activityId: String
         let attributes: Attributes
-        struct Attributes: Encodable { let speakerName: String }
+        let liveActivityStyleRaw: String?
+        struct Attributes: Encodable, Sendable { let speakerName: String }
+
+        init(
+            groupId: String,
+            token: String,
+            clientId: String,
+            activityId: String,
+            speakerName: String,
+            liveActivityStyleRaw: String?
+        ) {
+            self.groupId = groupId
+            self.token = token
+            self.clientId = clientId
+            self.activityId = activityId
+            self.attributes = .init(speakerName: speakerName)
+            self.liveActivityStyleRaw = liveActivityStyleRaw
+        }
     }
 
     static func registerActivity(
@@ -154,18 +171,20 @@ enum RelayClient {
         token: String,
         clientId: String,
         activityId: String,
-        speakerName: String
+        speakerName: String,
+        liveActivityStyleRaw: String?
     ) async throws {
         let url = baseURL.appendingPathComponent("/api/register-activity")
         var request = URLRequest(url: url, timeoutInterval: 5)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = RegisterBody(
+        let body = ActivityRegistrationBody(
             groupId: groupId,
             token: token,
             clientId: clientId,
             activityId: activityId,
-            attributes: .init(speakerName: speakerName)
+            speakerName: speakerName,
+            liveActivityStyleRaw: liveActivityStyleRaw
         )
         request.httpBody = try JSONEncoder().encode(body)
         let (_, response) = try await noProxySession.data(for: request)
@@ -253,27 +272,20 @@ enum RelayClient {
         try validate(response)
     }
 
-    // MARK: - Live Activity hints
+    // MARK: - Live Activity preferences
 
-    /// App-supplied metadata that the relay cannot reliably derive from UPnP.
-    /// In particular, Sonos Cloud is the authoritative source for Apple Music
-    /// audio-quality labels, while the NAS relay usually only sees generic
-    /// `audio/mpeg` transport metadata.
-    struct LiveActivityHintBody: Encodable, Sendable {
+    /// App-owned presentation preferences. Playback metadata and audio quality
+    /// are intentionally not sent here; the relay owns those snapshots.
+    struct LiveActivityPreferencesBody: Encodable, Sendable {
         let groupId: String
-        let trackTitle: String?
-        let artist: String?
-        let album: String?
-        let playbackSourceRaw: String?
-        let audioQualityLabel: String?
         let liveActivityStyleRaw: String?
     }
 
-    static func postLiveActivityHint(
+    static func postLiveActivityPreferences(
         baseURL: URL,
-        body: LiveActivityHintBody
+        body: LiveActivityPreferencesBody
     ) async throws {
-        let url = baseURL.appendingPathComponent("/api/live-activity-hints")
+        let url = baseURL.appendingPathComponent("/api/live-activity-preferences")
         var request = URLRequest(url: url, timeoutInterval: 3)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

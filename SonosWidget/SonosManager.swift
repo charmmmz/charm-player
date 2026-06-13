@@ -138,9 +138,9 @@ final class SonosManager {
     /// can temporarily fall back to local updates without losing the old token
     /// needed for unregister cleanup.
     private var liveActivityRelayWriterReady: Bool = false
-    /// Last metadata packet POSTed to the NAS relay for fields it cannot
-    /// reliably derive from UPnP, keyed so polling does not spam the LAN.
-    private var lastLiveActivityRelayHintSignature: String?
+    /// Last Live Activity preference packet POSTed to the NAS relay, keyed so
+    /// polling and repeated style writes do not spam the LAN.
+    private var lastLiveActivityRelayPreferencesSignature: String?
     private var albumArtTask: Task<Void, Never>?
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var backgroundKeepaliveTask: Task<Void, Never>?
@@ -473,7 +473,7 @@ final class SonosManager {
         cachedCloudQuality = nil
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
-        lastLiveActivityRelayHintSignature = nil
+        lastLiveActivityRelayPreferencesSignature = nil
         if previousPlaybackIP != speaker.playbackIP {
             stopEventSubscriptions()
         }
@@ -2834,7 +2834,7 @@ final class SonosManager {
                             "style=\(style.rawValue)",
                             "activityCount=\(activities.count)"
                         ])
-        pushLiveActivityRelayHintIfNeeded(force: true, includeStyleOnly: true)
+        pushLiveActivityRelayPreferencesIfNeeded(force: true)
 
         Task {
             for activity in activities {
@@ -2967,7 +2967,8 @@ final class SonosManager {
                         token: hex,
                         clientId: SharedStorage.liveActivityRelayClientID,
                         activityId: activity.id,
-                        speakerName: speakerName
+                        speakerName: speakerName,
+                        liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
                     )
                     await MainActor.run {
                         self?.lastRegisteredPushToken = hex
@@ -2977,7 +2978,6 @@ final class SonosManager {
                                               activityID: activity.id,
                                               mode: "relay-token", token: hex,
                                               groupId: groupId, relayURL: url)
-                        self?.pushLiveActivityRelayHintIfNeeded(force: true, includeStyleOnly: true)
                     }
                 } catch {
                     await MainActor.run {
@@ -3002,128 +3002,85 @@ final class SonosManager {
         selectedSpeaker?.playbackIP
     }
 
-    private func pushLiveActivityRelayHintIfNeeded(
-        force: Bool = false,
-        includeStyleOnly: Bool = false
-    ) {
+    private func pushLiveActivityRelayPreferencesIfNeeded(force: Bool = false) {
         guard RelayManager.shared.isAvailable else {
-            logLiveActivity(action: "hint-skip",
+            logLiveActivity(action: "preferences-skip",
                             mode: "relay-token",
                             reason: "relay-unavailable",
                             extra: [
-                                "force=\(force)",
-                                "includeStyleOnly=\(includeStyleOnly)"
+                                "force=\(force)"
                             ])
             return
         }
         guard let url = RelayManager.shared.url else {
-            logLiveActivity(action: "hint-skip",
+            logLiveActivity(action: "preferences-skip",
                             mode: "relay-token",
                             reason: "missing-relay-url",
                             extra: [
-                                "force=\(force)",
-                                "includeStyleOnly=\(includeStyleOnly)"
+                                "force=\(force)"
                             ])
             return
         }
         guard let groupId = liveActivityGroupId() else {
-            logLiveActivity(action: "hint-skip",
+            logLiveActivity(action: "preferences-skip",
                             mode: "relay-token",
                             reason: "missing-group-id",
                             relayURL: url,
                             extra: [
-                                "force=\(force)",
-                                "includeStyleOnly=\(includeStyleOnly)"
+                                "force=\(force)"
                             ])
             return
         }
 
-        let qualityLabel = Self.trimmedLiveActivityHintValue(SharedStorage.cachedAudioQualityLabel)
-        guard qualityLabel != nil || includeStyleOnly else {
-            logLiveActivity(action: "hint-skip",
-                            mode: "relay-token",
-                            reason: "no-quality-label",
-                            groupId: groupId,
-                            relayURL: url,
-                            extra: [
-                                "force=\(force)",
-                                "track=\(Self.liveActivityLogValue(trackInfo?.title ?? "nil"))",
-                                "source=\(trackInfo?.source.rawValue ?? "nil")",
-                                "trackQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))",
-                                "cachedQuality=\(Self.liveActivityLogValue(SharedStorage.cachedAudioQualityLabel ?? "nil"))"
-                            ])
-            return
-        }
-
-        let body = RelayClient.LiveActivityHintBody(
+        let body = RelayClient.LiveActivityPreferencesBody(
             groupId: groupId,
-            trackTitle: Self.trimmedLiveActivityHintValue(trackInfo?.title),
-            artist: Self.trimmedLiveActivityHintValue(trackInfo?.artist),
-            album: Self.trimmedLiveActivityHintValue(trackInfo?.album),
-            playbackSourceRaw: Self.trimmedLiveActivityHintValue(trackInfo?.source.rawValue),
-            audioQualityLabel: qualityLabel,
             liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
         )
         let signature = [
             body.groupId,
-            body.trackTitle ?? "",
-            body.artist ?? "",
-            body.album ?? "",
-            body.playbackSourceRaw ?? "",
-            body.audioQualityLabel ?? "",
             body.liveActivityStyleRaw ?? ""
         ].joined(separator: "\u{1F}")
 
-        guard force || signature != lastLiveActivityRelayHintSignature else {
-            logLiveActivity(action: "hint-skip",
+        guard force || signature != lastLiveActivityRelayPreferencesSignature else {
+            logLiveActivity(action: "preferences-skip",
                             mode: "relay-token",
                             reason: "duplicate-signature",
                             groupId: groupId,
                             relayURL: url,
                             extra: [
-                                "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
-                                "source=\(body.playbackSourceRaw ?? "nil")",
-                                "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))",
                                 "style=\(body.liveActivityStyleRaw ?? "nil")"
                             ])
             return
         }
-        lastLiveActivityRelayHintSignature = signature
+        lastLiveActivityRelayPreferencesSignature = signature
 
-        logLiveActivity(action: "hint-post-request",
+        logLiveActivity(action: "preferences-post-request",
                         mode: "relay-token",
                         groupId: groupId,
                         relayURL: url,
                         extra: [
                             "force=\(force)",
-                            "includeStyleOnly=\(includeStyleOnly)",
-                            "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
-                            "artist=\(Self.liveActivityLogValue(body.artist ?? "nil"))",
-                            "album=\(Self.liveActivityLogValue(body.album ?? "nil"))",
-                            "source=\(body.playbackSourceRaw ?? "nil")",
-                            "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))",
                             "style=\(body.liveActivityStyleRaw ?? "nil")"
                         ])
 
         Task { [weak self] in
             do {
-                try await RelayClient.postLiveActivityHint(baseURL: url, body: body)
+                try await RelayClient.postLiveActivityPreferences(baseURL: url, body: body)
                 await MainActor.run {
-                    self?.logLiveActivity(action: "hint-post-success",
+                    self?.logLiveActivity(action: "preferences-post-success",
                                           mode: "relay-token",
                                           groupId: groupId,
                                           relayURL: url,
                                           extra: [
-                                            "track=\(Self.liveActivityLogValue(body.trackTitle ?? "nil"))",
-                                            "quality=\(Self.liveActivityLogValue(body.audioQualityLabel ?? "nil"))"
+                                            "style=\(body.liveActivityStyleRaw ?? "nil")"
                                           ])
                 }
             } catch {
                 await MainActor.run {
-                    if self?.lastLiveActivityRelayHintSignature == signature {
-                        self?.lastLiveActivityRelayHintSignature = nil
+                    if self?.lastLiveActivityRelayPreferencesSignature == signature {
+                        self?.lastLiveActivityRelayPreferencesSignature = nil
                     }
-                    self?.logLiveActivity(action: "hint-post-failed",
+                    self?.logLiveActivity(action: "preferences-post-failed",
                                           mode: "relay-token",
                                           reason: error.localizedDescription,
                                           groupId: groupId,
@@ -3141,7 +3098,7 @@ final class SonosManager {
         currentActivity = nil
         currentActivityUsesRelay = false
         liveActivityRelayWriterReady = false
-        lastLiveActivityRelayHintSignature = nil
+        lastLiveActivityRelayPreferencesSignature = nil
         pushTokenTask?.cancel()
         pushTokenTask = nil
         let tokenToUnregister = lastRegisteredPushToken
@@ -3243,12 +3200,6 @@ final class SonosManager {
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
 
-        pushLiveActivityRelayHintIfNeeded()
-    }
-
-    private static func trimmedLiveActivityHintValue(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     private func logAudioQualityDiagnostic(action: String, extra: [String] = []) {

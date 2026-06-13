@@ -63,6 +63,9 @@ export interface RegisterRequest {
   /// ActivityKit activity id. Used to replace rotated tokens for the same
   /// visible Live Activity instead of accumulating dead tokens forever.
   activityId?: string;
+  /// App-owned Live Activity presentation preference. Playback metadata and
+  /// audio quality are owned by the relay snapshot pipeline.
+  liveActivityStyleRaw?: string | null;
   /// Speaker name carried by `SonosActivityAttributes.speakerName` on iOS.
   /// We log it but the Live Activity itself is created on-device with the
   /// attributes — push updates only carry ContentState, not Attributes.

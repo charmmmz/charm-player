@@ -3,15 +3,34 @@ import XCTest
 
 @MainActor
 final class RelayManagerTests: XCTestCase {
-    func testLiveActivityHintRequestEncodesRelayContract() throws {
-        let body = RelayClient.LiveActivityHintBody(
+    func testLiveActivityRegistrationEncodesStylePreference() throws {
+        let body = RelayClient.ActivityRegistrationBody(
             groupId: "192.168.50.25",
-            trackTitle: "Between the Bars",
-            artist: "Elliott Smith",
-            album: "Either/Or",
-            playbackSourceRaw: "appleMusic",
-            audioQualityLabel: "Lossless",
+            token: "push-token",
+            clientId: "client-1",
+            activityId: "activity-1",
+            speakerName: "Playroom",
             liveActivityStyleRaw: "widget"
+        )
+
+        let data = try JSONEncoder().encode(body)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
+        XCTAssertEqual(json["token"] as? String, "push-token")
+        XCTAssertEqual(json["clientId"] as? String, "client-1")
+        XCTAssertEqual(json["activityId"] as? String, "activity-1")
+        XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "widget")
+        let attributes = try XCTUnwrap(json["attributes"] as? [String: String])
+        XCTAssertEqual(attributes["speakerName"], "Playroom")
+    }
+
+    func testLiveActivityPreferencesRequestOnlyEncodesStyleContract() throws {
+        let body = RelayClient.LiveActivityPreferencesBody(
+            groupId: "192.168.50.25",
+            liveActivityStyleRaw: "classic"
         )
 
         let data = try JSONEncoder().encode(body)
@@ -19,13 +38,10 @@ final class RelayManagerTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: String]
         )
 
-        XCTAssertEqual(json["groupId"], "192.168.50.25")
-        XCTAssertEqual(json["trackTitle"], "Between the Bars")
-        XCTAssertEqual(json["artist"], "Elliott Smith")
-        XCTAssertEqual(json["album"], "Either/Or")
-        XCTAssertEqual(json["playbackSourceRaw"], "appleMusic")
-        XCTAssertEqual(json["audioQualityLabel"], "Lossless")
-        XCTAssertEqual(json["liveActivityStyleRaw"], "widget")
+        XCTAssertEqual(json, [
+            "groupId": "192.168.50.25",
+            "liveActivityStyleRaw": "classic"
+        ])
     }
 
     func testHealthResponseDecodesUnknownHueAmbienceRenderModeAsNil() throws {

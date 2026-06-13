@@ -22,16 +22,13 @@ import {
   hashLiveActivityContentState,
 } from './liveActivityContentState.js';
 import {
-  LiveActivityHintStore,
-  type LiveActivityHintApplyDiagnostic,
-  type LiveActivityHintRequest,
-} from './liveActivityHints.js';
+  LiveActivityPreferenceStore,
+  type LiveActivityPreferencesRequest,
+} from './liveActivityPreferences.js';
 import {
   LiveActivityPushInFlightRegistry,
-  liveActivityHintDiagnosticLogLevel,
   liveActivityPushResultLogLevel,
   shouldForceLiveActivityCalibration,
-  shouldPushLiveActivitySnapshotAfterHint,
 } from './liveActivityPushPolicy.js';
 import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
 
@@ -88,11 +85,11 @@ async function main(): Promise<void> {
 
   const sonos = new SonosBridge(log);
   await sonos.start(SEED_IP!);
-  const liveActivityHints = new LiveActivityHintStore();
+  const liveActivityPreferences = new LiveActivityPreferenceStore();
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
 
   // ---- snapshot → APNs pipeline ----------------------------------------
-  type LiveActivityPushTrigger = SonosSnapshotChangeContext['trigger'] | 'register-initial' | 'app-hint';
+  type LiveActivityPushTrigger = SonosSnapshotChangeContext['trigger'] | 'register-initial';
 
   async function pushLiveActivitySnapshot(
     snap: SonosGroupSnapshot,
@@ -118,24 +115,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const hintResult = liveActivityHints.applyWithDiagnostics(snap);
-    logLiveActivityHintDiagnostic(trigger, snap.groupId, hintResult.diagnostic);
-    if (!shouldPushLiveActivitySnapshotAfterHint(trigger, hintResult.diagnostic)) {
-      log.info(
-        {
-          source: 'relay',
-          action: 'skip',
-          trigger,
-          force,
-          reason: 'hint-mismatch-stale-snapshot',
-          groupId: snap.groupId,
-          snapshot: summarizeSnapshot(snap),
-        },
-        'live_activity',
-      );
-      return;
-    }
-    const enrichedSnap = hintResult.snapshot;
+    const enrichedSnap = liveActivityPreferences.apply(snap);
     const state = await buildLiveActivityContentState(enrichedSnap);
     const hash = hashLiveActivityContentState(state);
     log.debug(
@@ -288,14 +268,20 @@ async function main(): Promise<void> {
         clientId: body.clientId ?? null,
         activityId: body.activityId ?? null,
         speakerName: body.attributes?.speakerName ?? null,
+        liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
       },
       'live_activity',
     );
+    liveActivityPreferences.update({
+      groupId: body.groupId,
+      liveActivityStyleRaw: body.liveActivityStyleRaw,
+    });
     tokens.register({
       groupId: body.groupId,
       token: body.token,
       clientId: body.clientId,
       activityId: body.activityId,
+      liveActivityStyleRaw: body.liveActivityStyleRaw,
       attributes: body.attributes,
     });
 
@@ -304,9 +290,7 @@ async function main(): Promise<void> {
     // next track change.
     const snap = sonos.current(body.groupId);
     if (snap) {
-      const hintResult = liveActivityHints.applyWithDiagnostics(snap);
-      logLiveActivityHintDiagnostic('register-initial', body.groupId, hintResult.diagnostic);
-      const enrichedSnap = hintResult.snapshot;
+      const enrichedSnap = liveActivityPreferences.apply(snap);
       const state = await buildLiveActivityContentState(enrichedSnap);
       const hash = hashLiveActivityContentState(state);
       log.info(
@@ -356,55 +340,29 @@ async function main(): Promise<void> {
     res.json({ ok: true, initialState: null });
   });
 
-  app.post('/api/live-activity-hints', async (req, res) => {
-    const body = req.body as Partial<LiveActivityHintRequest>;
+  app.post('/api/live-activity-preferences', async (req, res) => {
+    const body = req.body as Partial<LiveActivityPreferencesRequest>;
     if (!body.groupId) {
       res.status(400).json({ error: 'groupId is required' });
       return;
     }
 
-    liveActivityHints.update({
+    liveActivityPreferences.update({
       groupId: body.groupId,
-      trackTitle: body.trackTitle,
-      artist: body.artist,
-      album: body.album,
-      playbackSourceRaw: body.playbackSourceRaw,
-      audioQualityLabel: body.audioQualityLabel,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
     });
 
     log.info(
       {
         source: 'relay',
-        action: 'hint-update',
-        trigger: 'app-hint',
+        action: 'preferences-update',
         groupId: body.groupId,
-        trackTitle: body.trackTitle ?? null,
-        artist: body.artist ?? null,
-        playbackSourceRaw: body.playbackSourceRaw ?? null,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
-        audioQualityLabel: body.audioQualityLabel ?? null,
       },
       'live_activity',
     );
 
-    const snap = sonos.current(body.groupId);
-    if (snap) {
-      await pushLiveActivitySnapshot(snap, 'app-hint', { force: true });
-    } else {
-      log.info(
-        {
-          source: 'relay',
-          action: 'hint-apply',
-          trigger: 'app-hint',
-          groupId: body.groupId,
-          reason: 'no-current-snapshot',
-        },
-        'live_activity',
-      );
-    }
-
-    res.json({ ok: true, pushed: Boolean(snap) });
+    res.json({ ok: true });
   });
 
   app.post('/api/live-activity-command', async (req, res) => {
@@ -551,25 +509,6 @@ function summarizeLiveActivityState(state: LiveActivityContentState): Record<str
     hasStartedAt: state.startedAt !== undefined && state.startedAt !== null,
     hasEndsAt: state.endsAt !== undefined && state.endsAt !== null,
   };
-}
-
-function logLiveActivityHintDiagnostic(
-  trigger: string,
-  groupId: string,
-  diagnostic: LiveActivityHintApplyDiagnostic,
-): void {
-  if (!diagnostic.hadHint) return;
-  const logLevel = liveActivityHintDiagnosticLogLevel(diagnostic);
-  log[logLevel](
-    {
-      source: 'relay',
-      action: 'hint-apply',
-      trigger,
-      groupId,
-      ...diagnostic,
-    },
-    'live_activity',
-  );
 }
 
 function base64ByteLength(value: string | null | undefined): number {
