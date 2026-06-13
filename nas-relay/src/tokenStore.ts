@@ -111,8 +111,9 @@ export class TokenStore {
 
       const isSameActivity = entry.clientId === req.clientId
         && entry.activityId === req.activityId;
+      const isSameClient = entry.clientId === req.clientId;
       const isLegacy = !entry.clientId || !entry.activityId;
-      if (isSameActivity || isLegacy) {
+      if (isSameActivity || isSameClient || isLegacy) {
         this.tokens.delete(token);
         removed += 1;
       }

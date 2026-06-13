@@ -2786,7 +2786,7 @@ final class SonosManager {
         usesRelay: Bool,
         relayWriterReady: Bool
     ) -> Bool {
-        true
+        !usesRelay || !relayWriterReady
     }
 
     nonisolated static func shouldKeepLiveActivity(

@@ -48,9 +48,10 @@ export function shouldForceLiveActivityCalibration(snap: SonosGroupSnapshot): bo
 
 export function shouldPushLiveActivitySnapshotAfterHint(
   trigger: string,
-  diagnostic: Pick<LiveActivityHintApplyDiagnostic, 'hadHint' | 'reason'>,
+  _diagnostic: Pick<LiveActivityHintApplyDiagnostic, 'hadHint' | 'reason'>,
 ): boolean {
-  return !(trigger === 'app-hint' && diagnostic.hadHint && diagnostic.reason === 'mismatch');
+  if (trigger === 'app-hint') return false;
+  return true;
 }
 
 export function liveActivityHintDiagnosticLogLevel(

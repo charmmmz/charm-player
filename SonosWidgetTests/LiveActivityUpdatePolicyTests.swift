@@ -107,8 +107,8 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
-    func testAppKeepsRelayLiveActivityFreshAfterTokenRegistrationSucceeds() {
-        XCTAssertTrue(
+    func testAppStopsLocalContentUpdatesAfterRelayTokenRegistrationSucceeds() {
+        XCTAssertFalse(
             SonosManager.shouldPerformLocalLiveActivityUpdate(
                 usesRelay: true,
                 relayWriterReady: true

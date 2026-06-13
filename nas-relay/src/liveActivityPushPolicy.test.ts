@@ -58,13 +58,13 @@ test('Live Activity app hints do not force-push stale mismatched snapshots', () 
   );
 });
 
-test('Live Activity app hints push once the relay snapshot matches', () => {
+test('Live Activity app hints do not become the push trigger even when the relay snapshot matches', () => {
   assert.equal(
     shouldPushLiveActivitySnapshotAfterHint('app-hint', {
       hadHint: true,
       reason: 'applied',
     }),
-    true,
+    false,
   );
 });
 
