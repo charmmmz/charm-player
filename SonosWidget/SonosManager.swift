@@ -241,6 +241,13 @@ final class SonosManager {
         }
     }
 
+    func syncCurrentGroupStatusFromPlaybackState() {
+        guard let idx = currentGroupStatusIndex() else { return }
+        groupStatuses[idx].trackInfo = trackInfo
+        groupStatuses[idx].transportState = transportState
+        groupStatuses[idx].volume = volume
+    }
+
     nonisolated static func sortedSpeakerGroups(
         _ statuses: [SpeakerGroupStatus],
         preferredOrder: [String] = SharedStorage.homeSpeakerGroupOrder
@@ -1461,6 +1468,7 @@ final class SonosManager {
         if let art = albumArtURL {
             trackInfo?.albumArtURL = art
         }
+        syncCurrentGroupStatusFromPlaybackState()
         updateSharedCache()
         Task { await loadAlbumArt() }
     }
@@ -1566,6 +1574,7 @@ final class SonosManager {
             positionSeconds = incomingTrackInfo.positionSeconds
             durationSeconds = incomingTrackInfo.durationSeconds
             positionFetchedAt = Date()
+            syncCurrentGroupStatusFromPlaybackState()
 
             if let queueSnapshot {
                 queue = queueSnapshot.items
@@ -1646,6 +1655,7 @@ final class SonosManager {
                 }
             }
             positionFetchedAt = Date()
+            syncCurrentGroupStatusFromPlaybackState()
 
             consecutiveFailures = 0
             connectionState = .connected
@@ -1717,6 +1727,7 @@ final class SonosManager {
             ensureEventSubscriptionsIfNeeded()
 
             await enrichAudioQualityFromCloud()
+            syncCurrentGroupStatusFromPlaybackState()
             updateSharedCache()
             await loadAlbumArt()
             MusicAmbienceManager.shared.receive(snapshot: musicAmbienceSnapshot())
@@ -1812,6 +1823,7 @@ final class SonosManager {
                 }
             }
             positionFetchedAt = Date()
+            syncCurrentGroupStatusFromPlaybackState()
 
             consecutiveFailures = 0
             connectionState = .connected
