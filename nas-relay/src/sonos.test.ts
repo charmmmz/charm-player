@@ -168,6 +168,44 @@ test('bridge ignores stale snapshot refreshes that complete after a newer refres
   assert.deepEqual(bridge.current('192.168.50.25')?.trackTitle, 'Paused Song');
 });
 
+test('bridge suppresses transient paused snapshots immediately after skip commands', async () => {
+  const bridge = testBridge();
+  let transportState = 'PLAYING';
+  let position = positionInfo('Blue Train');
+  const snapshots: Array<{ isPlaying: boolean; title: string }> = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    Next: async () => {
+      transportState = 'PAUSED_PLAYBACK';
+      position = {
+        ...positionInfo('Momentary Transition'),
+        RelTime: '00:00:00',
+      };
+    },
+  }, position);
+  device.Coordinator = device;
+  device.AVTransportService = {
+    GetTransportInfo: () => Promise.resolve({ CurrentTransportState: transportState }),
+    GetPositionInfo: () => Promise.resolve(position),
+  };
+  (bridge as unknown as { manager: { devices: unknown[] } }).manager.devices = [device];
+
+  bridge.on('change', snapshot => {
+    snapshots.push({ isPlaying: snapshot.isPlaying, title: snapshot.trackTitle });
+  });
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+  await bridge.next('192.168.50.25');
+
+  assert.deepEqual(snapshots, [{ isPlaying: true, title: 'Blue Train' }]);
+  assert.equal(bridge.current('192.168.50.25')?.isPlaying, true);
+  assert.equal(bridge.current('192.168.50.25')?.trackTitle, 'Blue Train');
+});
+
 test('bridge labels periodic snapshot refreshes for Live Activity calibration pushes', async () => {
   const bridge = testBridge();
   let trigger: string | undefined;

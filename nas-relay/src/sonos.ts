@@ -30,6 +30,10 @@ export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
 }
 
+interface RefreshSnapshotOptions {
+  suppressTransientNonPlaying?: boolean;
+}
+
 interface SonosLocalPlayerInfo {
   groupId?: string | null;
 }
@@ -239,13 +243,13 @@ export class SonosBridge extends EventEmitter {
   async next(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
     await coord.Next();
-    await this.refreshSnapshot(coord);
+    await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
   }
 
   async previous(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
     await coord.Previous();
-    await this.refreshSnapshot(coord);
+    await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
   }
 
   async setGroupVolume(groupId: string, volume: number): Promise<void> {
@@ -290,7 +294,8 @@ export class SonosBridge extends EventEmitter {
   private async refreshSnapshot(
     device: any,
     trigger: SonosSnapshotChangeTrigger = 'sonos-change',
-  ): Promise<void> {
+    options: RefreshSnapshotOptions = {},
+  ): Promise<boolean> {
     let groupId: string | null = null;
     let refreshSequence = 0;
     try {
@@ -304,9 +309,10 @@ export class SonosBridge extends EventEmitter {
       }
       groupId = resolvedGroupId;
       refreshSequence = this.beginRefresh(resolvedGroupId);
+      const previousSnapshot = this.snapshots.get(resolvedGroupId);
       const transport = await coordinator.AVTransportService.GetTransportInfo();
       const position = await coordinator.AVTransportService.GetPositionInfo();
-      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return;
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
       const isPlaying = String(transport.CurrentTransportState) === 'PLAYING';
       const trackUri = firstNonEmpty(position.TrackURI, coordinator.CurrentTrackUri, device.CurrentTrackUri);
@@ -320,7 +326,7 @@ export class SonosBridge extends EventEmitter {
         playbackSourceRaw,
       );
       const localQuality = await this.localControlPlaybackQuality(coordinator, device);
-      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return;
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
       if (localQuality?.label) {
         audioQualityLabel = localQuality.label;
       }
@@ -355,7 +361,25 @@ export class SonosBridge extends EventEmitter {
         coordinator.Host ?? device.Host ?? resolvedGroupId,
       );
 
-      const previousSnapshot = this.snapshots.get(resolvedGroupId);
+      if (shouldSuppressTransientNonPlayingSnapshot({
+        options,
+        previousSnapshot,
+        isPlaying,
+        positionSeconds,
+      })) {
+        this.log.info(
+          {
+            groupId: resolvedGroupId,
+            trigger,
+            transportState: String(transport.CurrentTransportState),
+            previousTitle: previousSnapshot?.trackTitle ?? null,
+            transientTitle: trackTitle,
+          },
+          'suppressed transient Sonos skip snapshot',
+        );
+        return false;
+      }
+
       const liveStream = isLiveRadioSnapshot({
         trackUri,
         durationSeconds,
@@ -421,12 +445,14 @@ export class SonosBridge extends EventEmitter {
 
       this.snapshots.set(resolvedGroupId, snapshot);
       this.emit('change', snapshot, { trigger } satisfies SonosSnapshotChangeContext);
+      return true;
     } catch (err) {
-      if (groupId && !this.isCurrentRefresh(groupId, refreshSequence)) return;
+      if (groupId && !this.isCurrentRefresh(groupId, refreshSequence)) return false;
       this.log.warn(
         { err, device: device.Name },
         'snapshot refresh failed — will retry on next event',
       );
+      return false;
     }
   }
 
@@ -1031,6 +1057,18 @@ function shouldHoldPreviousLiveMetadata(input: {
   return !normalizedMetadata(input.trackTitle)
     || isGenericLiveFallback(input.trackTitle)
     || isGenericLiveFallback(input.artist);
+}
+
+function shouldSuppressTransientNonPlayingSnapshot(input: {
+  options: RefreshSnapshotOptions;
+  previousSnapshot: SonosGroupSnapshot | undefined;
+  isPlaying: boolean;
+  positionSeconds: number;
+}): boolean {
+  return input.options.suppressTransientNonPlaying === true
+    && input.previousSnapshot?.isPlaying === true
+    && input.isPlaying === false
+    && input.positionSeconds <= 1;
 }
 
 function isGenericLiveFallback(value: string | null | undefined): boolean {
