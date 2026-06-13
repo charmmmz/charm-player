@@ -63,6 +63,11 @@ final class SonosManager {
     /// freeze when not on the Home tab.
     private var refreshTask: Task<Void, Never>?
     private var positionTask: Task<Void, Never>?
+    private var eventSubscriptionTask: Task<Void, Never>?
+    private var eventDrivenRefreshTask: Task<Void, Never>?
+    private var eventListener: SonosEventListener?
+    private var eventSubscriptions = SonosEventSubscriptionRegistry()
+    private var eventSubscriptionIP: String?
     private var lastAlbumArtURL: String?
     private var lastWidgetTrackTitle: String?
     private var lastEnrichedTrackKey: String?
@@ -72,6 +77,13 @@ final class SonosManager {
     /// `refreshState` ticks (e.g. user scrubbing) doesn't fan out to a
     /// burst of `nowplaying` requests.
     private static let cloudQualityRefreshCooldown: TimeInterval = 15
+    private static let sonosEventSubscriptionTimeout = 600
+    private static let sonosEventServices: [SonosEventService] = [
+        .avTransport,
+        .renderingControl,
+        .zoneGroupTopology,
+        .contentDirectory
+    ]
 
     /// Number of back-to-back `refreshState` failures before we drop the
     /// LAN connection, surface a "pull to refresh" banner, and re-probe
@@ -115,6 +127,7 @@ final class SonosManager {
     /// Cached cloud-sourced audio quality keyed by the current track signature
     /// to survive UPnP refreshes without leaking the badge to same-title tracks.
     private var cachedCloudQuality: (trackKey: String, quality: AudioQuality)?
+    private var localControlGroupIdsByPlayerId: [String: String] = [:]
     private var isEnrichingQuality = false
     /// When set, refreshState() will not overwrite isShuffling/repeatMode until this date.
     private var playModeLockUntil: Date = .distantPast
@@ -394,6 +407,7 @@ final class SonosManager {
     func selectSpeaker(_ speaker: SonosPlayer) async {
         let previousLiveActivityGroupId = liveActivityGroupId()
         let previousSpeakerName = selectedSpeaker?.name
+        let previousPlaybackIP = selectedSpeaker?.playbackIP
         selectedSpeaker = speaker
         syncSpeakerToStorage(speaker)
         let nextLiveActivityGroupId = liveActivityGroupId()
@@ -431,6 +445,9 @@ final class SonosManager {
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
         lastLiveActivityRelayHintSignature = nil
+        if previousPlaybackIP != speaker.playbackIP {
+            stopEventSubscriptions()
+        }
         prefetchTask?.cancel()
         prefetchTask = nil
         queueArtCache.removeAllObjects()
@@ -464,6 +481,7 @@ final class SonosManager {
     func rescan() {
         stopAutoRefresh()
         stopLiveActivity()
+        stopEventSubscriptions()
         speakers.removeAll()
         selectedSpeaker = nil
         SharedStorage.savedSpeakers = []
@@ -1490,12 +1508,16 @@ final class SonosManager {
             if positionInfo.source == .tv {
                 await refreshSoundbarEQ()
             }
-            let incomingTrackInfo = Self.reconciledLANTrackInfo(
+            var incomingTrackInfo = Self.reconciledLANTrackInfo(
                 positionInfo,
                 cachedCloudQuality: cachedCloudQuality,
                 cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
                     && isCloudQualityAuthoritative(positionInfo.source)
             )
+            if let localMetadata = await fetchLocalControlPlaybackMetadata(ip: ip) {
+                incomingTrackInfo = Self.trackInfo(incomingTrackInfo, applyingPlaybackMetadata: localMetadata)
+                cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
+            }
             trackInfo = incomingTrackInfo
             volume = groupVolume
             if let idx = currentGroupStatusIndex() {
@@ -1521,6 +1543,7 @@ final class SonosManager {
             consecutiveFailures = 0
             connectionState = .connected
             errorMessage = nil
+            ensureEventSubscriptionsIfNeeded()
             updateSharedCache()
             managePositionTimer()
             manageLiveActivity()
@@ -1639,12 +1662,16 @@ final class SonosManager {
                 repeatMode = mode.repeat
             }
 
-            let incomingTrackInfo = Self.reconciledLANTrackInfo(
+            var incomingTrackInfo = Self.reconciledLANTrackInfo(
                 positionInfo,
                 cachedCloudQuality: cachedCloudQuality,
                 cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
                     && isCloudQualityAuthoritative(positionInfo.source)
             )
+            if let localMetadata = await fetchLocalControlPlaybackMetadata(ip: pIP) {
+                incomingTrackInfo = Self.trackInfo(incomingTrackInfo, applyingPlaybackMetadata: localMetadata)
+                cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
+            }
             trackInfo = incomingTrackInfo
             positionSeconds = incomingTrackInfo.positionSeconds
             durationSeconds = incomingTrackInfo.durationSeconds
@@ -1653,6 +1680,7 @@ final class SonosManager {
             consecutiveFailures = 0
             connectionState = .connected
             errorMessage = nil
+            ensureEventSubscriptionsIfNeeded()
 
             await enrichAudioQualityFromCloud()
             updateSharedCache()
@@ -1810,6 +1838,9 @@ final class SonosManager {
             let result = await self.runBackendProbe()
             await MainActor.run {
                 self.transportBackend = result
+                if result != .lan {
+                    self.stopEventSubscriptions()
+                }
                 SonosLog.info(.sonosCloud, "transport backend → \(result)")
             }
             return result
@@ -1825,6 +1856,7 @@ final class SonosManager {
     func invalidateBackend() {
         transportBackend = .unknown
         probeTask = nil
+        stopEventSubscriptions()
     }
 
     /// Pure probe logic; always returns the decision without touching state.
@@ -2005,20 +2037,140 @@ final class SonosManager {
     ) -> TrackInfo {
         var info = incoming
 
-        // For streaming services, Sonos Cloud is the source of truth. Reconcile
-        // this in a local copy so SwiftUI never observes the transient
-        // UPnP-without-quality state between awaited polling calls.
-        if cloudQualityIsAuthoritative {
-            info.audioQuality = nil
-        }
-
-        if info.audioQuality == nil,
+        // Local UPnP metadata is allowed to be the first source of truth for
+        // badges: if DIDL/res/protocolInfo confirms FLAC/ALAC/Hi-Res, publish
+        // it immediately. Cloud can still enhance a nil/ambiguous streaming
+        // track later, but it should not be required before a badge appears.
+        if case nil = info.audioQuality,
            let cachedCloudQuality,
            cachedCloudQuality.trackKey == cloudQualityTrackKey(for: info) {
             info.audioQuality = cachedCloudQuality.quality
         }
 
         return info
+    }
+
+    nonisolated static func trackInfo(
+        _ incoming: TrackInfo,
+        applyingPlaybackMetadata metadata: SonosCloudAPI.CloudPlaybackMetadata
+    ) -> TrackInfo {
+        var info = incoming
+        guard let track = metadata.currentItem?.track else { return info }
+
+        if let name = nonEmpty(track.name) {
+            info.title = name
+        }
+        if let artist = nonEmpty(track.artist?.name) {
+            info.artist = artist
+        }
+        if let album = nonEmpty(track.album?.name) {
+            info.album = album
+        }
+        if let imageURL = nonEmpty(track.imageUrl ?? track.album?.imageUrl ?? metadata.container?.imageUrl) {
+            info.albumArtURL = imageURL
+        }
+        if let durationMillis = track.durationMillis, durationMillis > 0 {
+            info.duration = SonosTime.apiFormat(TimeInterval(durationMillis) / 1000.0)
+        }
+
+        let sourceHint = track.service?.name ?? metadata.container?.name
+        let source = PlaybackSource.from(serviceName: sourceHint)
+        if source != .unknown {
+            info.source = source
+        }
+        if let quality = track.quality,
+           let mapped = AudioQuality.from(cloudQuality: quality) {
+            info.audioQuality = mapped
+        }
+        return info
+    }
+
+    private nonisolated static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func fetchLocalControlPlaybackMetadata(ip: String) async -> SonosCloudAPI.CloudPlaybackMetadata? {
+        guard let playerId = localControlPlayerId(forPlaybackIP: ip) else {
+            logAudioQualityDiagnostic(action: "local-control-skip", extra: ["reason=missing-player-id"])
+            return nil
+        }
+
+        if let groupId = localControlGroupIdsByPlayerId[playerId] {
+            do {
+                let metadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
+                logLocalControlMetadata(metadata, groupId: groupId, playerId: playerId)
+                return metadata
+            } catch {
+                localControlGroupIdsByPlayerId[playerId] = nil
+                logAudioQualityDiagnostic(action: "local-control-refresh-group", extra: [
+                    "playerId=\(Self.liveActivityLogValue(playerId))",
+                    "reason=\(Self.liveActivityLogValue(error.localizedDescription))"
+                ])
+            }
+        }
+
+        do {
+            let info = try await SonosLocalControlAPI.playerInfo(ip: ip, playerId: playerId)
+            guard let groupId = info.groupId, !groupId.isEmpty else {
+                logAudioQualityDiagnostic(action: "local-control-skip", extra: [
+                    "reason=missing-group-id",
+                    "playerId=\(Self.liveActivityLogValue(playerId))"
+                ])
+                return nil
+            }
+            localControlGroupIdsByPlayerId[playerId] = groupId
+            let metadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
+            logLocalControlMetadata(metadata, groupId: groupId, playerId: playerId)
+            return metadata
+        } catch {
+            logAudioQualityDiagnostic(action: "local-control-failed", extra: [
+                "playerId=\(Self.liveActivityLogValue(playerId))",
+                "reason=\(Self.liveActivityLogValue(error.localizedDescription))"
+            ])
+            return nil
+        }
+    }
+
+    private func localControlPlayerId(forPlaybackIP ip: String) -> String? {
+        if let coordinator = allSpeakers.first(where: { $0.ipAddress == ip && $0.isCoordinator }) {
+            return coordinator.id
+        }
+        if let selected = selectedSpeaker {
+            if selected.ipAddress == ip {
+                return selected.id
+            }
+            if let groupId = selected.groupId,
+               let coordinator = allSpeakers.first(where: { $0.groupId == groupId && $0.isCoordinator }) {
+                return coordinator.id
+            }
+        }
+        return selectedSpeaker?.id
+    }
+
+    private func cacheAudioQualityIfPresent(_ quality: AudioQuality?, for info: TrackInfo) {
+        guard let quality, let trackKey = Self.cloudQualityTrackKey(for: info) else { return }
+        cachedCloudQuality = (trackKey: trackKey, quality: quality)
+    }
+
+    private func logLocalControlMetadata(
+        _ metadata: SonosCloudAPI.CloudPlaybackMetadata,
+        groupId: String,
+        playerId: String
+    ) {
+        let quality = metadata.currentItem?.track?.quality
+        logAudioQualityDiagnostic(action: "local-control-metadata", extra: [
+            "groupId=\(Self.liveActivityLogValue(groupId))",
+            "playerId=\(Self.liveActivityLogValue(playerId))",
+            "service=\(Self.liveActivityLogValue(metadata.currentItem?.track?.service?.name ?? "nil"))",
+            "rawLossless=\(quality?.lossless.map { String($0) } ?? "nil")",
+            "rawImmersive=\(quality?.immersive.map { String($0) } ?? "nil")",
+            "rawBitDepth=\(quality?.bitDepth.map { String($0) } ?? "nil")",
+            "rawSampleRate=\(quality?.sampleRate.map { String($0) } ?? "nil")"
+        ])
     }
 
     /// Whether Sonos Cloud's `playbackMetadata.quality` is trustworthy for a
@@ -2231,6 +2383,7 @@ final class SonosManager {
         refreshTask = nil
         positionTask?.cancel()
         positionTask = nil
+        stopEventSubscriptions()
         stopBackgroundKeepalive()
         NotificationCenter.default.removeObserver(self,
             name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -2271,6 +2424,167 @@ final class SonosManager {
         guard backgroundTaskID != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTaskID)
         backgroundTaskID = .invalid
+    }
+
+    // MARK: - Sonos Event Subscriptions
+
+    private func ensureEventSubscriptionsIfNeeded() {
+        guard transportBackend == .lan, let ip = playbackIP else {
+            stopEventSubscriptions()
+            return
+        }
+        if eventSubscriptionIP == ip, eventSubscriptionTask != nil {
+            return
+        }
+
+        eventSubscriptionTask?.cancel()
+        eventSubscriptionTask = Task { @MainActor [weak self] in
+            await self?.runEventSubscriptionLoop(ip: ip)
+        }
+    }
+
+    @MainActor
+    private func runEventSubscriptionLoop(ip: String) async {
+        defer {
+            if eventSubscriptionIP == ip {
+                eventSubscriptionTask = nil
+            }
+        }
+
+        do {
+            let callbackURL = try eventCallbackURL()
+            eventSubscriptionIP = ip
+            eventSubscriptions.removeAll()
+
+            while !Task.isCancelled, playbackIP == ip, transportBackend == .lan {
+                await subscribeMissingEventServices(ip: ip, callbackURL: callbackURL)
+                let delay = nextEventRenewalDelay()
+
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    break
+                }
+
+                guard !Task.isCancelled, playbackIP == ip, transportBackend == .lan else { break }
+                await renewEventSubscriptions(ip: ip)
+            }
+        } catch {
+            eventSubscriptionIP = nil
+            eventSubscriptions.removeAll()
+            eventListener?.stop()
+            eventListener = nil
+            SonosLog.debug(.sonosEvents, "subscription listener unavailable: \(error)")
+        }
+    }
+
+    @MainActor
+    private func subscribeMissingEventServices(ip: String, callbackURL: URL) async {
+        for service in Self.sonosEventServices where eventSubscriptions.subscription(for: service) == nil {
+            do {
+                let subscription = try await SonosEventSubscriptionClient.subscribe(
+                    ip: ip,
+                    service: service,
+                    callbackURL: callbackURL,
+                    timeoutSeconds: Self.sonosEventSubscriptionTimeout)
+                guard playbackIP == ip, transportBackend == .lan else { return }
+                eventSubscriptions.replace(subscription)
+                SonosLog.info(.sonosEvents, "subscribed \(service) sid=\(subscription.sid)")
+            } catch {
+                SonosLog.debug(.sonosEvents, "subscribe \(service) failed: \(error)")
+            }
+        }
+    }
+
+    @MainActor
+    private func renewEventSubscriptions(ip: String) async {
+        for subscription in eventSubscriptions.subscriptions {
+            do {
+                let renewed = try await SonosEventSubscriptionClient.renew(
+                    ip: ip,
+                    existingSubscription: subscription,
+                    timeoutSeconds: Self.sonosEventSubscriptionTimeout)
+                guard playbackIP == ip, transportBackend == .lan else { return }
+                eventSubscriptions.replace(renewed)
+                SonosLog.debug(.sonosEvents, "renewed \(renewed.service) sid=\(renewed.sid)")
+            } catch {
+                eventSubscriptions.remove(sid: subscription.sid)
+                SonosLog.debug(.sonosEvents, "renew \(subscription.service) failed: \(error)")
+            }
+        }
+    }
+
+    private func nextEventRenewalDelay() -> Int {
+        let delays = eventSubscriptions.subscriptions.map(\.renewalDelaySeconds)
+        return delays.min() ?? 60
+    }
+
+    private func eventCallbackURL() throws -> URL {
+        if let callbackURL = eventListener?.callbackURL {
+            return callbackURL
+        }
+
+        let listener = eventListener ?? SonosEventListener { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleSonosEvent(notification)
+            }
+        }
+        let callbackURL = try listener.start()
+        eventListener = listener
+        return callbackURL
+    }
+
+    private func stopEventSubscriptions(unsubscribe: Bool = true) {
+        eventSubscriptionTask?.cancel()
+        eventSubscriptionTask = nil
+        eventDrivenRefreshTask?.cancel()
+        eventDrivenRefreshTask = nil
+
+        let ip = eventSubscriptionIP
+        let subscriptions = eventSubscriptions.subscriptions
+        eventSubscriptionIP = nil
+        eventSubscriptions.removeAll()
+        eventListener?.stop()
+        eventListener = nil
+
+        guard unsubscribe, let ip else { return }
+        Task {
+            for subscription in subscriptions {
+                try? await SonosEventSubscriptionClient.unsubscribe(ip: ip, subscription: subscription)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleSonosEvent(_ notification: SonosEventNotification) {
+        guard let service = eventSubscriptions.service(for: notification) else {
+            SonosLog.debug(.sonosEvents, "ignored notification for unknown sid=\(notification.sid)")
+            return
+        }
+
+        SonosLog.debug(.sonosEvents, "notify \(service) seq=\(notification.sequence.map(String.init) ?? "?")")
+        scheduleEventDrivenRefresh(for: service)
+    }
+
+    @MainActor
+    private func scheduleEventDrivenRefresh(for service: SonosEventService) {
+        eventDrivenRefreshTask?.cancel()
+        eventDrivenRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, !Task.isCancelled, self.transportBackend == .lan else { return }
+
+            switch service {
+            case .zoneGroupTopology:
+                await self.reloadTopology()
+            case .contentDirectory:
+                if self.queueLoaded {
+                    await self.loadQueue()
+                }
+                await self.refreshStateLAN()
+            case .avTransport, .renderingControl:
+                await self.refreshStateLAN()
+            }
+        }
     }
 
     // MARK: - Position Timer

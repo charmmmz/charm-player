@@ -33,6 +33,7 @@ enum SonosLog {
         case nowPlaying     = "NowPlaying"
         case parseCloudIds  = "parseCloudIds"
         case navItem        = "NavItem"
+        case sonosEvents    = "SonosEvents"
     }
 
     /// Always logged. Use sparingly for unexpected failures worth reporting.
@@ -94,7 +95,12 @@ enum SonosLog {
     }
 
     #if DEBUG
-    private static let diagnosticCategories: Set<Category> = [.localService]
+    private static let diagnosticCategories: Set<Category> = [
+        .localService,
+        .playback,
+        .station,
+        .soap
+    ]
     private static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
 
     private static func diagnosticFileURL() -> URL? {
