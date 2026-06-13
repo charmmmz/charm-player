@@ -306,7 +306,7 @@ struct SettingsView: View {
             Text("Sonos Account")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Sign in with your Sonos account to enable cloud-powered search, artist / album browsing, and richer playback metadata.")
+                Text("Sonos account sign-in is only needed when you want fallback control away from your local network.")
                 if let error = auth.lastErrorMessage {
                     Text(error)
                         .foregroundStyle(.orange)
@@ -432,7 +432,7 @@ struct SettingsView: View {
                     Label("No Music Services Found",
                           systemImage: "music.note.list")
                         .font(.subheadline.weight(.semibold))
-                    Text("Link a music service in the official Sonos app, then tap the refresh icon.")
+                    Text("Connect your Sonos account to discover linked music services for Browse search.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -447,7 +447,7 @@ struct SettingsView: View {
                           refresh: { Task { await searchManager.forceReprobe() } },
                           isBusy: searchManager.isProbing)
         } footer: {
-            Text("Toggle which linked services appear in Browse search results. Sign-in and account management stay in the official Sonos app.")
+            Text("Toggle which Sonos Cloud-linked services appear in Browse search results. Local network service metadata is used only for playback hints and badges.")
         }
     }
 

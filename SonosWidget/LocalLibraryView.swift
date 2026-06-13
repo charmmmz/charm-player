@@ -499,14 +499,19 @@ struct LocalLibraryView: View {
     }
 
     private func cardContent(_ item: LocalServiceCardItem) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let artworkSize = item.cardArtworkSize
+        return VStack(alignment: .leading, spacing: 6) {
             LocalLibraryArtworkTile(
                 artwork: item.artwork,
                 artworkURL: item.catalogArtworkURL(using: store),
                 fallbackSystemImage: item.fallbackSystemImage,
-                diagnosticLabel: item.artworkDiagnosticLabel
+                diagnosticLabel: item.artworkDiagnosticLabel,
+                artworkContentMode: LocalServiceCardArtworkMetrics.contentMode(
+                    isStationLike: item.isStationLike,
+                    maximumWidth: item.artwork?.maximumWidth,
+                    maximumHeight: item.artwork?.maximumHeight)
             )
-            .frame(width: 138, height: 138)
+            .frame(width: artworkSize.width, height: artworkSize.height)
 
             Text(item.title)
                 .font(.caption.weight(.medium))
@@ -519,17 +524,17 @@ struct LocalLibraryView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 138, alignment: .leading)
+        .frame(width: artworkSize.width, alignment: .leading)
         .opacity(store.isStartingPlayback && store.activePlaybackItemID != item.playbackID ? 0.55 : 1)
         .overlay {
             if store.isStartingPlayback && store.activePlaybackItemID == item.playbackID {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.ultraThinMaterial.opacity(0.88))
-                    .frame(width: 138, height: 138)
+                    .frame(width: artworkSize.width, height: artworkSize.height)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .overlay(alignment: .top) {
                         ProgressView()
-                            .padding(.top, 56)
+                            .padding(.top, max(24, artworkSize.height / 2 - 10))
                     }
             }
         }
@@ -613,7 +618,8 @@ struct LocalLibraryView: View {
                             subtitle: "Artist",
                             detail: nil,
                             fallbackSystemImage: "music.mic",
-                            accessory: .chevron
+                            accessory: .chevron,
+                            artworkStyle: .artistAvatar
                         )
                     }
                     .buttonStyle(.plain)
@@ -625,7 +631,8 @@ struct LocalLibraryView: View {
                         title: artist.name,
                         subtitle: "Artist",
                         detail: nil,
-                        fallbackSystemImage: "music.mic"
+                        fallbackSystemImage: "music.mic",
+                        artworkStyle: .artistAvatar
                     ) {
                         await store.playOnSonos(
                             playable: LocalServiceAppleMusicPlayable.make(artist: artist),
@@ -687,6 +694,7 @@ struct LocalLibraryView: View {
         subtitle: String,
         detail: String?,
         fallbackSystemImage: String,
+        artworkStyle: LocalLibraryArtworkStyle = .square,
         action: @escaping () async -> Void
     ) -> some View {
         Button {
@@ -699,7 +707,8 @@ struct LocalLibraryView: View {
                 subtitle: subtitle,
                 detail: detail,
                 fallbackSystemImage: fallbackSystemImage,
-                accessory: store.isStartingPlayback && store.activePlaybackItemID == id ? .progress : .play
+                accessory: store.isStartingPlayback && store.activePlaybackItemID == id ? .progress : .play,
+                artworkStyle: artworkStyle
             )
         }
         .buttonStyle(.plain)
@@ -714,16 +723,16 @@ struct LocalLibraryView: View {
         detail: String?,
         fallbackSystemImage: String,
         accessory: LocalServiceRowAccessory,
-        diagnosticLabel: String? = nil
+        diagnosticLabel: String? = nil,
+        artworkStyle: LocalLibraryArtworkStyle = .square
     ) -> some View {
         HStack(spacing: 12) {
-            LocalLibraryArtworkTile(
+            rowArtwork(
                 artwork: artwork,
                 artworkURL: artworkURL,
                 fallbackSystemImage: fallbackSystemImage,
-                diagnosticLabel: diagnosticLabel
-            )
-            .frame(width: 56, height: 56)
+                diagnosticLabel: diagnosticLabel,
+                style: artworkStyle)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -765,6 +774,33 @@ struct LocalLibraryView: View {
         .padding(.horizontal)
     }
 
+    @ViewBuilder
+    private func rowArtwork(
+        artwork: Artwork?,
+        artworkURL: URL?,
+        fallbackSystemImage: String,
+        diagnosticLabel: String?,
+        style: LocalLibraryArtworkStyle
+    ) -> some View {
+        switch style {
+        case .square:
+            LocalLibraryArtworkTile(
+                artwork: artwork,
+                artworkURL: artworkURL,
+                fallbackSystemImage: fallbackSystemImage,
+                diagnosticLabel: diagnosticLabel
+            )
+            .frame(width: 56, height: 56)
+        case .artistAvatar:
+            LocalMusicArtistArtwork(
+                artwork: artwork,
+                artworkURL: artworkURL,
+                size: 56,
+                shadow: false
+            )
+        }
+    }
+
     private func statusBanner(_ message: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
@@ -785,6 +821,43 @@ private enum LocalServiceRowAccessory {
     case play
     case chevron
     case progress
+}
+
+private enum LocalLibraryArtworkStyle {
+    case square
+    case artistAvatar
+}
+
+struct LocalServiceCardArtworkSize: Equatable {
+    let width: CGFloat
+    let height: CGFloat
+}
+
+enum LocalServiceCardArtworkMetrics {
+    static func size(isStationLike: Bool) -> LocalServiceCardArtworkSize {
+        LocalServiceCardArtworkSize(width: 138, height: 138)
+    }
+
+    static func contentMode(
+        isStationLike: Bool,
+        maximumWidth: Int? = nil,
+        maximumHeight: Int? = nil
+    ) -> LocalMusicArtworkURL.ContentMode {
+        guard isStationLike,
+              let maximumWidth,
+              let maximumHeight,
+              maximumWidth > 1,
+              maximumHeight > 1 else {
+            return .fit
+        }
+
+        let aspectRatio = Double(maximumWidth) / Double(maximumHeight)
+        if aspectRatio > 1.2 {
+            return .fill
+        }
+
+        return .fit
+    }
 }
 
 enum LocalServiceLibraryItemKind: Equatable {
@@ -894,6 +967,25 @@ private enum LocalServiceCardItem: Identifiable {
         }
     }
 
+    var isStationLike: Bool {
+        switch self {
+        case .station:
+            return true
+        case .recentlyPlayed(let item):
+            if case .station = item { return true }
+            return false
+        case .recommendation(let item):
+            if case .station = item { return true }
+            return false
+        case .song, .album, .artist, .playlist:
+            return false
+        }
+    }
+
+    var cardArtworkSize: LocalServiceCardArtworkSize {
+        LocalServiceCardArtworkMetrics.size(isStationLike: isStationLike)
+    }
+
     func catalogArtworkURL(using store: LocalLibraryStore) -> URL? {
         switch self {
         case .song(let song):
@@ -918,13 +1010,17 @@ private enum LocalServiceCardItem: Identifiable {
 
     var artworkDiagnosticLabel: String? {
         switch self {
+        case .station(let station):
+            return "station-card title='\(station.name)' id='\(station.id.rawValue)'"
         case .playlist(let playlist):
             return "playlist-card title='\(playlist.name)' id='\(playlist.id.rawValue)'"
         case .recentlyPlayed(let item):
             switch item {
             case .playlist:
                 return "recent-playlist-card title='\(item.title)' id='\(item.id.rawValue)'"
-            case .album, .station:
+            case .station:
+                return "recent-station-card title='\(item.title)' id='\(item.id.rawValue)'"
+            case .album:
                 return nil
             @unknown default:
                 return nil
@@ -933,12 +1029,14 @@ private enum LocalServiceCardItem: Identifiable {
             switch item {
             case .playlist:
                 return "recommendation-playlist-card title='\(item.title)' id='\(item.id.rawValue)'"
-            case .album, .station:
+            case .station:
+                return "recommendation-station-card title='\(item.title)' id='\(item.id.rawValue)'"
+            case .album:
                 return nil
             @unknown default:
                 return nil
             }
-        case .song, .album, .artist, .station:
+        case .song, .album, .artist:
             return nil
         }
     }
@@ -985,6 +1083,21 @@ private struct LocalLibraryArtworkTile: View {
     let artworkURL: URL?
     let fallbackSystemImage: String
     let diagnosticLabel: String?
+    let artworkContentMode: LocalMusicArtworkURL.ContentMode
+
+    init(
+        artwork: Artwork?,
+        artworkURL: URL?,
+        fallbackSystemImage: String,
+        diagnosticLabel: String?,
+        artworkContentMode: LocalMusicArtworkURL.ContentMode = .fit
+    ) {
+        self.artwork = artwork
+        self.artworkURL = artworkURL
+        self.fallbackSystemImage = fallbackSystemImage
+        self.diagnosticLabel = diagnosticLabel
+        self.artworkContentMode = artworkContentMode
+    }
 
     @State private var didLogMissingSources = false
 
@@ -997,12 +1110,18 @@ private struct LocalLibraryArtworkTile: View {
                 fallbackIcon
 
                 if let artwork {
-                    LocalMusicArtworkView(artwork: artwork, diagnosticLabel: diagnosticLabel)
+                    LocalMusicArtworkView(
+                        artwork: artwork,
+                        diagnosticLabel: diagnosticLabel,
+                        contentMode: artworkContentMode)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 }
 
                 if let artworkURL {
-                    LocalLibraryRemoteArtworkView(url: artworkURL, diagnosticLabel: diagnosticLabel)
+                    LocalLibraryRemoteArtworkView(
+                        url: artworkURL,
+                        diagnosticLabel: diagnosticLabel,
+                        artworkContentMode: artworkContentMode)
                 }
             }
         }
@@ -1035,6 +1154,7 @@ private struct LocalLibraryArtworkTile: View {
 private struct LocalLibraryRemoteArtworkView: View {
     let url: URL
     let diagnosticLabel: String?
+    let artworkContentMode: LocalMusicArtworkURL.ContentMode
 
     @State private var didLogSuccess = false
     @State private var didLogFailure = false
@@ -1044,7 +1164,7 @@ private struct LocalLibraryRemoteArtworkView: View {
             if let image = phase.image {
                 image
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: artworkContentMode.swiftUIContentMode)
                     .onAppear { logSuccessIfNeeded() }
             } else if case .failure(let error) = phase {
                 Color.clear
@@ -1075,6 +1195,15 @@ private struct LocalLibraryRemoteArtworkView: View {
         SonosLog.error(
             .localService,
             "Remote artwork image failed \(diagnosticLabel) url='\(url.absoluteString)' error=\(error)")
+    }
+}
+
+private extension LocalMusicArtworkURL.ContentMode {
+    var swiftUIContentMode: ContentMode {
+        switch self {
+        case .fit: return .fit
+        case .fill: return .fill
+        }
     }
 }
 

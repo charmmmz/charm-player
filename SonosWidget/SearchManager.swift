@@ -10,6 +10,11 @@ import SwiftUI
 /// official iOS app's traffic.
 let SonosRinconRadioFlags: Int = 8300
 
+/// Apple Music live radio stations (for example Apple Music Chill) are exposed
+/// by Sonos Browse as `x-sonosapi-stream:hls%3Ara...` before the speaker
+/// resolves them to `x-sonosapi-hls:hls%3ara...`.
+let SonosRinconLiveStationFlags: Int = 8292
+
 /// Time we sleep after `setAVTransportURI` before issuing `Play`.
 /// 800 ms is the empirical sweet spot — shorter and the speaker still
 /// sometimes returns "transition pending" on Play.
@@ -123,6 +128,17 @@ final class SearchManager {
         let resMD: String?
     }
 
+    struct StationTransportPayload: Equatable {
+        let label: String
+        let uri: String
+        let metadata: String
+    }
+
+    enum StationTransportMetadataStyle: Equatable {
+        case programRadio
+        case hlsLiveRadio
+    }
+
     private struct ForwardAlbumQueueAttempt {
         let plan: AppleMusicForwardAlbumQueuePlan
     }
@@ -138,6 +154,9 @@ final class SearchManager {
 
     /// Accounts detected via Sonos Cloud API.
     var linkedAccounts: [SonosCloudAPI.CloudMusicServiceAccount] = []
+    /// Legacy local account probes are kept only for diagnostics/tests. Linked
+    /// streaming services shown in the app come from Sonos Cloud accounts.
+    var localMusicServiceAccounts: [LocalMusicServiceAccount] = []
     /// User's per-service search toggle. Key = Cloud serviceId string.
     var serviceEnabled: [String: Bool] = [:]
 
@@ -194,14 +213,14 @@ final class SearchManager {
         self.speakerIP = speakerIP
     }
 
-    // MARK: - Service Detection via Cloud API
+    // MARK: - Service Detection
 
     func probeLinkedServices() async {
         guard !hasProbed else { return }
+        await ensureMusicServicesPopulated()
 
         if !linkedAccounts.isEmpty {
             SonosLog.debug(.search, "Using \(linkedAccounts.count) cached linked accounts")
-            await ensureMusicServicesPopulated()
             buildServiceIdMapping()
             hasProbed = true
             return
@@ -210,30 +229,30 @@ final class SearchManager {
         await fetchLinkedAccounts()
     }
 
-    /// Opportunistically fetch the UPnP `listMusicServices` catalog when
-    /// we have a reachable LAN IP and the catalog isn't already loaded.
-    /// This is what unblocks `buildServiceIdMapping` → `localToCloudSid`
-    /// on first launch (the player's artist / album links need that
-    /// mapping the very first time the app is opened, before the user
-    /// has ever visited the Browse tab, which is where this fetch used
-    /// to be gated).
+    /// Opportunistically fetch the UPnP `ListAvailableServices` catalog when
+    /// we have a reachable LAN IP. This is metadata only: service-name
+    /// snapshots, local sid mapping, manifest URLs, and presentation maps.
+    /// Linked account discovery and streaming search remain Sonos Cloud-only.
     private func ensureMusicServicesPopulated() async {
-        guard musicServices.isEmpty,
-              let ip = speakerIP,
+        guard let ip = speakerIP,
               !ip.isEmpty else { return }
-        if let fetched = try? await SonosAPI.listMusicServices(ip: ip), !fetched.isEmpty {
+        if musicServices.isEmpty,
+           let fetched = try? await SonosAPI.listMusicServices(ip: ip), !fetched.isEmpty {
             musicServices = fetched
-            SonosLog.debug(.search, "Proactively fetched \(fetched.count) music services for sid mapping")
+            snapshotLocalServiceNames()
+            SonosLog.debug(.search, "Fetched \(fetched.count) local music services")
         }
+        buildServiceIdMapping()
     }
 
     /// Network call to refresh linked accounts. Called on first launch or manual refresh.
     private func fetchLinkedAccounts() async {
         isProbing = true
+        await ensureMusicServicesPopulated()
 
         guard let token = await SonosAuth.shared.validAccessToken(),
               let householdId = SonosAuth.shared.householdId else {
-            SonosLog.info(.search, "No Sonos Cloud auth, cannot detect services")
+            SonosLog.info(.search, "No Sonos Cloud auth; music service discovery/search unavailable")
             isProbing = false
             hasProbed = true
             return
@@ -338,6 +357,18 @@ final class SearchManager {
         }
     }
 
+    var localSearchServices: [MusicService] {
+        []
+    }
+
+    var activeLocalSearchServices: [MusicService] {
+        []
+    }
+
+    nonisolated static func localServiceKey(for service: MusicService) -> String {
+        "local:\(service.id)"
+    }
+
     var hasFinishedProbing: Bool { hasProbed }
 
     func resetProbe() {
@@ -362,6 +393,11 @@ final class SearchManager {
     func forceReprobe() async {
         hasProbed = false
         linkedAccounts = []
+        localMusicServiceAccounts = []
+        musicServices = []
+        cloudToLocalSid.removeAll()
+        localToCloudSid.removeAll()
+        cloudServiceUsername.removeAll()
         UserDefaults.standard.removeObject(forKey: Self.cachedAccountsKey)
         await fetchLinkedAccounts()
     }
@@ -396,17 +432,14 @@ final class SearchManager {
     private var cloudServiceUsername: [String: String] = [:]
 
     private func buildServiceIdMapping() {
-        guard !linkedAccounts.isEmpty, !musicServices.isEmpty else { return }
+        snapshotLocalServiceNames()
         cloudToLocalSid.removeAll()
         localToCloudSid.removeAll()
         cloudServiceUsername.removeAll()
-
-        // Also snapshot local-sid → service name into SharedStorage so
-        // SonosManager (and the widget) can recognize the playing service
-        // even when no active search context is around. Primary use case:
-        // tagging `TrackInfo.source` for services whose local sid varies
-        // per installation (NetEase, regional partners).
-        var sidNameMap: [String: String] = [:]
+        guard !linkedAccounts.isEmpty, !musicServices.isEmpty else {
+            persistSidMapping()
+            return
+        }
 
         for account in linkedAccounts {
             guard let cloudId = account.serviceId else { continue }
@@ -418,7 +451,6 @@ final class SearchManager {
             }) {
                 cloudToLocalSid[cloudId] = match.id
                 localToCloudSid[match.id] = cloudId
-                sidNameMap[String(match.id)] = match.name
                 SonosLog.debug(.search, "Mapped Cloud \(cloudId) (\(account.displayName)) → local sid \(match.id)")
             }
 
@@ -427,16 +459,44 @@ final class SearchManager {
                 SonosLog.debug(.search, "Username for \(cloudId): \(username)")
             }
         }
-
-        if !sidNameMap.isEmpty {
-            SharedStorage.serviceNamesByLocalSid = sidNameMap
-        }
         persistSidMapping()
         persistAppleMusicShareCredentialIfAvailable()
     }
 
+    func rebuildLocalServiceIdMapping() {
+        snapshotLocalServiceNames()
+        buildServiceIdMapping()
+    }
+
+    private func snapshotLocalServiceNames() {
+        guard !musicServices.isEmpty else {
+            SharedStorage.serviceNamesByLocalSid = [:]
+            SharedStorage.musicServiceCatalogByLocalSid = [:]
+            return
+        }
+
+        SharedStorage.serviceNamesByLocalSid = Dictionary(
+            musicServices.map { (String($0.id), $0.name) },
+            uniquingKeysWith: { first, _ in first })
+        SharedStorage.musicServiceCatalogByLocalSid = Dictionary(
+            musicServices.map {
+                (
+                    String($0.id),
+                    MusicServiceCatalogMetadata(
+                        name: $0.name,
+                        serviceType: $0.serviceType,
+                        manifestURI: $0.manifestURI,
+                        presentationMapURI: $0.presentationMapURI)
+                )
+            },
+            uniquingKeysWith: { first, _ in first })
+    }
+
     private func persistSidMapping() {
-        guard !cloudToLocalSid.isEmpty else { return }
+        guard !cloudToLocalSid.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: Self.sidMappingKey)
+            return
+        }
         // Shape: { "<cloudSid>": <localSid> } — identical to cloudToLocalSid,
         // just string-keyed for plist-safe UserDefaults storage.
         let encodable = Dictionary(uniqueKeysWithValues:
@@ -1069,14 +1129,6 @@ final class SearchManager {
             if !hasProbed { await probeLinkedServices() }
             guard !Task.isCancelled else { return }
 
-            // `musicServices` is the UPnP-sourced service catalog. It's
-            // only needed for local-sid ↔ cloud-sid mapping (NowPlaying
-            // badges, etc.) — the Cloud search endpoint itself works
-            // purely off `activeServiceIds`. Skip the fetch entirely:
-            // when we're off-LAN the saved IP blocks the whole search
-            // for the UPnP timeout (~10s), and on LAN the Browse tab
-            // already populated this table via `loadBrowseContent`.
-
             let serviceIds = activeServiceIds
             guard !serviceIds.isEmpty else {
                 SonosLog.info(.search, "No active services to search")
@@ -1087,6 +1139,15 @@ final class SearchManager {
 
             lastSearchQuery = query
             serviceDetailResults = [:]
+
+            guard let token = await SonosAuth.shared.validAccessToken(),
+                  let householdId = SonosAuth.shared.householdId else {
+                SonosLog.info(.search, "No Cloud auth for search")
+                errorMessage = SonosCloudError.unauthorized.localizedDescription
+                searchResults = []
+                isSearching = false
+                return
+            }
 
             var results: [ServiceSearchResult] = []
             var cloudServiceIds = serviceIds
@@ -1104,23 +1165,6 @@ final class SearchManager {
                 } catch {
                     SonosLog.error(.search, "MusicKit Apple Music search failed: \(error)")
                 }
-            }
-
-            guard let token = await SonosAuth.shared.validAccessToken(),
-                  let householdId = SonosAuth.shared.householdId else {
-                if !results.isEmpty {
-                    SonosLog.info(.search, "Showing MusicKit Apple Music results without Cloud auth")
-                    errorMessage = nil
-                    searchResults = results
-                    isSearching = false
-                    return
-                }
-
-                SonosLog.info(.search, "No Cloud auth for search")
-                errorMessage = SonosCloudError.unauthorized.localizedDescription
-                searchResults = []
-                isSearching = false
-                return
             }
 
             do {
@@ -1152,7 +1196,7 @@ final class SearchManager {
                 }
 
                 let total = results.reduce(0) { $0 + $1.items.count }
-                SonosLog.debug(.search, "search '\(query)' across \(serviceIds.count) services → \(total) results in \(results.count) groups")
+                SonosLog.debug(.search, "search '\(query)' across \(serviceIds.count) cloud services → \(total) results in \(results.count) groups")
 
                 guard !Task.isCancelled else { return }
                 errorMessage = nil
@@ -1255,7 +1299,8 @@ final class SearchManager {
     private func appleMusicSearchResult(
         term: String,
         account: SonosCloudAPI.CloudMusicServiceAccount,
-        limit: Int
+        limit: Int,
+        resultId: String? = nil
     ) async throws -> ServiceSearchResult? {
         guard let serviceId = account.serviceId,
               let accountId = account.accountId else { return nil }
@@ -1281,7 +1326,7 @@ final class SearchManager {
             "MusicKit Apple Music search '\(term)' → \(items.count) results in \(elapsed)ms")
 
         return ServiceSearchResult(
-            id: serviceId,
+            id: resultId ?? serviceId,
             serviceName: account.displayName,
             items: items)
     }
@@ -1339,6 +1384,30 @@ final class SearchManager {
             "LocalService play kind=\(playable.kind) catalogID=\(playable.catalogID) " +
             "objectID=\(item.id) localSid=\(item.serviceId.map(String.init) ?? "nil") " +
             "cloudServiceId=\(serviceId) accountId=\(accountId) uri=\(item.uri ?? "nil")")
+
+        if playable.kind == .station {
+            guard let ip = manager.selectedSpeaker?.playbackIP else {
+                SonosLog.error(.station, "LocalService station: no speaker IP")
+                return false
+            }
+            pushRecentlyPlayed(item)
+            SonosLog.info(
+                .station,
+                "LocalService station direct title='\(playable.title)' radioId=\(playable.catalogID) " +
+                    "playbackKind=\(playable.stationPlaybackKind?.diagnosticName ?? "nil") " +
+                    "streamObjectID=\(playable.stationStreamObjectID ?? "nil")")
+            return await playRadioStation(
+                ip: ip,
+                radioId: playable.catalogID,
+                stationName: playable.title,
+                streamObjectID: playable.stationStreamObjectID,
+                isLiveStreamStation: playable.stationPlaybackKind == .stream,
+                cloudServiceId: serviceId,
+                accountId: accountId,
+                artURL: playable.artworkURLString,
+                resMD: item.resMD,
+                manager: manager)
+        }
 
         return await playNowInternal(item: item, manager: manager)
     }
@@ -1490,23 +1559,44 @@ final class SearchManager {
         switch type {
         case "TRACK":
             let trackId = trackURIObjectId(objectId: objectId, cloudServiceId: cloudSid)
-            let encodedId = trackId.replacingOccurrences(of: ":", with: "%3a")
             let (scheme, ext, flags) = trackURIComponents(localSid: sid, mimeType: mimeType)
-            return "\(scheme):\(encodedId)\(ext)?sid=\(sid)&flags=\(flags)&sn=\(aid)"
+            return SonosPlayableURIBuilder.serviceURI(
+                scheme: scheme,
+                objectID: trackId,
+                localSid: sid,
+                flags: flags,
+                accountID: aid,
+                fileExtension: ext)
         case "ALBUM":
-            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
-            return "x-rincon-cpcontainer:1004206c\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
+            return SonosPlayableURIBuilder.containerURI(
+                prefix: "1004206c",
+                objectID: objectId,
+                localSid: sid,
+                flags: 8300,
+                accountID: aid)
         case "PLAYLIST":
-            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
-            return "x-rincon-cpcontainer:1006206c\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
+            return SonosPlayableURIBuilder.containerURI(
+                prefix: "1006206c",
+                objectID: objectId,
+                localSid: sid,
+                flags: 8300,
+                accountID: aid)
         case "PROGRAM":
-            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
-            return "x-sonosapi-radio:\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
+            return SonosPlayableURIBuilder.serviceURI(
+                scheme: "x-sonosapi-radio",
+                objectID: objectId,
+                localSid: sid,
+                flags: 8300,
+                accountID: aid)
         case "ARTIST":
-            let encodedId = objectId.replacingOccurrences(of: ":", with: "%3a")
             // Artist favorites use a cp-container URI with the bare object id
             // (no `10052064` prefix on the URI side — only the metadata id has it).
-            return "x-rincon-cpcontainer:\(encodedId)?sid=\(sid)&flags=8300&sn=\(aid)"
+            return SonosPlayableURIBuilder.containerURI(
+                prefix: "",
+                objectID: objectId,
+                localSid: sid,
+                flags: 8300,
+                accountID: aid)
         default:
             return nil
         }
@@ -1632,40 +1722,28 @@ final class SearchManager {
         let (itemId, upnpClass, xmlTag) = metadataComponents(
             cloudType: cloudType, objectId: encodedObjId, uri: item.uri)
 
-        var inner = "<dc:title>\(SonosAPI.escapeXML(item.title))</dc:title>" +
-            "<upnp:class>\(upnpClass)</upnp:class>"
-
         // Only TRACK/ALBUM/PLAYLIST carry rich metadata in their inner DIDL.
         // ARTIST and PROGRAM use a bare-minimum item (title + class + desc).
         let wantsRichMetadata = (cloudType == "TRACK" ||
                                  cloudType == "ALBUM" ||
                                  cloudType == "PLAYLIST")
-        if wantsRichMetadata {
-            if let art = item.albumArtURL, !art.isEmpty {
-                inner += "<upnp:albumArtURI>\(SonosAPI.escapeXML(art))</upnp:albumArtURI>"
-            }
-            if !item.artist.isEmpty {
-                let a = SonosAPI.escapeXML(item.artist)
-                inner += "<dc:creator>\(a)</dc:creator>"
-                // Tracks and albums identify their album-artist; pure playlists don't.
-                if cloudType != "PLAYLIST" {
-                    inner += "<r:albumArtist>\(a)</r:albumArtist>"
-                }
-            }
-            // Only TRACK items reference their containing album by name.
-            if cloudType == "TRACK", !item.album.isEmpty {
-                inner += "<upnp:album>\(SonosAPI.escapeXML(item.album))</upnp:album>"
-            }
-        }
-        inner += "<desc id=\"cdudn\" nameSpace=\"urn:schemas-rinconnetworks-com:metadata-1-0/\">\(desc)</desc>"
+        let artist = wantsRichMetadata && !item.artist.isEmpty ? item.artist : nil
+        let albumArtist = wantsRichMetadata && cloudType != "PLAYLIST" ? artist : nil
+        let album = (cloudType == "TRACK" && !item.album.isEmpty) ? item.album : nil
+        let albumArtURI = wantsRichMetadata && item.albumArtURL?.isEmpty == false ? item.albumArtURL : nil
 
-        return "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-            "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" " +
-            "xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" " +
-            "xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">" +
-            "<\(xmlTag) id=\"\(itemId)\" parentID=\"\" restricted=\"true\">" +
-            inner +
-            "</\(xmlTag)></DIDL-Lite>"
+        return SonosDIDLBuilder.document([
+            SonosDIDLElement(
+                tag: xmlTag,
+                id: itemId,
+                title: item.title,
+                upnpClass: upnpClass,
+                creator: artist,
+                album: album,
+                albumArtist: albumArtist,
+                albumArtURI: albumArtURI,
+                desc: desc)
+        ])
     }
 
     private func cloudServiceUsername(for cloudSid: String, accountId: String) -> String {
@@ -1909,13 +1987,23 @@ final class SearchManager {
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
             try await SonosAPI.removeAllTracksFromQueue(ip: ip)
 
-            for item in plan.items {
-                guard let uri = item.uri, !uri.isEmpty else { continue }
-                try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
-                _ = try await SonosAPI.addURIToQueue(
-                    ip: ip,
-                    uri: uri,
-                    metadata: playbackMetadata(for: item))
+            let queueItems = plan.items.compactMap { item -> SonosQueuedURI? in
+                guard let uri = item.uri, !uri.isEmpty else { return nil }
+                return SonosQueuedURI(uri: uri, metadata: playbackMetadata(for: item))
+            }
+
+            try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
+            do {
+                try await SonosAPI.addMultipleURIsToQueue(ip: ip, items: queueItems)
+            } catch {
+                SonosLog.error(.playback, "Forward album batch queue failed, falling back: \(error)")
+                for item in queueItems {
+                    try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
+                    _ = try await SonosAPI.addURIToQueue(
+                        ip: ip,
+                        uri: item.uri,
+                        metadata: item.metadata)
+                }
             }
 
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
@@ -2880,64 +2968,203 @@ final class SearchManager {
 
     /// Play a resolved radio station via UPnP.
     private func playRadioStation(ip: String, radioId: String, stationName: String,
+                                  streamObjectID: String? = nil,
+                                  isLiveStreamStation: Bool = false,
                                   cloudServiceId: String?, accountId: String?,
                                   artURL: String?, resMD: String?,
                                   manager: SonosManager) async -> Bool {
+        let payloads = stationTransportPayloads(
+            radioId: radioId,
+            streamObjectID: streamObjectID,
+            isLiveStreamStation: isLiveStreamStation,
+            stationName: stationName,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId,
+            artURL: artURL,
+            resMD: resMD)
+        var lastError: Error?
+
+        for (index, payload) in payloads.enumerated() {
+            let metadataId = extractDIDLItemId(from: payload.metadata) ?? "nil"
+            let metadataDesc = extractDescTag(from: payload.metadata) ?? "nil"
+            let hasArt = payload.metadata.contains("<upnp:albumArtURI>")
+            SonosLog.info(
+                .station,
+                "playRadioStation request title='\(stationName)' label=\(payload.label) " +
+                    "attempt=\(index + 1)/\(payloads.count) radioId=\(radioId) " +
+                    "streamObjectID=\(streamObjectID ?? "nil") uri=\(payload.uri) " +
+                    "metadataId=\(metadataId) desc=\(metadataDesc) art=\(hasArt)")
+
+            do {
+                try await SonosAPI.setAVTransportURI(ip: ip, uri: payload.uri, metadata: payload.metadata)
+                try? await Task.sleep(for: .milliseconds(stationSetURISettleMs))
+                try await SonosAPI.play(ip: ip)
+
+                try? await Task.sleep(for: .milliseconds(stationPlayConfirmMs))
+                let state = try? await SonosAPI.getTransportInfo(ip: ip)
+
+                if state == .stopped {
+                    // Some stations need a second nudge: first Play is acked,
+                    // but Sonos sits in STOPPED until the cloud resolves the
+                    // actual stream URL.
+                    SonosLog.info(.station, "still STOPPED, retrying play label=\(payload.label)")
+                    try? await Task.sleep(for: .milliseconds(stationRetryDelayMs))
+                    try await SonosAPI.play(ip: ip)
+                    try? await Task.sleep(for: .milliseconds(stationRetryDelayMs))
+                }
+
+                SonosLog.info(
+                    .station,
+                    "playRadioStation '\(stationName)' label=\(payload.label) uri=\(payload.uri)")
+                await manager.refreshState()
+                return true
+            } catch {
+                lastError = error
+                SonosLog.error(
+                    .station,
+                    "playRadioStation failed label=\(payload.label) uri=\(payload.uri): \(error)")
+            }
+        }
+
+        errorMessage = lastError?.localizedDescription
+        return false
+    }
+
+    func stationTransportPayloads(
+        radioId: String,
+        streamObjectID: String?,
+        isLiveStreamStation: Bool = false,
+        stationName: String,
+        cloudServiceId: String?,
+        accountId: String?,
+        artURL: String?,
+        resMD: String?
+    ) -> [StationTransportPayload] {
+        var payloads: [StationTransportPayload] = []
+
+        if isLiveStreamStation,
+           let hlsObjectID = hlsStationObjectID(from: radioId) {
+            payloads.append(
+                stationTransportPayload(
+                    radioId: hlsObjectID,
+                    stationName: stationName,
+                    cloudServiceId: cloudServiceId,
+                    accountId: accountId,
+                    artURL: artURL,
+                    resMD: resMD,
+                    uriScheme: "x-sonosapi-stream",
+                    flags: SonosRinconLiveStationFlags,
+                    metadataStyle: .hlsLiveRadio,
+                    label: "hlsLiveRadio"))
+        }
+
+        payloads.append(
+            stationTransportPayload(
+                radioId: radioId,
+                stationName: stationName,
+                cloudServiceId: cloudServiceId,
+                accountId: accountId,
+                artURL: artURL,
+                resMD: resMD,
+                uriScheme: "x-sonosapi-radio",
+                metadataStyle: .programRadio,
+                label: "radioID"))
+
+        return payloads
+    }
+
+    func stationTransportPayload(
+        radioId: String,
+        stationName: String,
+        cloudServiceId: String?,
+        accountId: String?,
+        artURL: String?,
+        resMD: String?,
+        uriScheme: String = "x-sonosapi-radio",
+        flags: Int = SonosRinconRadioFlags,
+        metadataStyle: StationTransportMetadataStyle = .programRadio,
+        label: String = "radioID"
+    ) -> StationTransportPayload {
         let localSid = cloudServiceId.flatMap { cloudToLocalSid[$0] }
         let params = extractServiceParams()
-        let sid = localSid.map(String.init) ?? params?.sid ?? "204"
+        let sidInt = localSid ?? Int(params?.sid ?? "") ?? 204
+        let sid = String(sidInt)
         let sn = accountId ?? params?.sn ?? "0"
 
-        let encodedId = radioId.replacingOccurrences(of: ":", with: "%3a")
-        let radioURI = "x-sonosapi-radio:\(encodedId)?sid=\(sid)&flags=\(SonosRinconRadioFlags)&sn=\(sn)"
+        let encodedId = SonosPlayableURIBuilder.encodedObjectID(radioId)
+        let radioURI = SonosPlayableURIBuilder.serviceURI(
+            scheme: uriScheme,
+            objectID: radioId,
+            localSid: sidInt,
+            flags: flags,
+            accountID: sn)
 
         let descTag: String
         if let fromMD = extractDescTag(from: resMD ?? "") {
             descTag = fromMD
-        } else if let sidInt = localSid {
-            descTag = "SA_RINCON\(sidInt)_\(cloudServiceUsername[cloudServiceId ?? ""] ?? "X_#Svc\(sidInt)-\(sn)-Token")"
+        } else if let cloudServiceId {
+            descTag = "SA_RINCON\(cloudServiceId)_\(cloudServiceUsername(for: cloudServiceId, accountId: sn))"
+        } else if let sidInt = localSid,
+                  let cloudSid = localToCloudSid[sidInt] {
+            descTag = "SA_RINCON\(cloudSid)_\(cloudServiceUsername(for: cloudSid, accountId: sn))"
         } else {
             descTag = "SA_RINCON\(sid)_X_#Svc\(sid)-\(sn)-Token"
         }
-        let artTag = artURL.map { "<upnp:albumArtURI>\(SonosAPI.escapeXML($0))</upnp:albumArtURI>" } ?? ""
-        let radioMeta = "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-            "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" " +
-            "xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" " +
-            "xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">" +
-            "<item id=\"100c206c\(SonosAPI.escapeXML(encodedId))\" " +
-            "parentID=\"00081024\(SonosAPI.escapeXML(encodedId))\" restricted=\"true\">" +
-            "<dc:title>\(SonosAPI.escapeXML(stationName))</dc:title>" +
-            "<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>" +
-            artTag +
-            "<desc id=\"cdudn\" nameSpace=\"urn:schemas-rinconnetworks-com:metadata-1-0/\">" +
-            "\(descTag)</desc></item></DIDL-Lite>"
-
-        do {
-            try await SonosAPI.setAVTransportURI(ip: ip, uri: radioURI, metadata: radioMeta)
-            try? await Task.sleep(for: .milliseconds(stationSetURISettleMs))
-            try await SonosAPI.play(ip: ip)
-
-            try? await Task.sleep(for: .milliseconds(stationPlayConfirmMs))
-            let state = try? await SonosAPI.getTransportInfo(ip: ip)
-
-            if state == .stopped {
-                // Some stations need a second nudge — first Play is acked
-                // but Sonos sits in STOPPED until the cloud finishes resolving
-                // the actual stream URL.
-                SonosLog.info(.station, "still STOPPED, retrying play")
-                try? await Task.sleep(for: .milliseconds(stationRetryDelayMs))
-                try await SonosAPI.play(ip: ip)
-                try? await Task.sleep(for: .milliseconds(stationRetryDelayMs))
-            }
-
-            SonosLog.info(.station, "playRadioStation '\(stationName)'")
-            await manager.refreshState()
-            return true
-        } catch {
-            SonosLog.error(.station, "playRadioStation failed: \(error)")
-            errorMessage = error.localizedDescription
-            return false
+        let metadataPrefix: String
+        let parentID: String
+        let upnpClass: String
+        let albumArtURI: String?
+        switch metadataStyle {
+        case .programRadio:
+            metadataPrefix = "000c206c"
+            parentID = ""
+            upnpClass = "object.item.audioItem.audioBroadcast.#programRadio"
+            albumArtURI = nil
+        case .hlsLiveRadio:
+            metadataPrefix = "10092064"
+            parentID = ""
+            upnpClass = "object.item.audioItem.audioBroadcast"
+            albumArtURI = (artURL?.isEmpty == false) ? artURL : nil
         }
+        let radioMeta = SonosDIDLBuilder.document([
+            SonosDIDLElement(
+                id: "\(metadataPrefix)\(encodedId)",
+                parentID: parentID,
+                title: stationName,
+                upnpClass: upnpClass,
+                albumArtURI: albumArtURI,
+                desc: descTag)
+        ])
+
+        return StationTransportPayload(label: label, uri: radioURI, metadata: radioMeta)
+    }
+
+    private func hlsStationObjectID(from radioId: String) -> String? {
+        guard var stationID = normalizedStreamObjectID(radioId) else { return nil }
+        if stationID.hasPrefix("hls:") {
+            return stationID
+        }
+        if stationID.hasPrefix("radio:") {
+            stationID.removeFirst("radio:".count)
+        }
+        guard stationID.hasPrefix("ra."), stationID.count > 3 else { return nil }
+        return "hls:\(stationID)"
+    }
+
+    private func normalizedStreamObjectID(_ streamObjectID: String?) -> String? {
+        guard var streamObjectID = streamObjectID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !streamObjectID.isEmpty else {
+            return nil
+        }
+        streamObjectID = streamObjectID.removingPercentEncoding ?? streamObjectID
+        if let fragmentStart = streamObjectID.firstIndex(of: "#") {
+            streamObjectID = String(streamObjectID[..<fragmentStart])
+        }
+        if let queryStart = streamObjectID.firstIndex(of: "?") {
+            streamObjectID = String(streamObjectID[..<queryStart])
+        }
+        streamObjectID = streamObjectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return streamObjectID.isEmpty ? nil : streamObjectID
     }
 
     private func extractDescTag(from xml: String) -> String? {

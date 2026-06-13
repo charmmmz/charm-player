@@ -238,6 +238,28 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "serviceNamesByLocalSid") }
     }
 
+    /// Local Sonos service catalog metadata keyed by local sid. This is not an
+    /// account list; it is safe no-login metadata from `ListAvailableServices`
+    /// used for playback/source hints and future presentation-map quality badges.
+    nonisolated static var musicServiceCatalogByLocalSid: [String: MusicServiceCatalogMetadata] {
+        get {
+            guard let data = defaults.data(forKey: "musicServiceCatalogByLocalSid"),
+                  let decoded = try? JSONDecoder().decode(
+                    [String: MusicServiceCatalogMetadata].self,
+                    from: data) else {
+                return [:]
+            }
+            return decoded
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: "musicServiceCatalogByLocalSid")
+            } else if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "musicServiceCatalogByLocalSid")
+            }
+        }
+    }
+
     /// Total visible speakers in the currently playing group (including coordinator).
     nonisolated static var cachedGroupMemberCount: Int {
         get { defaults.integer(forKey: "groupMemberCount") }

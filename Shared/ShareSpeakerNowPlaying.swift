@@ -1,5 +1,33 @@
 import Foundation
 
+enum SonosRadioStreamContent {
+    static func fields(from streamContent: String) -> [String: String] {
+        var fields: [String: String] = [:]
+        let decoded = streamContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        for segment in decoded.split(separator: "|") {
+            let text = String(segment).trimmingCharacters(in: .whitespacesAndNewlines)
+            let upper = text.uppercased()
+            for key in ["TITLE", "ARTIST", "ALBUM"] {
+                let spacePrefix = "\(key) "
+                let equalsPrefix = "\(key)="
+                let value: String?
+                if upper.hasPrefix(spacePrefix) {
+                    value = String(text.dropFirst(spacePrefix.count))
+                } else if upper.hasPrefix(equalsPrefix) {
+                    value = String(text.dropFirst(equalsPrefix.count))
+                } else {
+                    value = nil
+                }
+                if let cleaned = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !cleaned.isEmpty {
+                    fields[key] = cleaned
+                }
+            }
+        }
+        return fields
+    }
+}
+
 struct ShareSpeakerNowPlaying: Equatable, Sendable {
     private static let sonosPort = 1400
 
@@ -53,14 +81,8 @@ struct ShareSpeakerNowPlaying: Equatable, Sendable {
         artist: inout String
     ) {
         let decoded = decodeXMLEntities(streamContent)
-        if decoded.contains("TITLE ") || decoded.contains("ARTIST ") {
-            var fields: [String: String] = [:]
-            for segment in decoded.split(separator: "|") {
-                let text = String(segment)
-                for key in ["TITLE ", "ARTIST "] where text.hasPrefix(key) {
-                    fields[key.trimmingCharacters(in: .whitespaces)] = String(text.dropFirst(key.count))
-                }
-            }
+        let fields = SonosRadioStreamContent.fields(from: decoded)
+        if !fields.isEmpty {
             if let streamTitle = fields["TITLE"], !streamTitle.isEmpty {
                 title = streamTitle
             }

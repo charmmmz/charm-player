@@ -45,6 +45,18 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
         XCTAssertEqual(nowPlaying?.albumArtURLString, "https://example.com/cover.jpg")
     }
 
+    func testNowPlayingParsesEqualsDelimitedRadioStreamContent() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackMetaData>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;Apple Music Chill&lt;/dc:title&gt;&lt;dc:creator&gt;Unknown&lt;/dc:creator&gt;&lt;r:streamContent&gt;TYPE=SNG|TITLE=Free|ARTIST=Ryan Ellis|ALBUM=Real Love&lt;/r:streamContent&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        let nowPlaying = ShareSpeakerNowPlaying(positionInfoXML: xml)
+
+        XCTAssertEqual(nowPlaying?.displayText, "Free - Ryan Ellis")
+    }
+
     func testNowPlayingResolvesRelativeAlbumArtAgainstSpeakerIP() {
         let xml = """
         <u:GetPositionInfoResponse>

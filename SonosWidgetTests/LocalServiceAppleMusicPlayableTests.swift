@@ -157,4 +157,48 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
 
         XCTAssertEqual(playable?.catalogID, "radio:ra.1740614260")
     }
+
+    func testLiveStationCapturesStreamPlaybackToken() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .station,
+            rawID: "ra.1740614260",
+            playParameterCandidates: [
+                "ra.1740614260",
+                "stream",
+                "radioStation",
+                "CgkIBRoF9NT-vQYQBA"
+            ],
+            title: "Apple Music Chill",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        XCTAssertEqual(playable?.catalogID, "radio:ra.1740614260")
+        XCTAssertEqual(playable?.stationPlaybackKind, .stream)
+        XCTAssertEqual(playable?.stationStreamObjectID, "CgkIBRoF9NT-vQYQBA")
+    }
+
+    func testPersonalStationDoesNotUseStreamPlaybackToken() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .station,
+            rawID: "ra.u-846cd3c366cfc3081abb70ff757aa95f",
+            playParameterCandidates: [
+                "ra.u-846cd3c366cfc3081abb70ff757aa95f",
+                "tracks",
+                "radioStation",
+                "CgoIByIGCJnI8_5AEAE"
+            ],
+            title: "Charm's Station",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        )
+
+        XCTAssertEqual(playable?.catalogID, "radio:ra.u-846cd3c366cfc3081abb70ff757aa95f")
+        XCTAssertEqual(playable?.stationPlaybackKind, .tracks)
+        XCTAssertNil(playable?.stationStreamObjectID)
+    }
 }

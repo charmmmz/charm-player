@@ -4,26 +4,34 @@ import SwiftUI
 struct LocalMusicArtworkView: View {
     let artwork: Artwork
     let diagnosticLabel: String?
+    let contentMode: LocalMusicArtworkURL.ContentMode
 
     @Environment(\.displayScale) private var displayScale
 
-    init(artwork: Artwork, diagnosticLabel: String? = nil) {
+    init(
+        artwork: Artwork,
+        diagnosticLabel: String? = nil,
+        contentMode: LocalMusicArtworkURL.ContentMode = .fit
+    ) {
         self.artwork = artwork
         self.diagnosticLabel = diagnosticLabel
+        self.contentMode = contentMode
     }
 
     var body: some View {
         GeometryReader { proxy in
-            let displaySize = LocalMusicArtworkURL.fittedDisplaySize(
+            let displaySize = LocalMusicArtworkURL.displaySize(
                 maximumWidth: artwork.maximumWidth,
                 maximumHeight: artwork.maximumHeight,
                 boundingWidth: Double(proxy.size.width),
-                boundingHeight: Double(proxy.size.height)
+                boundingHeight: Double(proxy.size.height),
+                contentMode: contentMode
             )
             let shortSidePixels = max(1, Int(min(displaySize.width, displaySize.height) * Double(displayScale)))
             let imageURL = LocalMusicArtworkURL.url(for: artwork, shortSidePixels: shortSidePixels)
             let sourceDescription = "source=\(artwork.maximumWidth)x\(artwork.maximumHeight) " +
-                "display=\(Int(displaySize.width))x\(Int(displaySize.height)) shortSide=\(shortSidePixels)"
+                "display=\(Int(displaySize.width))x\(Int(displaySize.height)) " +
+                "mode=\(contentMode.diagnosticName) shortSide=\(shortSidePixels)"
 
             LocalMusicArtworkImage(
                 artwork: artwork,
@@ -31,7 +39,8 @@ struct LocalMusicArtworkView: View {
                 height: CGFloat(displaySize.height),
                 url: imageURL,
                 diagnosticLabel: diagnosticLabel,
-                sourceDescription: sourceDescription)
+                sourceDescription: sourceDescription,
+                contentMode: contentMode)
             .frame(width: CGFloat(displaySize.width), height: CGFloat(displaySize.height))
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -45,12 +54,13 @@ private struct LocalMusicArtworkImage: View {
     let url: URL?
     let diagnosticLabel: String?
     let sourceDescription: String
+    let contentMode: LocalMusicArtworkURL.ContentMode
 
     @State private var didLogSource = false
 
     var body: some View {
         ArtworkImage(artwork, width: width, height: height)
-            .aspectRatio(contentMode: .fit)
+            .aspectRatio(contentMode: contentMode.swiftUIContentMode)
             .onAppear {
                 logSourceIfNeeded()
             }
@@ -72,5 +82,21 @@ private struct LocalMusicArtworkImage: View {
         guard let value, !value.isEmpty else { return "nil" }
         let status = LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) ? "loadable" : "not-loadable"
         return "\(status)('\(value)')"
+    }
+}
+
+private extension LocalMusicArtworkURL.ContentMode {
+    var swiftUIContentMode: ContentMode {
+        switch self {
+        case .fit: return .fit
+        case .fill: return .fill
+        }
+    }
+
+    var diagnosticName: String {
+        switch self {
+        case .fit: return "fit"
+        case .fill: return "fill"
+        }
     }
 }

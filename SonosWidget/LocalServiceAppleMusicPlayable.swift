@@ -47,6 +47,11 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
         }
     }
 
+    enum StationPlaybackKind: Equatable, Sendable {
+        case tracks
+        case stream
+    }
+
     let kind: Kind
     let catalogID: String
     let title: String
@@ -54,6 +59,30 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     let album: String
     let artworkURLString: String?
     let duration: TimeInterval?
+    let stationPlaybackKind: StationPlaybackKind?
+    let stationStreamObjectID: String?
+
+    init(
+        kind: Kind,
+        catalogID: String,
+        title: String,
+        artist: String,
+        album: String,
+        artworkURLString: String?,
+        duration: TimeInterval?,
+        stationPlaybackKind: StationPlaybackKind? = nil,
+        stationStreamObjectID: String? = nil
+    ) {
+        self.kind = kind
+        self.catalogID = catalogID
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.artworkURLString = artworkURLString
+        self.duration = duration
+        self.stationPlaybackKind = stationPlaybackKind
+        self.stationStreamObjectID = stationStreamObjectID
+    }
 
     var id: String { "\(kind.cloudType)-\(catalogID)" }
     var cloudType: String { kind.cloudType }
@@ -82,7 +111,35 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     ) -> LocalServiceAppleMusicPlayable? {
         let candidates = playParameterCandidates + [rawID]
         guard let catalogID = firstCatalogID(in: candidates, kind: kind) else {
+            if kind == .station {
+                SonosLog.info(
+                    .localService,
+                    "Station playable failed title='\(title)' rawID='\(rawID)' candidates=\(candidates)")
+            }
             return nil
+        }
+
+        if kind == .station {
+            let playbackKind = detectedStationPlaybackKind(in: candidates)
+            let streamObjectID = playbackKind == .stream
+                ? stationStreamObjectID(in: candidates)
+                : nil
+            SonosLog.info(
+                .localService,
+                "Station playable title='\(title)' rawID='\(rawID)' candidates=\(candidates) " +
+                    "catalogID=\(catalogID) playbackKind=\(playbackKind?.diagnosticName ?? "nil") " +
+                    "streamObjectID=\(streamObjectID ?? "nil") art=\(artworkURLString ?? "nil")")
+            return LocalServiceAppleMusicPlayable(
+                kind: kind,
+                catalogID: catalogID,
+                title: title,
+                artist: artist,
+                album: album,
+                artworkURLString: artworkURLString,
+                duration: duration,
+                stationPlaybackKind: playbackKind,
+                stationStreamObjectID: streamObjectID
+            )
         }
 
         return LocalServiceAppleMusicPlayable(
@@ -300,6 +357,59 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
         return nil
     }
 
+    private static func detectedStationPlaybackKind(in candidates: [String]) -> StationPlaybackKind? {
+        for candidate in candidates {
+            switch stationPlaybackMarker(candidate) {
+            case .stream:
+                return .stream
+            case .tracks:
+                return .tracks
+            case nil:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private static func stationStreamObjectID(in candidates: [String]) -> String? {
+        candidates.first { candidate in
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            guard stationPlaybackMarker(trimmed) == nil else { return false }
+            guard !isStationDescriptor(trimmed) else { return false }
+            guard normalizedStationCatalogID(trimmed) == nil else { return false }
+            guard !trimmed.localizedCaseInsensitiveContains("music.apple.com") else { return false }
+            return trimmed.range(
+                of: #"^[A-Za-z0-9_-]{8,}$"#,
+                options: .regularExpression
+            ) != nil
+        }
+    }
+
+    private static func stationPlaybackMarker(_ value: String) -> StationPlaybackKind? {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        if normalized == "stream" {
+            return .stream
+        }
+        if normalized == "tracks" {
+            return .tracks
+        }
+        return nil
+    }
+
+    private static func isStationDescriptor(_ value: String) -> Bool {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        return ["radio", "radiostation", "station"].contains(normalized)
+    }
+
     private static func namespacedObjectID(
         from value: String,
         namespaces: Set<String>,
@@ -406,5 +516,14 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
 
     private static func artworkURLString(_ artwork: Artwork?) -> String? {
         artwork?.url(width: 400, height: 400)?.absoluteString
+    }
+}
+
+extension LocalServiceAppleMusicPlayable.StationPlaybackKind {
+    var diagnosticName: String {
+        switch self {
+        case .tracks: return "tracks"
+        case .stream: return "stream"
+        }
     }
 }

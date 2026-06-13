@@ -32,6 +32,27 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     let album: String
     let artworkURLString: String?
     let duration: TimeInterval?
+    let urlString: String?
+
+    init(
+        id: String,
+        type: AppleMusicCatalogItemType,
+        title: String,
+        artist: String,
+        album: String,
+        artworkURLString: String?,
+        duration: TimeInterval?,
+        urlString: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.artworkURLString = artworkURLString
+        self.duration = duration
+        self.urlString = urlString
+    }
 
     var sonosPlayableObjectID: String {
         switch type {
@@ -215,8 +236,75 @@ enum LocalMusicCatalogArtworkFallback {
     }
 }
 
+enum LocalMusicCatalogWebURLFallback {
+    static func urlString(
+        in items: [AppleMusicCatalogSearchItem],
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        title: String,
+        artist: String?,
+        album: String?,
+        allowGeneratedFallback: Bool = true
+    ) -> String? {
+        guard let match = LocalMusicCatalogMatcher.bestItem(
+            in: items,
+            kind: kind,
+            title: title,
+            artist: artist,
+            album: album
+        ) else {
+            return nil
+        }
+
+        if let urlString = validAppleMusicURLString(match.urlString, kind: kind) {
+            return urlString
+        }
+
+        guard allowGeneratedFallback else { return nil }
+
+        guard let webKind = LocalMusicAppleMusicURL.Kind(kind),
+              let playable = LocalServiceAppleMusicPlayable.make(catalogItem: match) else {
+            return nil
+        }
+
+        return LocalMusicAppleMusicURL.url(
+            existingURL: nil,
+            playable: playable,
+            kind: webKind
+        )?.absoluteString
+    }
+
+    private static func validAppleMusicURLString(
+        _ value: String?,
+        kind: LocalServiceAppleMusicPlayable.Kind
+    ) -> String? {
+        guard let value,
+              let link = AppleMusicShareLinkParser.parse(value),
+              link.kind == AppleMusicShareLink.Kind(kind) else {
+            return nil
+        }
+        return value
+    }
+}
+
 extension AppleMusicCatalogItemType {
     init?(kind: LocalServiceAppleMusicPlayable.Kind) {
+        switch kind {
+        case .song:
+            self = .song
+        case .album:
+            self = .album
+        case .artist:
+            self = .artist
+        case .playlist:
+            self = .playlist
+        case .station:
+            return nil
+        }
+    }
+}
+
+private extension AppleMusicShareLink.Kind {
+    init?(_ kind: LocalServiceAppleMusicPlayable.Kind) {
         switch kind {
         case .song:
             self = .song
@@ -276,6 +364,40 @@ struct AppleMusicCatalogSearchClient {
         return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
     }
 
+    func appleMusicURLString(
+        kind: LocalMusicAppleMusicURL.Kind,
+        catalogID: String
+    ) async throws -> String? {
+        try await ensureAuthorized()
+
+        switch kind {
+        case .album:
+            var request = MusicCatalogResourceRequest<Album>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first?.url?.absoluteString
+        case .artist:
+            var request = MusicCatalogResourceRequest<Artist>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first?.url?.absoluteString
+        case .playlist:
+            var request = MusicCatalogResourceRequest<Playlist>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first?.url?.absoluteString
+        }
+    }
+
     private func ensureAuthorized() async throws {
         switch MusicAuthorization.currentStatus {
         case .authorized:
@@ -299,7 +421,8 @@ struct AppleMusicCatalogSearchClient {
             artist: song.artistName,
             album: song.albumTitle ?? "",
             artworkURLString: artworkURLString(song.artwork),
-            duration: song.duration
+            duration: song.duration,
+            urlString: song.url?.absoluteString
         )
     }
 
@@ -311,7 +434,8 @@ struct AppleMusicCatalogSearchClient {
             artist: album.artistName,
             album: album.title,
             artworkURLString: artworkURLString(album.artwork),
-            duration: nil
+            duration: nil,
+            urlString: album.url?.absoluteString
         )
     }
 
@@ -323,7 +447,8 @@ struct AppleMusicCatalogSearchClient {
             artist: "",
             album: "",
             artworkURLString: artworkURLString(artist.artwork),
-            duration: nil
+            duration: nil,
+            urlString: artist.url?.absoluteString
         )
     }
 
@@ -335,7 +460,8 @@ struct AppleMusicCatalogSearchClient {
             artist: playlist.curatorName ?? "",
             album: "",
             artworkURLString: artworkURLString(playlist.artwork),
-            duration: nil
+            duration: nil,
+            urlString: playlist.url?.absoluteString
         )
     }
 

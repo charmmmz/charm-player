@@ -117,19 +117,141 @@ enum LocalMusicDetailAction: Equatable, Hashable, Sendable {
 }
 
 enum LocalMusicDetailActions {
-    static func album(hasAppleMusicURL: Bool) -> [LocalMusicDetailAction] {
-        var actions: [LocalMusicDetailAction] = [.play, .shuffle]
-        if hasAppleMusicURL {
-            actions.append(.openAppleMusic)
-        }
-        return actions
+    static func album(hasAppleMusicURL _: Bool) -> [LocalMusicDetailAction] {
+        [.play, .shuffle]
     }
 
-    static func artist(hasAppleMusicURL: Bool) -> [LocalMusicDetailAction] {
-        var actions: [LocalMusicDetailAction] = [.playStation]
-        if hasAppleMusicURL {
-            actions.append(.openAppleMusic)
+    static func artist(hasAppleMusicURL _: Bool) -> [LocalMusicDetailAction] {
+        [.playStation]
+    }
+
+    static func playlist(hasAppleMusicURL _: Bool) -> [LocalMusicDetailAction] {
+        [.play, .shuffle]
+    }
+}
+
+enum LocalMusicAppleMusicURL {
+    enum Kind {
+        case album
+        case artist
+        case playlist
+
+        init?(_ kind: LocalServiceAppleMusicPlayable.Kind) {
+            switch kind {
+            case .album:
+                self = .album
+            case .artist:
+                self = .artist
+            case .playlist:
+                self = .playlist
+            case .song, .station:
+                return nil
+            }
         }
-        return actions
+
+        var pathComponent: String {
+            switch self {
+            case .album: return "album"
+            case .artist: return "artist"
+            case .playlist: return "playlist"
+            }
+        }
+    }
+
+    static func url(
+        existingURL: URL?,
+        catalogURL: URL? = nil,
+        playable: LocalServiceAppleMusicPlayable?,
+        kind: Kind,
+        storefront: String = "us"
+    ) -> URL? {
+        if let existingURL,
+           isSupportedAppleMusicURL(existingURL, kind: kind) {
+            return existingURL
+        }
+        if let catalogURL {
+            return catalogURL
+        }
+
+        guard let playable,
+              let catalogID = publicCatalogSuffix(from: playable.catalogID, kind: kind) else {
+            return nil
+        }
+
+        let slug = slug(for: playable.title)
+        return URL(string: "https://music.apple.com/\(storefront)/\(kind.pathComponent)/\(slug)/\(catalogID)")
+    }
+
+    static func externalURL(
+        existingURL: URL?,
+        catalogURL: URL?,
+        kind: Kind,
+        requiresCatalogURL: Bool = false
+    ) -> URL? {
+        if let catalogURL,
+           isSupportedAppleMusicURL(catalogURL, kind: kind) {
+            return catalogURL
+        }
+
+        guard !requiresCatalogURL,
+              let existingURL,
+              isSupportedAppleMusicURL(existingURL, kind: kind) else {
+            return nil
+        }
+        return existingURL
+    }
+
+    static func publicCatalogID(from value: String, kind: Kind) -> String? {
+        publicCatalogSuffix(from: value, kind: kind)
+    }
+
+    private static func publicCatalogSuffix(from value: String, kind: Kind) -> String? {
+        let parts = value.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        let suffix = parts.last ?? value
+        let namespace = parts.count > 1 ? parts.dropLast().last?.lowercased() : nil
+        guard namespace?.hasPrefix("library") != true,
+              !suffix.isEmpty else {
+            return nil
+        }
+
+        switch kind {
+        case .album, .artist:
+            return suffix.allSatisfy(\.isNumber) ? suffix : nil
+        case .playlist:
+            return suffix.hasPrefix("pl.") ? suffix : nil
+        }
+    }
+
+    private static func isSupportedAppleMusicURL(_ url: URL, kind: Kind) -> Bool {
+        guard let link = AppleMusicShareLinkParser.parse(url.absoluteString) else {
+            return false
+        }
+
+        switch (kind, link.kind) {
+        case (.album, .album), (.artist, .artist), (.playlist, .playlist):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func slug(for title: String) -> String {
+        let folded = title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        var result = ""
+        var didAppendSeparator = false
+
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+                didAppendSeparator = false
+            } else if !didAppendSeparator, !result.isEmpty {
+                result.append("-")
+                didAppendSeparator = true
+            }
+        }
+
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-")).lowercased().isEmpty
+            ? "music"
+            : result.trimmingCharacters(in: CharacterSet(charactersIn: "-")).lowercased()
     }
 }

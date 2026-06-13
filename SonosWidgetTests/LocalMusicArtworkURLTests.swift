@@ -74,4 +74,48 @@ final class LocalMusicArtworkURLTests: XCTestCase {
         XCTAssertEqual(size.width, 300)
         XCTAssertEqual(size.height, 280)
     }
+
+    func testFilledDisplaySizeCoversStationCardWithWideArtwork() {
+        let size = LocalMusicArtworkURL.filledDisplaySize(
+            maximumWidth: 4320,
+            maximumHeight: 1080,
+            boundingWidth: 184,
+            boundingHeight: 104)
+
+        XCTAssertEqual(size.width, 416)
+        XCTAssertEqual(size.height, 104)
+    }
+
+    func testStationCardsUseAlbumSizedSquareArtwork() {
+        XCTAssertEqual(
+            LocalServiceCardArtworkMetrics.size(isStationLike: true),
+            LocalServiceCardArtworkSize(width: 138, height: 138))
+    }
+
+    func testStationCardsFillWideArtworkFromCenter() {
+        XCTAssertEqual(
+            LocalServiceCardArtworkMetrics.contentMode(
+                isStationLike: true,
+                maximumWidth: 4320,
+                maximumHeight: 1080),
+            .fill)
+    }
+
+    func testStationCardsFitSquareArtwork() {
+        XCTAssertEqual(
+            LocalServiceCardArtworkMetrics.contentMode(
+                isStationLike: true,
+                maximumWidth: 1200,
+                maximumHeight: 1200),
+            .fit)
+    }
+
+    func testNonStationCardsFitWideArtwork() {
+        XCTAssertEqual(
+            LocalServiceCardArtworkMetrics.contentMode(
+                isStationLike: false,
+                maximumWidth: 4320,
+                maximumHeight: 1080),
+            .fit)
+    }
 }

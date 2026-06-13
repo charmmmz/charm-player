@@ -2,6 +2,11 @@ import Foundation
 import MusicKit
 
 enum LocalMusicArtworkURL {
+    enum ContentMode: Equatable {
+        case fit
+        case fill
+    }
+
     struct RequestSize: Equatable {
         let width: Int
         let height: Int
@@ -67,5 +72,50 @@ enum LocalMusicArtworkURL {
         }
 
         return DisplaySize(width: boundsHeight * sourceAspectRatio, height: boundsHeight)
+    }
+
+    static func filledDisplaySize(
+        maximumWidth: Int,
+        maximumHeight: Int,
+        boundingWidth: Double,
+        boundingHeight: Double
+    ) -> DisplaySize {
+        let boundsWidth = max(1, boundingWidth)
+        let boundsHeight = max(1, boundingHeight)
+        guard maximumWidth > 1, maximumHeight > 1 else {
+            return DisplaySize(width: boundsWidth, height: boundsHeight)
+        }
+
+        let sourceAspectRatio = Double(maximumWidth) / Double(maximumHeight)
+        let boundsAspectRatio = boundsWidth / boundsHeight
+
+        if sourceAspectRatio > boundsAspectRatio {
+            return DisplaySize(width: boundsHeight * sourceAspectRatio, height: boundsHeight)
+        }
+
+        return DisplaySize(width: boundsWidth, height: boundsWidth / sourceAspectRatio)
+    }
+
+    static func displaySize(
+        maximumWidth: Int,
+        maximumHeight: Int,
+        boundingWidth: Double,
+        boundingHeight: Double,
+        contentMode: ContentMode
+    ) -> DisplaySize {
+        switch contentMode {
+        case .fit:
+            return fittedDisplaySize(
+                maximumWidth: maximumWidth,
+                maximumHeight: maximumHeight,
+                boundingWidth: boundingWidth,
+                boundingHeight: boundingHeight)
+        case .fill:
+            return filledDisplaySize(
+                maximumWidth: maximumWidth,
+                maximumHeight: maximumHeight,
+                boundingWidth: boundingWidth,
+                boundingHeight: boundingHeight)
+        }
     }
 }

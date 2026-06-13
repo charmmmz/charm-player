@@ -261,6 +261,79 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertNil(urlString)
     }
 
+    func testWebURLFallbackUsesBestMatchedCatalogURL() {
+        let wrongArtist = AppleMusicCatalogSearchItem(
+            id: "111",
+            type: .album,
+            title: "Blonde",
+            artist: "Another Artist",
+            album: "Blonde",
+            artworkURLString: nil,
+            duration: nil,
+            urlString: "https://music.apple.com/us/album/wrong/111")
+        let exact = AppleMusicCatalogSearchItem(
+            id: "1440864059",
+            type: .album,
+            title: "Blonde",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            artworkURLString: nil,
+            duration: nil,
+            urlString: "https://music.apple.com/us/album/blonde/1440864059")
+
+        let urlString = LocalMusicCatalogWebURLFallback.urlString(
+            in: [wrongArtist, exact],
+            kind: .album,
+            title: "Blonde",
+            artist: "Frank Ocean",
+            album: "Blonde")
+
+        XCTAssertEqual(urlString, "https://music.apple.com/us/album/blonde/1440864059")
+    }
+
+    func testWebURLFallbackBuildsURLFromMatchedCatalogIDWhenURLMissing() {
+        let artist = AppleMusicCatalogSearchItem(
+            id: "442122051",
+            type: .artist,
+            title: "Frank Ocean",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil,
+            urlString: nil)
+
+        let urlString = LocalMusicCatalogWebURLFallback.urlString(
+            in: [artist],
+            kind: .artist,
+            title: "Frank Ocean",
+            artist: "Frank Ocean",
+            album: nil)
+
+        XCTAssertEqual(urlString, "https://music.apple.com/us/artist/frank-ocean/442122051")
+    }
+
+    func testWebURLFallbackCanRequireCatalogURLFromMusicKit() {
+        let artist = AppleMusicCatalogSearchItem(
+            id: "442122051",
+            type: .artist,
+            title: "Frank Ocean",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil,
+            urlString: nil)
+
+        let urlString = LocalMusicCatalogWebURLFallback.urlString(
+            in: [artist],
+            kind: .artist,
+            title: "Frank Ocean",
+            artist: "Frank Ocean",
+            album: nil,
+            allowGeneratedFallback: false)
+
+        XCTAssertNil(urlString)
+    }
+
     func testPlaylistCatalogIDExtractorPrefersAppleMusicURL() {
         let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
             rawID: "p.library-only",

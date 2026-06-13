@@ -395,9 +395,11 @@ struct AudioQuality: Codable, Equatable, Sendable {
     var sampleRate: Int?
     var bitDepth: Int?
     var channels: Int?
+    var lossless: Bool? = nil
+    var immersive: Bool? = nil
 
     var label: String {
-        if codec.lowercased().contains("atmos") || (channels ?? 0) > 2 {
+        if isAtmos {
             return "Dolby Atmos"
         }
         if isHiRes {
@@ -406,15 +408,19 @@ struct AudioQuality: Codable, Equatable, Sendable {
         if isLossless {
             return "Lossless"
         }
+        if codec.lowercased() == "audio", let technicalLabel {
+            return technicalLabel
+        }
         return codec.uppercased()
     }
 
     var isAtmos: Bool {
-        codec.lowercased().contains("atmos") || (channels ?? 0) > 2
+        immersive == true || codec.lowercased().contains("atmos") || (channels ?? 0) > 2
     }
 
-
     var isLossless: Bool {
+        if lossless == true { return true }
+        if lossless == false { return false }
         let c = codec.lowercased()
         if c.contains("hi-res") || c.contains("hires") || c.contains("hi res") { return true }
         if c == "lossless" || c.contains("lossless") || c.contains("flac") || c.contains("alac") || c.contains("wav")
@@ -426,6 +432,27 @@ struct AudioQuality: Codable, Equatable, Sendable {
             return true
         }
         return false
+    }
+
+    private var technicalLabel: String? {
+        guard bitDepth != nil || sampleRate != nil else { return nil }
+        let sampleLabel = sampleRate.map { rate in
+            let khz = Double(rate) / 1000.0
+            if rate % 1000 == 0 {
+                return "\(rate / 1000) kHz"
+            }
+            return String(format: "%.1f kHz", khz)
+        }
+        switch (bitDepth, sampleLabel) {
+        case let (.some(bits), .some(sample)):
+            return "\(bits)-bit/\(sample)"
+        case let (.some(bits), .none):
+            return "\(bits)-bit"
+        case let (.none, .some(sample)):
+            return sample
+        case (.none, .none):
+            return nil
+        }
     }
 
     var isHiRes: Bool {
@@ -559,7 +586,8 @@ struct AudioQuality: Codable, Equatable, Sendable {
 
     /// Map Sonos Cloud API track quality to our local model.
     nonisolated static func from(cloudQuality q: SonosCloudAPI.CloudTrackQuality) -> AudioQuality? {
-        let codec = q.codec?.lowercased() ?? ""
+        let rawCodec = q.codec?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let codec = rawCodec.lowercased()
 
         let mappedCodec: String
         if q.immersive == true || codec.contains("dolby") || codec.contains("atmos")
@@ -570,8 +598,10 @@ struct AudioQuality: Codable, Equatable, Sendable {
             else if codec.contains("alac") { mappedCodec = "ALAC" }
             else if codec.isEmpty { mappedCodec = "Lossless" }
             else { mappedCodec = codec.uppercased() }
-        } else if !codec.isEmpty {
-            mappedCodec = codec.uppercased()
+        } else if !rawCodec.isEmpty {
+            mappedCodec = rawCodec.uppercased()
+        } else if q.bitDepth != nil || q.sampleRate != nil {
+            mappedCodec = "Audio"
         } else {
             return nil
         }
@@ -580,7 +610,9 @@ struct AudioQuality: Codable, Equatable, Sendable {
             codec: mappedCodec,
             sampleRate: q.sampleRate,
             bitDepth: q.bitDepth,
-            channels: nil
+            channels: nil,
+            lossless: q.lossless,
+            immersive: q.immersive
         )
     }
 }
@@ -793,10 +825,26 @@ struct MusicService: Identifiable, Sendable {
     var capabilitiesMask: Int
     var authType: String
     var serviceType: String = ""
+    var manifestURI: String?
+    var presentationMapURI: String?
 
     var canSearch: Bool { capabilitiesMask & 1 != 0 }
     var isAnonymous: Bool { authType == "Anonymous" }
     var needsLogin: Bool { authType == "AppLink" || authType == "DeviceLink" }
+}
+
+struct MusicServiceCatalogMetadata: Codable, Equatable, Sendable {
+    var name: String
+    var serviceType: String
+    var manifestURI: String?
+    var presentationMapURI: String?
+}
+
+struct LocalMusicServiceAccount: Codable, Equatable, Sendable {
+    var serviceType: String
+    var serialNumber: String
+    var username: String
+    var nickname: String?
 }
 
 // MARK: - Live Activity
