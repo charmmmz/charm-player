@@ -138,4 +138,44 @@ final class LocalServiceInteractionTests: XCTestCase {
             LocalServiceLibraryInteraction.primaryAction(for: .station),
             .play)
     }
+
+    func testMusicResourceActionPolicyExposesQueueActionsForQueueableSongs() {
+        XCTAssertEqual(
+            MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
+            [.playNow, .playNext, .addToQueue]
+        )
+    }
+
+    func testMusicResourceActionPolicyKeepsArtistsStationFocused() {
+        XCTAssertEqual(
+            MusicResourceActionPolicy.actions(kind: .artist, isQueueable: true, supportsStation: true),
+            [.startStation]
+        )
+    }
+
+    func testMusicResourceActionPolicyOmitsQueueActionsWhenItemCannotResolve() {
+        XCTAssertEqual(
+            MusicResourceActionPolicy.actions(kind: .playlist, isQueueable: false),
+            [.playNow]
+        )
+    }
+
+    func testPlaylistTrackArtworkSelectionPrefersTrackArtwork() {
+        let trackURL = URL(string: "https://example.com/track.jpg")!
+        let playlistURL = URL(string: "https://example.com/playlist.jpg")!
+
+        XCTAssertEqual(
+            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: trackURL, fallback: playlistURL),
+            trackURL
+        )
+    }
+
+    func testPlaylistTrackArtworkSelectionFallsBackToPlaylistArtwork() {
+        let playlistURL = URL(string: "https://example.com/playlist.jpg")!
+
+        XCTAssertEqual(
+            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: nil, fallback: playlistURL),
+            playlistURL
+        )
+    }
 }
