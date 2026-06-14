@@ -150,6 +150,19 @@ final class LocalLibraryStore {
         }
     }
 
+    func catalogArtworkURL(forArtistAlbum summary: LocalMusicArtistAlbumSummary) -> URL? {
+        catalogArtworkURL(kind: .album, id: summary.id)
+    }
+
+    func ensureCatalogArtwork(forArtistAlbumSummaries summaries: [LocalMusicArtistAlbumSummary]) {
+        scheduleCatalogArtworkLookup(
+            for: LocalMusicArtistAlbumSummaryBuilder.artworkLookupItems(from: summaries))
+    }
+
+    func ensureCatalogArtwork(forArtistAlbums albums: [Album]) {
+        scheduleCatalogArtworkLookup(for: albums.map { Self.artworkLookupItem(for: $0) })
+    }
+
     func play(song: Song) async {
         await runPlayback(id: song.id.rawValue) {
             try await client.play(song: song)
@@ -209,32 +222,201 @@ final class LocalLibraryStore {
         searchManager: SearchManager
     ) async {
         await runPlayback(id: displayID) {
-            var didAttemptPlayback = false
-            if let playable {
-                didAttemptPlayback = true
-                let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
-                if didStart { return }
-            }
-
-            if let fallbackKind,
-               let fallbackTitle,
-               let catalogPlayable = await catalogFallbackPlayable(
-                kind: fallbackKind,
-                title: fallbackTitle,
-                artist: fallbackArtist,
-                album: fallbackAlbum
-               ),
-               catalogPlayable.id != playable?.id {
-                didAttemptPlayback = true
-                let didStart = await searchManager.playLocalAppleMusic(catalogPlayable, manager: manager)
-                if didStart { return }
-            }
-
-            if !didAttemptPlayback {
-                throw LocalServiceSonosPlaybackError.noPlayableCatalogID
-            }
-            throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+            try await startOnSonos(
+                playable: playable,
+                fallbackKind: fallbackKind,
+                fallbackTitle: fallbackTitle,
+                fallbackArtist: fallbackArtist,
+                fallbackAlbum: fallbackAlbum,
+                manager: manager,
+            searchManager: searchManager)
         }
+    }
+
+    func playDisplayedTracksOnSonos(
+        tracks: [Track],
+        displayID: String,
+        albumTitle: String,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async {
+        await runPlayback(id: displayID) {
+            let items = try await resolveQueueBrowseItems(
+                tracks: tracks,
+                manager: manager,
+                searchManager: searchManager)
+            let didStart = await searchManager.playNow(
+                items: items,
+                manager: manager,
+                displayTitle: albumTitle)
+            guard didStart else {
+                throw LocalServiceSonosPlaybackError.playbackFailed(
+                    searchManager.errorMessage ?? manager.errorMessage)
+            }
+        }
+    }
+
+    func performSonosQueueAction(
+        _ action: MusicResourceMenuAction,
+        playable: LocalServiceAppleMusicPlayable?,
+        displayID: String,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind? = nil,
+        fallbackTitle: String? = nil,
+        fallbackArtist: String? = nil,
+        fallbackAlbum: String? = nil,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async {
+        await runPlayback(id: displayID) {
+            switch action {
+            case .playNow, .startStation:
+                try await startOnSonos(
+                    playable: playable,
+                    fallbackKind: fallbackKind,
+                    fallbackTitle: fallbackTitle,
+                    fallbackArtist: fallbackArtist,
+                    fallbackAlbum: fallbackAlbum,
+                    manager: manager,
+                    searchManager: searchManager)
+            case .playNext, .addToQueue:
+                let item = try await resolveQueueBrowseItem(
+                    playable: playable,
+                    fallbackKind: fallbackKind,
+                    fallbackTitle: fallbackTitle,
+                    fallbackArtist: fallbackArtist,
+                    fallbackAlbum: fallbackAlbum,
+                    manager: manager,
+                    searchManager: searchManager)
+
+                searchManager.errorMessage = nil
+                manager.errorMessage = nil
+                let didQueue: Bool
+                switch action {
+                case .playNext:
+                    didQueue = await searchManager.playNext(item: item, manager: manager)
+                case .addToQueue:
+                    didQueue = await searchManager.addToQueue(item: item, manager: manager)
+                case .playNow, .startStation:
+                    didQueue = false
+                }
+
+                guard didQueue else {
+                    throw LocalServiceSonosPlaybackError.playbackFailed(
+                        searchManager.errorMessage ?? manager.errorMessage)
+                }
+            }
+        }
+    }
+
+    private func startOnSonos(
+        playable: LocalServiceAppleMusicPlayable?,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind?,
+        fallbackTitle: String?,
+        fallbackArtist: String?,
+        fallbackAlbum: String?,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async throws {
+        var didAttemptPlayback = false
+        if let playable {
+            didAttemptPlayback = true
+            let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
+            if didStart { return }
+        }
+
+        if let fallbackKind,
+           let fallbackTitle,
+           let catalogPlayable = await catalogFallbackPlayable(
+            kind: fallbackKind,
+            title: fallbackTitle,
+            artist: fallbackArtist,
+            album: fallbackAlbum
+           ),
+           catalogPlayable.id != playable?.id {
+            didAttemptPlayback = true
+            let didStart = await searchManager.playLocalAppleMusic(catalogPlayable, manager: manager)
+            if didStart { return }
+        }
+
+        if !didAttemptPlayback {
+            throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+        }
+        throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+    }
+
+    private func resolveQueueBrowseItems(
+        tracks: [Track],
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async throws -> [BrowseItem] {
+        var items: [BrowseItem] = []
+        for track in tracks {
+            do {
+                let item = try await resolveQueueBrowseItem(
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+                items.append(item)
+            } catch {
+                SonosLog.info(
+                    .playback,
+                    "LocalService displayed track queue skipped title='\(track.title)' " +
+                        "artist='\(track.artistName)' error=\(error)")
+            }
+        }
+
+        guard !items.isEmpty else {
+            throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+        }
+        return items
+    }
+
+    private func resolveQueueBrowseItem(
+        playable: LocalServiceAppleMusicPlayable?,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind?,
+        fallbackTitle: String?,
+        fallbackArtist: String?,
+        fallbackAlbum: String?,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async throws -> BrowseItem {
+        var didAttemptResolution = false
+        if let playable {
+            didAttemptResolution = true
+            if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
+                playable,
+                manager: manager
+            ) {
+                return item
+            }
+        }
+
+        if let fallbackKind,
+           let fallbackTitle,
+           let catalogPlayable = await catalogFallbackPlayable(
+            kind: fallbackKind,
+            title: fallbackTitle,
+            artist: fallbackArtist,
+            album: fallbackAlbum
+           ),
+           catalogPlayable.id != playable?.id {
+            didAttemptResolution = true
+            if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
+                catalogPlayable,
+                manager: manager
+            ) {
+                return item
+            }
+        }
+
+        if !didAttemptResolution {
+            throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+        }
+        throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
     }
 
     private func catalogFallbackPlayable(
@@ -275,6 +457,10 @@ final class LocalLibraryStore {
 
     func songs(for artist: Artist, limit: Int = 100) async throws -> [Song] {
         try await client.songs(for: artist, limit: limit)
+    }
+
+    func albums(for artist: Artist, limit: Int = 100) async throws -> [Album] {
+        try await client.albums(for: artist, limit: limit)
     }
 
     private func catalogArtworkURL(kind: LocalServiceAppleMusicPlayable.Kind, id: String) -> URL? {

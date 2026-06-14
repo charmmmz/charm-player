@@ -966,8 +966,12 @@ final class SonosManager {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func playNext(uri: String, metadata: String) async {
-        guard let ip = playbackIP else { return }
+    @discardableResult
+    func playNext(uri: String, metadata: String) async -> Bool {
+        guard let ip = playbackIP else {
+            errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
+            return false
+        }
         do {
             // Sonos's `EnqueueAsNext=1` flag is unreliable across
             // firmwares — when an album/playlist is playing it often
@@ -989,7 +993,11 @@ final class SonosManager {
                     ip: ip, uri: uri, metadata: metadata, asNext: true)
             }
             await loadQueue()
-        } catch { errorMessage = error.localizedDescription }
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func playTrackInQueue(_ item: QueueItem) async {

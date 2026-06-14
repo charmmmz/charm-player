@@ -86,4 +86,46 @@ final class LocalLibraryModelsTests: XCTestCase {
         XCTAssertEqual(LocalServiceSectionKind.library.title, "Your Library")
         XCTAssertEqual(LocalServiceSectionKind.library.systemImage, "music.note.list")
     }
+
+    func testMusicResourcePresentationUsesOneTapIdentityForCardRegions() {
+        let resource = MusicResourcePresentation(
+            id: "recommendation-playlist-pl.heavy",
+            kind: .playlist,
+            title: "Heavy Rotation",
+            subtitle: "Apple Music for Charm",
+            detail: nil,
+            fallbackSystemImage: "music.note.list",
+            accessory: .chevron,
+            isQueueable: true
+        )
+
+        XCTAssertEqual(resource.artworkTapID, resource.id)
+        XCTAssertEqual(resource.titleTapID, resource.id)
+    }
+
+    func testMusicResourcePresentationMapsBrowseItemKindFromCloudType() {
+        let item = BrowseItem(
+            id: "playlist:pl.new",
+            title: "New Music",
+            artist: "Apple Music",
+            album: "",
+            albumArtURL: nil,
+            uri: "x-rincon-cpcontainer:1006206c playlist%3Apl.new?sid=204&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "PLAYLIST"
+        )
+
+        let resource = MusicResourcePresentation.fromBrowseItem(
+            item,
+            fallbackSystemImage: "music.note.list",
+            accessory: .chevron
+        )
+
+        XCTAssertEqual(resource.id, "playlist:pl.new")
+        XCTAssertEqual(resource.kind, .playlist)
+        XCTAssertEqual(resource.title, "New Music")
+        XCTAssertEqual(resource.subtitle, "Apple Music")
+        XCTAssertTrue(resource.isQueueable)
+    }
 }

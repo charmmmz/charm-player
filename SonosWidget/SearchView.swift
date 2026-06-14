@@ -1180,23 +1180,25 @@ struct SearchView: View {
                       systemImage: favorited ? "heart.fill" : "heart")
             }
         } else if item.uri != nil || item.resMD != nil {
-            Button {
-                playItem(item)
-            } label: {
-                Label("Play Now", systemImage: "play.fill")
-            }
-            if item.uri != nil {
-                Button {
+            MusicResourceContextMenu(
+                actions: MusicResourceActionPolicy.actions(
+                    kind: MusicResourceKind(cloudType: item.cloudType),
+                    isQueueable: item.uri != nil
+                )
+            ) { action in
+                switch action {
+                case .playNow:
+                    playItem(item)
+                case .playNext:
                     Task { await searchManager.playNext(item: item, manager: manager) }
-                } label: {
-                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                }
-                Button {
+                case .addToQueue:
                     Task { await searchManager.addToQueue(item: item, manager: manager) }
-                } label: {
-                    Label("Add to Queue", systemImage: "text.badge.plus")
+                case .startStation:
+                    startStationForItem(item)
                 }
+            }
 
+            if item.uri != nil {
                 Divider()
 
                 Button {
@@ -1656,21 +1658,30 @@ struct FavoriteCategoryDetailView: View {
                       systemImage: favorited ? "heart.fill" : "heart")
             }
         } else if item.uri != nil || item.resMD != nil {
-            Button { playItem(item) } label: {
-                Label("Play Now", systemImage: "play.fill")
-            }
-            if item.uri != nil {
-                Button {
+            MusicResourceContextMenu(
+                actions: MusicResourceActionPolicy.actions(
+                    kind: MusicResourceKind(cloudType: item.cloudType),
+                    isQueueable: item.uri != nil
+                )
+            ) { action in
+                switch action {
+                case .playNow:
+                    playItem(item)
+                case .playNext:
                     Task { await searchManager.playNext(item: item, manager: manager) }
-                } label: {
-                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-                }
-                Button {
+                case .addToQueue:
                     Task { await searchManager.addToQueue(item: item, manager: manager) }
-                } label: {
-                    Label("Add to Queue", systemImage: "text.badge.plus")
+                case .startStation:
+                    guard playingItemId == nil else { return }
+                    playingItemId = item.id
+                    Task {
+                        await searchManager.startStation(item: item, manager: manager)
+                        withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
+                    }
                 }
+            }
 
+            if item.uri != nil {
                 Divider()
 
                 Button {

@@ -287,3 +287,81 @@ enum LocalMusicAppleMusicURL {
             : result.trimmingCharacters(in: CharacterSet(charactersIn: "-")).lowercased()
     }
 }
+
+struct LocalMusicArtistAlbumSummaryInput: Equatable, Sendable {
+    let id: String
+    let title: String
+    let artistName: String
+    let albumTitle: String?
+    let artworkURL: URL?
+}
+
+struct LocalMusicArtistAlbumSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let artistName: String
+    let artworkURL: URL?
+    let songCount: Int
+}
+
+nonisolated enum LocalMusicArtistAlbumSummaryBuilder {
+    static func summaries(
+        from songs: [LocalMusicArtistAlbumSummaryInput]
+    ) -> [LocalMusicArtistAlbumSummary] {
+        let grouped = Dictionary(grouping: songs) { song in
+            albumTitle(song.albumTitle)
+        }
+
+        return grouped
+            .map { title, songs in
+                let artistName = firstMeaningfulArtist(in: songs)
+                return LocalMusicArtistAlbumSummary(
+                    id: albumID(title: title, artistName: artistName),
+                    title: title,
+                    artistName: artistName,
+                    artworkURL: songs.first { $0.artworkURL != nil }?.artworkURL,
+                    songCount: songs.count)
+            }
+            .sorted(by: summarySort)
+    }
+
+    static func artworkLookupItems(
+        from summaries: [LocalMusicArtistAlbumSummary]
+    ) -> [LocalMusicCatalogArtworkLookupItem] {
+        summaries.map { summary in
+            LocalMusicCatalogArtworkLookupItem(
+                id: summary.id,
+                kind: .album,
+                title: summary.title,
+                artist: summary.artistName,
+                album: summary.title,
+                directArtworkURLString: summary.artworkURL?.absoluteString)
+        }
+    }
+
+    private static func albumTitle(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Unknown Album" : trimmed
+    }
+
+    private static func albumID(title: String, artistName: String) -> String {
+        "artist-album:\(artistName):\(title)"
+    }
+
+    private static func firstMeaningfulArtist(
+        in songs: [LocalMusicArtistAlbumSummaryInput]
+    ) -> String {
+        songs.first {
+            !$0.artistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.artistName ?? ""
+    }
+
+    private static func summarySort(
+        _ lhs: LocalMusicArtistAlbumSummary,
+        _ rhs: LocalMusicArtistAlbumSummary
+    ) -> Bool {
+        if lhs.title == "Unknown Album" { return false }
+        if rhs.title == "Unknown Album" { return true }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+}
