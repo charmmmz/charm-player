@@ -1,7 +1,20 @@
 import XCTest
+import Network
 @testable import SonosWidget
 
 final class LocalServiceInteractionTests: XCTestCase {
+    private let sidMappingKey = "CloudLocalSidMapping"
+
+    override func setUp() {
+        super.setUp()
+        UserDefaults.standard.removeObject(forKey: sidMappingKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: sidMappingKey)
+        super.tearDown()
+    }
+
     func testAlbumDetailActionsKeepAppleMusicLinkOnArtwork() {
         XCTAssertEqual(
             LocalMusicDetailActions.album(hasAppleMusicURL: true),
@@ -177,5 +190,154 @@ final class LocalServiceInteractionTests: XCTestCase {
             MusicResourceArtworkSelection.preferredRowArtworkURL(primary: nil, fallback: playlistURL),
             playlistURL
         )
+    }
+
+    func testSongLocalServicePlayableResolvesToPlayableBrowseItem() async throws {
+        let searchManager = localServiceSearchManager()
+        let manager = try await localServiceSonosManager()
+        let playable = LocalServiceAppleMusicPlayable(
+            kind: .song,
+            catalogID: "song:1440857781",
+            title: "Nikes",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            artworkURLString: "https://example.com/nikes.jpg",
+            duration: 312)
+
+        let item = await searchManager.resolveLocalAppleMusicBrowseItem(playable, manager: manager)
+
+        XCTAssertEqual(item?.id, "song:1440857781")
+        XCTAssertEqual(item?.title, "Nikes")
+        XCTAssertEqual(item?.artist, "Frank Ocean")
+        XCTAssertEqual(item?.album, "Blonde")
+        XCTAssertEqual(item?.albumArtURL, "https://example.com/nikes.jpg")
+        XCTAssertEqual(item?.duration, 312)
+        XCTAssertFalse(item?.isContainer ?? true)
+        XCTAssertEqual(item?.serviceId, 204)
+        XCTAssertEqual(item?.cloudType, "TRACK")
+        XCTAssertEqual(item?.uri?.isEmpty, false)
+    }
+
+    func testPlaylistLocalServicePlayableResolvesToQueueableContainerBrowseItem() async throws {
+        let searchManager = localServiceSearchManager()
+        let manager = try await localServiceSonosManager()
+        let playable = LocalServiceAppleMusicPlayable(
+            kind: .playlist,
+            catalogID: "playlist:pl.abc123",
+            title: "Sunday Queue",
+            artist: "Charm",
+            album: "",
+            artworkURLString: "https://example.com/playlist.jpg",
+            duration: nil)
+
+        let item = await searchManager.resolveLocalAppleMusicBrowseItem(playable, manager: manager)
+
+        XCTAssertEqual(item?.id, "playlist:pl.abc123")
+        XCTAssertEqual(item?.title, "Sunday Queue")
+        XCTAssertTrue(item?.isContainer ?? false)
+        XCTAssertEqual(item?.serviceId, 204)
+        XCTAssertEqual(item?.cloudType, "PLAYLIST")
+        XCTAssertEqual(item?.uri?.isEmpty, false)
+    }
+
+    func testStationLocalServicePlayableResolvesToProgramRadioBrowseItem() async throws {
+        let searchManager = localServiceSearchManager()
+        let manager = try await localServiceSonosManager()
+        let playable = LocalServiceAppleMusicPlayable(
+            kind: .station,
+            catalogID: "radio:ra.1740614260",
+            title: "Apple Music Chill",
+            artist: "",
+            album: "",
+            artworkURLString: "https://example.com/chill.jpg",
+            duration: nil,
+            stationPlaybackKind: .tracks)
+
+        let item = await searchManager.resolveLocalAppleMusicBrowseItem(playable, manager: manager)
+
+        XCTAssertEqual(item?.id, "radio:ra.1740614260")
+        XCTAssertEqual(item?.title, "Apple Music Chill")
+        XCTAssertFalse(item?.isContainer ?? true)
+        XCTAssertEqual(item?.serviceId, 204)
+        XCTAssertEqual(item?.cloudType, "PROGRAM")
+        XCTAssertEqual(item?.uri?.isEmpty, false)
+    }
+
+    private func localServiceSearchManager() -> SearchManager {
+        let searchManager = SearchManager()
+        searchManager.musicServices = [
+            MusicService(
+                id: 204,
+                name: "Apple Music",
+                smapiURI: "https://sonos-music.apple.com/ws/SonosSoap",
+                capabilitiesMask: 1,
+                authType: "AppLink",
+                serviceType: "52231")
+        ]
+        searchManager.linkedAccounts = [Self.appleMusicAccount()]
+        searchManager.rebuildLocalServiceIdMapping()
+        return searchManager
+    }
+
+    private func localServiceSonosManager() async throws -> SonosManager {
+        let server = try LocalServiceProbeServer()
+        try await server.start()
+        addTeardownBlock {
+            server.cancel()
+        }
+
+        let manager = SonosManager()
+        manager.selectedSpeaker = SonosPlayer(
+            id: "RINCON_TEST",
+            name: "Test Speaker",
+            ipAddress: "127.0.0.1",
+            isCoordinator: true)
+        return manager
+    }
+
+    private static func appleMusicAccount() -> SonosCloudAPI.CloudMusicServiceAccount {
+        SonosCloudAPI.CloudMusicServiceAccount(
+            id: nil,
+            serviceId: "52231",
+            integrationId: nil,
+            accountId: "2",
+            nickname: nil,
+            name: "Apple Music",
+            username: "X_#Svc52231-test-account-Token",
+            isGuest: false)
+    }
+}
+
+private final class LocalServiceProbeServer {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "LocalServiceProbeServer")
+
+    init() throws {
+        listener = try NWListener(using: .tcp, on: 1400)
+    }
+
+    func start() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    self.listener.stateUpdateHandler = nil
+                    continuation.resume()
+                case .failed(let error):
+                    self.listener.stateUpdateHandler = nil
+                    continuation.resume(throwing: error)
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { connection in
+                connection.start(queue: self.queue)
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    func cancel() {
+        listener.cancel()
     }
 }

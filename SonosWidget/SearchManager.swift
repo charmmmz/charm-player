@@ -1335,57 +1335,15 @@ final class SearchManager {
         _ playable: LocalServiceAppleMusicPlayable,
         manager: SonosManager
     ) async -> Bool {
-        configure(speakerIP: manager.selectedSpeaker?.playbackIP)
-
-        guard manager.selectedSpeaker != nil else {
-            errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
+        guard let item = await resolveLocalAppleMusicBrowseItem(playable, manager: manager) else {
             return false
         }
-
-        if manager.transportBackend == .unknown {
-            _ = await manager.probeBackend()
-        }
-
-        if manager.transportBackend == .cloud {
-            errorMessage = SonosControlError
-                .unsupportedInCloudMode(feature: "Playing Local Service items")
-                .localizedDescription
-            return false
-        }
-
-        if !hasProbed {
-            await probeLinkedServices()
-        }
-        await refreshServiceIdMappingIfNeeded()
-
-        guard let account = linkedAccounts.first(where: { isAppleMusicAccount($0) }),
-              let serviceId = account.serviceId,
-              let accountId = account.accountId else {
-            errorMessage = LocalServiceSonosPlaybackError.appleMusicAccountMissing.localizedDescription
-            return false
-        }
-
-        guard cloudToLocalSid[serviceId] != nil else {
-            errorMessage = LocalServiceSonosPlaybackError.localServiceMappingMissing.localizedDescription
-            return false
-        }
-
-        guard let item = localServiceBrowseItem(
-            for: playable,
-            cloudServiceId: serviceId,
-            accountId: accountId
-        ), item.uri?.isEmpty == false else {
-            errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
-            return false
-        }
-
-        SonosLog.info(
-            .playback,
-            "LocalService play kind=\(playable.kind) catalogID=\(playable.catalogID) " +
-            "objectID=\(item.id) localSid=\(item.serviceId.map(String.init) ?? "nil") " +
-            "cloudServiceId=\(serviceId) accountId=\(accountId) uri=\(item.uri ?? "nil")")
 
         if playable.kind == .station {
+            guard let ids = parseCloudIds(from: item) else {
+                errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
+                return false
+            }
             guard let ip = manager.selectedSpeaker?.playbackIP else {
                 SonosLog.error(.station, "LocalService station: no speaker IP")
                 return false
@@ -1402,8 +1360,8 @@ final class SearchManager {
                 stationName: playable.title,
                 streamObjectID: playable.stationStreamObjectID,
                 isLiveStreamStation: playable.stationPlaybackKind == .stream,
-                cloudServiceId: serviceId,
-                accountId: accountId,
+                cloudServiceId: ids.cloudServiceId,
+                accountId: ids.accountId,
                 artURL: playable.artworkURLString,
                 resMD: item.resMD,
                 manager: manager)
@@ -1412,7 +1370,64 @@ final class SearchManager {
         return await playNowInternal(item: item, manager: manager)
     }
 
-    private func localServiceBrowseItem(
+    func resolveLocalAppleMusicBrowseItem(
+        _ playable: LocalServiceAppleMusicPlayable,
+        manager: SonosManager
+    ) async -> BrowseItem? {
+        configure(speakerIP: manager.selectedSpeaker?.playbackIP)
+
+        guard manager.selectedSpeaker != nil else {
+            errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
+            return nil
+        }
+
+        if manager.transportBackend == .unknown {
+            _ = await manager.probeBackend()
+        }
+
+        if manager.transportBackend == .cloud {
+            errorMessage = SonosControlError
+                .unsupportedInCloudMode(feature: "Playing Local Service items")
+                .localizedDescription
+            return nil
+        }
+
+        if !hasProbed {
+            await probeLinkedServices()
+        }
+        await refreshServiceIdMappingIfNeeded()
+
+        guard let account = linkedAccounts.first(where: { isAppleMusicAccount($0) }),
+              let serviceId = account.serviceId,
+              let accountId = account.accountId else {
+            errorMessage = LocalServiceSonosPlaybackError.appleMusicAccountMissing.localizedDescription
+            return nil
+        }
+
+        guard cloudToLocalSid[serviceId] != nil else {
+            errorMessage = LocalServiceSonosPlaybackError.localServiceMappingMissing.localizedDescription
+            return nil
+        }
+
+        guard let item = localServiceBrowseItem(
+            for: playable,
+            cloudServiceId: serviceId,
+            accountId: accountId
+        ), item.uri?.isEmpty == false else {
+            errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
+            return nil
+        }
+
+        SonosLog.info(
+            .playback,
+            "LocalService play kind=\(playable.kind) catalogID=\(playable.catalogID) " +
+            "objectID=\(item.id) localSid=\(item.serviceId.map(String.init) ?? "nil") " +
+            "cloudServiceId=\(serviceId) accountId=\(accountId) uri=\(item.uri ?? "nil")")
+
+        return item
+    }
+
+    func localServiceBrowseItem(
         for playable: LocalServiceAppleMusicPlayable,
         cloudServiceId: String,
         accountId: String
