@@ -331,6 +331,74 @@ struct LocalLibraryView: View {
         .padding(.horizontal)
     }
 
+    private func localResource(
+        id: String,
+        kind: MusicResourceKind,
+        title: String,
+        subtitle: String,
+        detail: String?,
+        fallbackSystemImage: String,
+        accessory: MusicResourceAccessory,
+        isQueueable: Bool
+    ) -> MusicResourcePresentation {
+        MusicResourcePresentation(
+            id: id,
+            kind: kind,
+            title: title,
+            subtitle: subtitle,
+            detail: detail,
+            fallbackSystemImage: fallbackSystemImage,
+            accessory: accessory,
+            isQueueable: isQueueable
+        )
+    }
+
+    private func resource(for item: LocalServiceCardItem) -> MusicResourcePresentation {
+        localResource(
+            id: item.id,
+            kind: item.resourceKind,
+            title: item.title,
+            subtitle: item.subtitle,
+            detail: nil,
+            fallbackSystemImage: item.fallbackSystemImage,
+            accessory: item.resourceKind == .song || item.resourceKind == .station ? .play : .chevron,
+            isQueueable: item.playable != nil
+        )
+    }
+
+    @ViewBuilder
+    private func localResourceContextMenu(
+        playable: LocalServiceAppleMusicPlayable?,
+        displayID: String,
+        kind: MusicResourceKind,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind?,
+        fallbackTitle: String,
+        fallbackArtist: String? = nil,
+        fallbackAlbum: String? = nil
+    ) -> some View {
+        MusicResourceContextMenu(
+            actions: MusicResourceActionPolicy.actions(
+                kind: kind,
+                isQueueable: playable != nil || fallbackKind != nil,
+                supportsStation: kind == .artist
+            )
+        ) { action in
+            Task {
+                await store.performSonosQueueAction(
+                    action,
+                    playable: playable,
+                    displayID: displayID,
+                    fallbackKind: fallbackKind,
+                    fallbackTitle: fallbackTitle,
+                    fallbackArtist: fallbackArtist,
+                    fallbackAlbum: fallbackAlbum,
+                    manager: manager,
+                    searchManager: searchManager
+                )
+            }
+        }
+    }
+
     @ViewBuilder
     private func card(_ item: LocalServiceCardItem) -> some View {
         switch item {
@@ -345,6 +413,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .playlist(let playlist):
             NavigationLink {
                 LocalMusicPlaylistDetailView(
@@ -356,6 +436,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .recentlyPlayed(let recentlyPlayed):
             recentlyPlayedCard(recentlyPlayed, item: item)
         case .recommendation(let recommendation):
@@ -378,6 +470,18 @@ struct LocalLibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .artist(let artist):
             if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
                 NavigationLink {
@@ -390,6 +494,18 @@ struct LocalLibraryView: View {
                     cardContent(item)
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .contextMenu {
+                    localResourceContextMenu(
+                        playable: item.playable,
+                        displayID: item.playbackID,
+                        kind: item.resourceKind,
+                        fallbackKind: item.playable?.kind,
+                        fallbackTitle: item.title,
+                        fallbackArtist: item.subtitle,
+                        fallbackAlbum: item.title
+                    )
+                }
             } else {
                 Button {
                     Task {
@@ -407,6 +523,18 @@ struct LocalLibraryView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(store.isStartingPlayback)
+                .contentShape(Rectangle())
+                .contextMenu {
+                    localResourceContextMenu(
+                        playable: item.playable,
+                        displayID: item.playbackID,
+                        kind: item.resourceKind,
+                        fallbackKind: item.playable?.kind,
+                        fallbackTitle: item.title,
+                        fallbackArtist: item.subtitle,
+                        fallbackAlbum: item.title
+                    )
+                }
             }
         case .station(let station):
             Button {
@@ -422,6 +550,18 @@ struct LocalLibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         }
     }
 
@@ -439,6 +579,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .playlist(let playlist):
             NavigationLink {
                 LocalMusicPlaylistDetailView(
@@ -450,6 +602,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .station:
             Button {
                 Task {
@@ -464,6 +628,18 @@ struct LocalLibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         @unknown default:
             EmptyView()
         }
@@ -486,6 +662,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .playlist(let playlist):
             NavigationLink {
                 LocalMusicPlaylistDetailView(
@@ -497,6 +685,18 @@ struct LocalLibraryView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         case .station:
             Button {
                 Task {
@@ -511,6 +711,18 @@ struct LocalLibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
+            .contentShape(Rectangle())
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: item.playable,
+                    displayID: item.playbackID,
+                    kind: item.resourceKind,
+                    fallbackKind: item.playable?.kind,
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.subtitle,
+                    fallbackAlbum: item.title
+                )
+            }
         @unknown default:
             EmptyView()
         }
@@ -518,7 +730,18 @@ struct LocalLibraryView: View {
 
     private func cardContent(_ item: LocalServiceCardItem) -> some View {
         let artworkSize = item.cardArtworkSize
-        return VStack(alignment: .leading, spacing: 6) {
+        let resource = resource(for: item)
+        let isLoading = store.isStartingPlayback && store.activePlaybackItemID == item.playbackID
+        let isDimmed = store.isStartingPlayback && store.activePlaybackItemID != item.playbackID
+
+        return MusicResourceCardLabel(
+            resource: resource,
+            width: artworkSize.width,
+            height: artworkSize.height,
+            cornerRadius: 8,
+            isDimmed: isDimmed,
+            isLoading: isLoading
+        ) {
             LocalLibraryArtworkTile(
                 artwork: item.artwork,
                 artworkURL: item.catalogArtworkURL(using: store),
@@ -529,33 +752,9 @@ struct LocalLibraryView: View {
                     maximumWidth: item.artwork?.maximumWidth,
                     maximumHeight: item.artwork?.maximumHeight)
             )
-            .frame(width: artworkSize.width, height: artworkSize.height)
-
-            Text(item.title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .frame(height: 34, alignment: .topLeading)
-
-            Text(item.subtitle)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            .id(resource.artworkTapID)
         }
-        .frame(width: artworkSize.width, alignment: .leading)
-        .opacity(store.isStartingPlayback && store.activePlaybackItemID != item.playbackID ? 0.55 : 1)
-        .overlay {
-            if store.isStartingPlayback && store.activePlaybackItemID == item.playbackID {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.ultraThinMaterial.opacity(0.88))
-                    .frame(width: artworkSize.width, height: artworkSize.height)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .overlay(alignment: .top) {
-                        ProgressView()
-                            .padding(.top, max(24, artworkSize.height / 2 - 10))
-                    }
-            }
-        }
+        .id(resource.titleTapID)
     }
 
     private func libraryCategoryDetail(_ category: LocalLibraryCategory) -> some View {
@@ -727,6 +926,17 @@ struct LocalLibraryView: View {
                         manager: manager,
                         searchManager: searchManager)
                 }
+                .contextMenu {
+                    localResourceContextMenu(
+                        playable: LocalServiceAppleMusicPlayable.make(song: song),
+                        displayID: song.id.rawValue,
+                        kind: .song,
+                        fallbackKind: .song,
+                        fallbackTitle: song.title,
+                        fallbackArtist: song.artistName,
+                        fallbackAlbum: song.albumTitle
+                    )
+                }
             }
         }
     }
@@ -755,6 +965,17 @@ struct LocalLibraryView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    localResourceContextMenu(
+                        playable: LocalServiceAppleMusicPlayable.make(album: album),
+                        displayID: album.id.rawValue,
+                        kind: .album,
+                        fallbackKind: .album,
+                        fallbackTitle: album.title,
+                        fallbackArtist: album.artistName,
+                        fallbackAlbum: album.title
+                    )
+                }
             }
         }
     }
@@ -785,6 +1006,16 @@ struct LocalLibraryView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        localResourceContextMenu(
+                            playable: LocalServiceAppleMusicPlayable.make(artist: artist),
+                            displayID: artist.id.rawValue,
+                            kind: .artist,
+                            fallbackKind: .artist,
+                            fallbackTitle: artist.name,
+                            fallbackArtist: artist.name
+                        )
+                    }
                 } else {
                     playRow(
                         id: artist.id.rawValue,
@@ -804,6 +1035,16 @@ struct LocalLibraryView: View {
                             fallbackArtist: artist.name,
                             manager: manager,
                             searchManager: searchManager)
+                    }
+                    .contextMenu {
+                        localResourceContextMenu(
+                            playable: LocalServiceAppleMusicPlayable.make(artist: artist),
+                            displayID: artist.id.rawValue,
+                            kind: .artist,
+                            fallbackKind: .artist,
+                            fallbackTitle: artist.name,
+                            fallbackArtist: artist.name
+                        )
                     }
                 }
             }
@@ -835,6 +1076,16 @@ struct LocalLibraryView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    localResourceContextMenu(
+                        playable: LocalServiceAppleMusicPlayable.make(playlist: playlist),
+                        displayID: playlist.id.rawValue,
+                        kind: .playlist,
+                        fallbackKind: .playlist,
+                        fallbackTitle: playlist.name,
+                        fallbackArtist: playlist.curatorName
+                    )
+                }
             }
         }
     }
@@ -888,51 +1139,26 @@ struct LocalLibraryView: View {
         diagnosticLabel: String? = nil,
         artworkStyle: LocalLibraryArtworkStyle = .square
     ) -> some View {
-        HStack(spacing: 12) {
+        let resource = MusicResourcePresentation(
+            id: "\(title)|\(subtitle)|\(detail ?? "")",
+            kind: .unknown,
+            title: title,
+            subtitle: subtitle,
+            detail: detail,
+            fallbackSystemImage: fallbackSystemImage,
+            accessory: accessory.musicResourceAccessory,
+            isQueueable: false
+        )
+
+        return MusicResourceRowLabel(resource: resource) {
             rowArtwork(
                 artwork: artwork,
                 artworkURL: artworkURL,
                 fallbackSystemImage: fallbackSystemImage,
                 diagnosticLabel: diagnosticLabel,
-                style: artworkStyle)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if let detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            switch accessory {
-            case .play:
-                Image(systemName: "play.fill")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-            case .chevron:
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 32, height: 32)
-            case .progress:
-                ProgressView()
-                    .frame(width: 32, height: 32)
-            }
+                style: artworkStyle
+            )
         }
-        .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal)
     }
 
@@ -983,6 +1209,19 @@ private enum LocalServiceRowAccessory {
     case play
     case chevron
     case progress
+}
+
+private extension LocalServiceRowAccessory {
+    var musicResourceAccessory: MusicResourceAccessory {
+        switch self {
+        case .play:
+            return .play
+        case .chevron:
+            return .chevron
+        case .progress:
+            return .progress
+        }
+    }
 }
 
 private struct LocalLibraryIndexedSection<Item>: Identifiable {
@@ -1139,6 +1378,54 @@ private enum LocalServiceCardItem: Identifiable {
         case .station(let station): return station.id.rawValue
         case .recentlyPlayed(let item): return item.id.rawValue
         case .recommendation(let item): return item.id.rawValue
+        }
+    }
+
+    var resourceKind: MusicResourceKind {
+        switch self {
+        case .song:
+            return .song
+        case .album:
+            return .album
+        case .artist:
+            return .artist
+        case .playlist:
+            return .playlist
+        case .station:
+            return .station
+        case .recentlyPlayed(let item):
+            switch item {
+            case .album: return .album
+            case .playlist: return .playlist
+            case .station: return .station
+            @unknown default: return .unknown
+            }
+        case .recommendation(let item):
+            switch item {
+            case .album: return .album
+            case .playlist: return .playlist
+            case .station: return .station
+            @unknown default: return .unknown
+            }
+        }
+    }
+
+    var playable: LocalServiceAppleMusicPlayable? {
+        switch self {
+        case .song(let song):
+            return LocalServiceAppleMusicPlayable.make(song: song)
+        case .album(let album):
+            return LocalServiceAppleMusicPlayable.make(album: album)
+        case .artist(let artist):
+            return LocalServiceAppleMusicPlayable.make(artist: artist)
+        case .playlist(let playlist):
+            return LocalServiceAppleMusicPlayable.make(playlist: playlist)
+        case .station(let station):
+            return LocalServiceAppleMusicPlayable.make(station: station)
+        case .recentlyPlayed(let item):
+            return LocalServiceAppleMusicPlayable.make(recentlyPlayed: item)
+        case .recommendation(let item):
+            return LocalServiceAppleMusicPlayable.make(recommendation: item)
         }
     }
 
