@@ -182,12 +182,11 @@ struct LocalMusicLibraryClient {
     }
 
     func albumDetails(for album: Album) async throws -> Album {
-        do {
-            return try await album.with(.tracks)
-        } catch {
-            SonosLog.info(.albumDetail, "Library album detail load failed, trying catalog fallback: \(error)")
-            return try await catalogAlbumDetails(for: album)
-        }
+        try await album.with(.tracks)
+    }
+
+    func completeCatalogAlbumDetails(for album: Album) async throws -> Album {
+        try await catalogAlbumDetails(for: album)
     }
 
     func playlistDetails(for playlist: Playlist) async throws -> Playlist {
@@ -201,6 +200,10 @@ struct LocalMusicLibraryClient {
 
     func songs(for artist: Artist, limit: Int = 100) async throws -> [Song] {
         try await librarySongs(for: artist, limit: limit)
+    }
+
+    func albums(for artist: Artist, limit: Int = 100) async throws -> [Album] {
+        try await libraryAlbums(for: artist, limit: limit)
     }
 
     func play(artist: Artist) async throws {
@@ -289,6 +292,15 @@ struct LocalMusicLibraryClient {
 
     private func librarySongs(for artist: Artist, limit: Int) async throws -> [Song] {
         var request = MusicLibraryRequest<Song>()
+        request.limit = limit
+        request.filter(matching: \.artists, contains: artist)
+        request.sort(by: \.title, ascending: true)
+        let response = try await request.response()
+        return Array(response.items)
+    }
+
+    private func libraryAlbums(for artist: Artist, limit: Int) async throws -> [Album] {
+        var request = MusicLibraryRequest<Album>()
         request.limit = limit
         request.filter(matching: \.artists, contains: artist)
         request.sort(by: \.title, ascending: true)

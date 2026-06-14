@@ -150,6 +150,19 @@ final class LocalLibraryStore {
         }
     }
 
+    func catalogArtworkURL(forArtistAlbum summary: LocalMusicArtistAlbumSummary) -> URL? {
+        catalogArtworkURL(kind: .album, id: summary.id)
+    }
+
+    func ensureCatalogArtwork(forArtistAlbumSummaries summaries: [LocalMusicArtistAlbumSummary]) {
+        scheduleCatalogArtworkLookup(
+            for: LocalMusicArtistAlbumSummaryBuilder.artworkLookupItems(from: summaries))
+    }
+
+    func ensureCatalogArtwork(forArtistAlbums albums: [Album]) {
+        scheduleCatalogArtworkLookup(for: albums.map { Self.artworkLookupItem(for: $0) })
+    }
+
     func play(song: Song) async {
         await runPlayback(id: song.id.rawValue) {
             try await client.play(song: song)
@@ -390,6 +403,10 @@ final class LocalLibraryStore {
 
     func songs(for artist: Artist, limit: Int = 100) async throws -> [Song] {
         try await client.songs(for: artist, limit: limit)
+    }
+
+    func albums(for artist: Artist, limit: Int = 100) async throws -> [Album] {
+        try await client.albums(for: artist, limit: limit)
     }
 
     private func catalogArtworkURL(kind: LocalServiceAppleMusicPlayable.Kind, id: String) -> URL? {

@@ -153,6 +153,66 @@ final class LocalServiceInteractionTests: XCTestCase {
             .play)
     }
 
+    func testArtistAlbumSummariesUseFirstSongArtworkAndStableAlbumOrder() {
+        let summaries = LocalMusicArtistAlbumSummaryBuilder.summaries(from: [
+            LocalMusicArtistAlbumSummaryInput(
+                id: "song-3",
+                title: "Third",
+                artistName: "The Artist",
+                albumTitle: "Beta",
+                artworkURL: URL(string: "https://example.com/beta.jpg")),
+            LocalMusicArtistAlbumSummaryInput(
+                id: "song-1",
+                title: "First",
+                artistName: "The Artist",
+                albumTitle: "Alpha",
+                artworkURL: URL(string: "https://example.com/alpha.jpg")),
+            LocalMusicArtistAlbumSummaryInput(
+                id: "song-2",
+                title: "Second",
+                artistName: "The Artist",
+                albumTitle: "Alpha",
+                artworkURL: nil)
+        ])
+
+        XCTAssertEqual(summaries.map(\.title), ["Alpha", "Beta"])
+        XCTAssertEqual(summaries.map(\.songCount), [2, 1])
+        XCTAssertEqual(summaries.first?.artworkURL?.absoluteString, "https://example.com/alpha.jpg")
+    }
+
+    func testArtistAlbumSummariesUseArtistScopedAlbumIDs() {
+        let summaries = LocalMusicArtistAlbumSummaryBuilder.summaries(from: [
+            LocalMusicArtistAlbumSummaryInput(
+                id: "song-1",
+                title: "First",
+                artistName: "The Artist",
+                albumTitle: "Alpha",
+                artworkURL: nil)
+        ])
+
+        XCTAssertEqual(summaries.first?.id, "artist-album:The Artist:Alpha")
+    }
+
+    func testArtistAlbumArtworkLookupItemsUseAlbumSearchMetadata() {
+        let summary = LocalMusicArtistAlbumSummary(
+            id: "artist-album:The Artist:Alpha",
+            title: "Alpha",
+            artistName: "The Artist",
+            artworkURL: nil,
+            songCount: 2)
+
+        let items = LocalMusicArtistAlbumSummaryBuilder.artworkLookupItems(from: [summary])
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.id, "artist-album:The Artist:Alpha")
+        XCTAssertEqual(items.first?.kind, .album)
+        XCTAssertEqual(items.first?.title, "Alpha")
+        XCTAssertEqual(items.first?.artist, "The Artist")
+        XCTAssertEqual(items.first?.album, "Alpha")
+        XCTAssertEqual(items.first?.hasMusicKitArtwork, false)
+        XCTAssertNil(items.first?.directArtworkURLString)
+    }
+
     func testMusicResourceActionPolicyExposesQueueActionsForQueueableSongs() {
         XCTAssertEqual(
             MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
