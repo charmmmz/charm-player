@@ -4,6 +4,7 @@ import Network
 
 final class LocalServiceInteractionTests: XCTestCase {
     private let sidMappingKey = "CloudLocalSidMapping"
+    private static var sharedProbeServer: LocalServiceProbeServer?
 
     override func setUp() {
         super.setUp()
@@ -263,6 +264,33 @@ final class LocalServiceInteractionTests: XCTestCase {
         XCTAssertEqual(item?.uri?.isEmpty, false)
     }
 
+    @MainActor
+    func testPlayNextReturnsFalseWhenBrowseItemHasNoPlayableURI() async {
+        let searchManager = SearchManager()
+        let manager = SonosManager()
+        manager.selectedSpeaker = SonosPlayer(
+            id: "RINCON_TEST",
+            name: "Test Speaker",
+            ipAddress: "127.0.0.1",
+            isCoordinator: true)
+        let item = BrowseItem(
+            id: "song:no-uri",
+            title: "No URI",
+            artist: "Artist",
+            album: "Album",
+            uri: nil,
+            isContainer: false,
+            serviceId: 204,
+            cloudType: "TRACK")
+
+        let didQueue = await searchManager.playNext(item: item, manager: manager)
+
+        XCTAssertFalse(didQueue)
+        XCTAssertEqual(
+            searchManager.errorMessage,
+            LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription)
+    }
+
     private func localServiceSearchManager() -> SearchManager {
         let searchManager = SearchManager()
         searchManager.musicServices = [
@@ -280,11 +308,7 @@ final class LocalServiceInteractionTests: XCTestCase {
     }
 
     private func localServiceSonosManager() async throws -> SonosManager {
-        let server = try LocalServiceProbeServer()
-        try await server.start()
-        addTeardownBlock {
-            server.cancel()
-        }
+        _ = try await Self.localServiceProbeServer()
 
         let manager = SonosManager()
         manager.selectedSpeaker = SonosPlayer(
@@ -293,6 +317,17 @@ final class LocalServiceInteractionTests: XCTestCase {
             ipAddress: "127.0.0.1",
             isCoordinator: true)
         return manager
+    }
+
+    private static func localServiceProbeServer() async throws -> LocalServiceProbeServer {
+        if let sharedProbeServer {
+            return sharedProbeServer
+        }
+
+        let server = try LocalServiceProbeServer()
+        try await server.start()
+        sharedProbeServer = server
+        return server
     }
 
     private static func appleMusicAccount() -> SonosCloudAPI.CloudMusicServiceAccount {

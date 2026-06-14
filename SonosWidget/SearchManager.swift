@@ -1374,12 +1374,13 @@ final class SearchManager {
         _ playable: LocalServiceAppleMusicPlayable,
         manager: SonosManager
     ) async -> BrowseItem? {
-        configure(speakerIP: manager.selectedSpeaker?.playbackIP)
-
-        guard manager.selectedSpeaker != nil else {
+        guard let selectedSpeaker = manager.selectedSpeaker else {
             errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
             return nil
         }
+        let selectedSpeakerID = selectedSpeaker.id
+        let selectedPlaybackIP = selectedSpeaker.playbackIP
+        configure(speakerIP: selectedPlaybackIP)
 
         if manager.transportBackend == .unknown {
             _ = await manager.probeBackend()
@@ -1396,6 +1397,12 @@ final class SearchManager {
             await probeLinkedServices()
         }
         await refreshServiceIdMappingIfNeeded()
+
+        guard manager.selectedSpeaker?.id == selectedSpeakerID,
+              manager.selectedSpeaker?.playbackIP == selectedPlaybackIP else {
+            errorMessage = "Selected speaker changed. Try again."
+            return nil
+        }
 
         guard let account = linkedAccounts.first(where: { isAppleMusicAccount($0) }),
               let serviceId = account.serviceId,
@@ -2862,17 +2869,21 @@ final class SearchManager {
     }
 
 
-    func playNext(item: BrowseItem, manager: SonosManager) async {
+    @discardableResult
+    func playNext(item: BrowseItem, manager: SonosManager) async -> Bool {
         // Queue insertion is LAN-only (Cloud Control API has no per-track
         // queue API). Show a friendly message instead of a stale timeout.
         if manager.isRemoteMode {
             errorMessage = SonosControlError
                 .unsupportedInCloudMode(feature: "Adding to the queue")
                 .localizedDescription
-            return
+            return false
         }
-        guard let uri = item.uri else { return }
-        await manager.playNext(uri: uri, metadata: playbackMetadata(for: item))
+        guard let uri = item.uri, !uri.isEmpty else {
+            errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
+            return false
+        }
+        return await manager.playNext(uri: uri, metadata: playbackMetadata(for: item))
     }
 
     /// Start a personalized radio station from an artist.
@@ -3189,21 +3200,30 @@ final class SearchManager {
         return String(xml[contentStart.upperBound..<end.lowerBound])
     }
 
-    func addToQueue(item: BrowseItem, manager: SonosManager) async {
+    @discardableResult
+    func addToQueue(item: BrowseItem, manager: SonosManager) async -> Bool {
         if manager.isRemoteMode {
             errorMessage = SonosControlError
                 .unsupportedInCloudMode(feature: "Adding to the queue")
                 .localizedDescription
-            return
+            return false
         }
-        guard let ip = manager.selectedSpeaker?.playbackIP,
-              let uri = item.uri else { return }
+        guard let ip = manager.selectedSpeaker?.playbackIP else {
+            errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
+            return false
+        }
+        guard let uri = item.uri, !uri.isEmpty else {
+            errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
+            return false
+        }
         let meta = playbackMetadata(for: item)
         do {
             try await SonosAPI.addURIToQueue(ip: ip, uri: uri, metadata: meta)
             await manager.loadQueue()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 

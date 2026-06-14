@@ -254,16 +254,17 @@ final class LocalLibraryStore {
 
                 searchManager.errorMessage = nil
                 manager.errorMessage = nil
+                let didQueue: Bool
                 switch action {
                 case .playNext:
-                    await searchManager.playNext(item: item, manager: manager)
+                    didQueue = await searchManager.playNext(item: item, manager: manager)
                 case .addToQueue:
-                    await searchManager.addToQueue(item: item, manager: manager)
+                    didQueue = await searchManager.addToQueue(item: item, manager: manager)
                 case .playNow, .startStation:
-                    break
+                    didQueue = false
                 }
 
-                if searchManager.errorMessage != nil || manager.errorMessage != nil {
+                guard didQueue else {
                     throw LocalServiceSonosPlaybackError.playbackFailed(
                         searchManager.errorMessage ?? manager.errorMessage)
                 }
