@@ -229,7 +229,30 @@ final class LocalLibraryStore {
                 fallbackArtist: fallbackArtist,
                 fallbackAlbum: fallbackAlbum,
                 manager: manager,
+            searchManager: searchManager)
+        }
+    }
+
+    func playDisplayedTracksOnSonos(
+        tracks: [Track],
+        displayID: String,
+        albumTitle: String,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async {
+        await runPlayback(id: displayID) {
+            let items = try await resolveQueueBrowseItems(
+                tracks: tracks,
+                manager: manager,
                 searchManager: searchManager)
+            let didStart = await searchManager.playNow(
+                items: items,
+                manager: manager,
+                displayTitle: albumTitle)
+            guard didStart else {
+                throw LocalServiceSonosPlaybackError.playbackFailed(
+                    searchManager.errorMessage ?? manager.errorMessage)
+            }
         }
     }
 
@@ -319,6 +342,37 @@ final class LocalLibraryStore {
             throw LocalServiceSonosPlaybackError.noPlayableCatalogID
         }
         throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+    }
+
+    private func resolveQueueBrowseItems(
+        tracks: [Track],
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async throws -> [BrowseItem] {
+        var items: [BrowseItem] = []
+        for track in tracks {
+            do {
+                let item = try await resolveQueueBrowseItem(
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+                items.append(item)
+            } catch {
+                SonosLog.info(
+                    .playback,
+                    "LocalService displayed track queue skipped title='\(track.title)' " +
+                        "artist='\(track.artistName)' error=\(error)")
+            }
+        }
+
+        guard !items.isEmpty else {
+            throw LocalServiceSonosPlaybackError.noPlayableCatalogID
+        }
+        return items
     }
 
     private func resolveQueueBrowseItem(

@@ -453,18 +453,28 @@ struct LocalMusicAlbumDetailView: View {
     private func playAlbum(shuffle: Bool, action: LocalMusicDetailAction) {
         guard actionInFlight == nil, !store.isStartingPlayback else { return }
         actionInFlight = action
+        let displayedTracks = tracks
 
         Task {
             await setSonosShuffleMode(shuffle)
-            await store.playOnSonos(
-                playable: albumPlayable,
-                displayID: displayID(for: action),
-                fallbackKind: .album,
-                fallbackTitle: displayAlbum.title,
-                fallbackArtist: displayAlbum.artistName,
-                fallbackAlbum: displayAlbum.title,
-                manager: manager,
-                searchManager: searchManager)
+            if LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(trackCount: displayedTracks.count) {
+                await store.playDisplayedTracksOnSonos(
+                    tracks: displayedTracks,
+                    displayID: displayID(for: action),
+                    albumTitle: displayAlbum.title,
+                    manager: manager,
+                    searchManager: searchManager)
+            } else {
+                await store.playOnSonos(
+                    playable: albumPlayable,
+                    displayID: displayID(for: action),
+                    fallbackKind: .album,
+                    fallbackTitle: displayAlbum.title,
+                    fallbackArtist: displayAlbum.artistName,
+                    fallbackAlbum: displayAlbum.title,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
             withAnimation(.easeOut(duration: 0.2)) {
                 actionInFlight = nil
             }

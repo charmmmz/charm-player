@@ -2755,6 +2755,71 @@ final class SearchManager {
     }
 
     @discardableResult
+    func playNow(
+        items: [BrowseItem],
+        manager: SonosManager,
+        displayTitle: String
+    ) async -> Bool {
+        let playableItems = items.filter { item in
+            item.uri?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        guard !playableItems.isEmpty else {
+            errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
+            return false
+        }
+
+        guard !manager.isRemoteMode else {
+            errorMessage = SonosControlError
+                .unsupportedInCloudMode(feature: "Playing this item")
+                .localizedDescription
+            return false
+        }
+        guard let speaker = manager.selectedSpeaker else {
+            errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
+            return false
+        }
+
+        let ip = speaker.playbackIP
+        let speakerUUID = speaker.id
+        let queueItems = playableItems.map {
+            SonosQueuedURI(uri: $0.uri ?? "", metadata: playbackMetadata(for: $0))
+        }
+
+        if let first = playableItems.first {
+            pushRecentlyPlayed(first)
+        }
+
+        do {
+            try await SonosAPI.removeAllTracksFromQueue(ip: ip)
+            do {
+                try await SonosAPI.addMultipleURIsToQueue(ip: ip, items: queueItems)
+            } catch {
+                SonosLog.error(.playback, "playNow batch queue failed for '\(displayTitle)', falling back: \(error)")
+                for item in queueItems {
+                    _ = try await SonosAPI.addURIToQueue(
+                        ip: ip,
+                        uri: item.uri,
+                        metadata: item.metadata)
+                }
+            }
+
+            try await SonosAPI.setAVTransportToQueue(ip: ip, speakerUUID: speakerUUID)
+            try await SonosAPI.seekToTrack(ip: ip, trackNumber: 1)
+            try await SonosAPI.play(ip: ip)
+            SonosLog.info(
+                .playback,
+                "playNow displayed tracks '\(displayTitle)' count=\(queueItems.count)")
+            try? await Task.sleep(for: .milliseconds(playbackSettleDelayMs))
+            await manager.refreshState()
+            return true
+        } catch {
+            SonosLog.error(.playback, "playNow displayed tracks failed: \(error)")
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
     private func playNowInternal(
         item: BrowseItem,
         manager: SonosManager,
