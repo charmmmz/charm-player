@@ -8,6 +8,14 @@ enum LocalLibraryCategory: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    static var homeOrder: [LocalLibraryCategory] {
+        [.playlists, .artists, .albums, .songs]
+    }
+
+    var showsAlphabetIndex: Bool {
+        self != .playlists
+    }
+
     var title: String {
         switch self {
         case .songs: return "Songs"
@@ -32,6 +40,30 @@ enum LocalLibraryCategory: String, CaseIterable, Identifiable, Sendable {
         case .albums: return "No Albums"
         case .artists: return "No Artists"
         case .playlists: return "No Playlists"
+        }
+    }
+}
+
+nonisolated enum LocalLibrarySectionIndex {
+    static func indexTitle(for title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "#" }
+
+        let folded = trimmed.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
+        guard let scalar = folded.uppercased().unicodeScalars.first,
+              (65...90).contains(Int(scalar.value)) else {
+            return "#"
+        }
+
+        return String(Character(scalar))
+    }
+
+    static func indexTitles(for titles: [String]) -> [String] {
+        let titles = Set(titles.map(indexTitle(for:)))
+        return titles.sorted { lhs, rhs in
+            if lhs == "#" { return true }
+            if rhs == "#" { return false }
+            return lhs < rhs
         }
     }
 }

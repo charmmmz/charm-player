@@ -5,7 +5,6 @@ struct LocalLibraryView: View {
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
     @State private var store = LocalLibraryStore()
-    @State private var selectedCategory: LocalLibraryCategory = .songs
     @State private var searchText = ""
 
     private var isSearchingLibrary: Bool {
@@ -27,6 +26,11 @@ struct LocalLibraryView: View {
             }
             .navigationTitle("Local Service")
             .navigationBarTitleDisplayMode(.large)
+            .navigationDestination(for: LocalLibraryCategory.self) { category in
+                libraryCategoryDetail(category)
+                    .background(backgroundLayer.ignoresSafeArea())
+                    .preferredColorScheme(.dark)
+            }
             .toolbarBackground(.hidden, for: .navigationBar)
             .background(backgroundLayer.ignoresSafeArea())
             .searchable(text: $searchText, prompt: "Search Library")
@@ -160,9 +164,7 @@ struct LocalLibraryView: View {
     private var librarySection: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader(kind: .library)
-            categoryPicker
-            selectedCategoryHeader
-            selectedCategoryContent
+            libraryCategoryRows(showEmptyCategories: true)
         }
     }
 
@@ -178,51 +180,67 @@ struct LocalLibraryView: View {
             }
             .padding(.horizontal)
 
-            categoryPicker
-            selectedCategoryHeader
-            selectedCategoryContent
-        }
-    }
-
-    private var categoryPicker: some View {
-        Picker("Library Category", selection: $selectedCategory) {
-            ForEach(LocalLibraryCategory.allCases) { category in
-                Text(category.title).tag(category)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal)
-    }
-
-    private var selectedCategoryHeader: some View {
-        HStack {
-            Label(selectedCategory.title, systemImage: selectedCategory.systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            if store.isSearching {
-                ProgressView()
+            if store.displayedSnapshot.isEmpty {
+                ContentUnavailableView(
+                    "No Results",
+                    systemImage: "magnifyingglass",
+                    description: Text("Try a different search term.")
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
             } else {
-                Text("\(store.summary.count(for: selectedCategory))")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                libraryCategoryRows(showEmptyCategories: false)
+            }
+        }
+    }
+
+    private func libraryCategoryRows(showEmptyCategories: Bool) -> some View {
+        VStack(spacing: 0) {
+            ForEach(visibleLibraryCategories(showEmptyCategories: showEmptyCategories)) { category in
+                NavigationLink(value: category) {
+                    libraryCategoryRow(category)
+                }
+                .buttonStyle(.plain)
+
+                if category != visibleLibraryCategories(showEmptyCategories: showEmptyCategories).last {
+                    Divider()
+                        .background(.white.opacity(0.16))
+                        .padding(.leading, 68)
+                }
             }
         }
         .padding(.horizontal)
     }
 
-    @ViewBuilder
-    private var selectedCategoryContent: some View {
-        switch selectedCategory {
-        case .songs:
-            songList(store.displayedSnapshot.songs)
-        case .albums:
-            albumList(store.displayedSnapshot.albums)
-        case .artists:
-            artistList(store.displayedSnapshot.artists)
-        case .playlists:
-            playlistList(store.displayedSnapshot.playlists)
+    private func visibleLibraryCategories(showEmptyCategories: Bool) -> [LocalLibraryCategory] {
+        LocalLibraryCategory.homeOrder.filter { category in
+            showEmptyCategories || store.summary.count(for: category) > 0
         }
+    }
+
+    private func libraryCategoryRow(_ category: LocalLibraryCategory) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: category.systemImage)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.pink)
+                .frame(width: 36, height: 52)
+
+            Text(category.title)
+                .font(.title3)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            Text("\(store.summary.count(for: category))")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Image(systemName: "chevron.right")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 8)
     }
 
     private var recentlyAddedCards: [LocalServiceCardItem] {
@@ -540,10 +558,154 @@ struct LocalLibraryView: View {
         }
     }
 
+    private func libraryCategoryDetail(_ category: LocalLibraryCategory) -> some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .trailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        categoryDetailHeader(category)
+                        libraryCategoryDetailContent(category)
+                    }
+                    .padding(.top, 12)
+                    .padding(.bottom, 40)
+                    .padding(.trailing, category.showsAlphabetIndex ? 26 : 0)
+                }
+                .scrollDismissesKeyboard(.interactively)
+
+                if category.showsAlphabetIndex {
+                    let titles = categoryIndexTitles(category)
+                    if !titles.isEmpty {
+                        LocalLibraryAlphabetIndexBar(titles: titles) { title in
+                            withAnimation(.snappy(duration: 0.22)) {
+                                proxy.scrollTo(sectionID(category: category, title: title), anchor: .top)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(category.title)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    private func categoryDetailHeader(_ category: LocalLibraryCategory) -> some View {
+        HStack {
+            Label(category.title, systemImage: category.systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(store.summary.count(for: category))")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func libraryCategoryDetailContent(_ category: LocalLibraryCategory) -> some View {
+        switch category {
+        case .songs:
+            indexedSongList(store.displayedSnapshot.songs, category: category)
+        case .albums:
+            indexedAlbumList(store.displayedSnapshot.albums, category: category)
+        case .artists:
+            indexedArtistList(store.displayedSnapshot.artists, category: category)
+        case .playlists:
+            playlistList(store.displayedSnapshot.playlists)
+        }
+    }
+
+    @ViewBuilder
+    private func indexedSongList(_ songs: [Song], category: LocalLibraryCategory) -> some View {
+        let sections = sectionedItems(songs, title: \.title)
+        if sections.isEmpty {
+            emptyCategoryContent(category)
+        } else {
+            ForEach(sections) { section in
+                indexedSectionHeader(section.title, category: category)
+                songList(section.items)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func indexedAlbumList(_ albums: [Album], category: LocalLibraryCategory) -> some View {
+        let sections = sectionedItems(albums, title: \.title)
+        if sections.isEmpty {
+            emptyCategoryContent(category)
+        } else {
+            ForEach(sections) { section in
+                indexedSectionHeader(section.title, category: category)
+                albumList(section.items)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func indexedArtistList(_ artists: [Artist], category: LocalLibraryCategory) -> some View {
+        let sections = sectionedItems(artists, title: \.name)
+        if sections.isEmpty {
+            emptyCategoryContent(category)
+        } else {
+            ForEach(sections) { section in
+                indexedSectionHeader(section.title, category: category)
+                artistList(section.items)
+            }
+        }
+    }
+
+    private func indexedSectionHeader(_ title: String, category: LocalLibraryCategory) -> some View {
+        Text(title)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.horizontal)
+            .padding(.top, 6)
+            .id(sectionID(category: category, title: title))
+    }
+
+    private func categoryIndexTitles(_ category: LocalLibraryCategory) -> [String] {
+        switch category {
+        case .songs:
+            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.songs.map(\.title))
+        case .albums:
+            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.albums.map(\.title))
+        case .artists:
+            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.artists.map(\.name))
+        case .playlists:
+            return []
+        }
+    }
+
+    private func sectionedItems<Item>(
+        _ items: [Item],
+        title: KeyPath<Item, String>
+    ) -> [LocalLibraryIndexedSection<Item>] {
+        let sortedItems = items.sorted {
+            $0[keyPath: title].localizedCaseInsensitiveCompare($1[keyPath: title]) == .orderedAscending
+        }
+        let grouped = Dictionary(grouping: sortedItems) {
+            LocalLibrarySectionIndex.indexTitle(for: $0[keyPath: title])
+        }
+
+        return LocalLibrarySectionIndex.indexTitles(for: sortedItems.map { $0[keyPath: title] })
+            .map { sectionTitle in
+                LocalLibraryIndexedSection(
+                    title: sectionTitle,
+                    items: grouped[sectionTitle] ?? []
+                )
+            }
+    }
+
+    private func sectionID(category: LocalLibraryCategory, title: String) -> String {
+        "\(category.rawValue)-section-\(title)"
+    }
+
     @ViewBuilder
     private func songList(_ songs: [Song]) -> some View {
         if songs.isEmpty {
-            emptyCategoryContent
+            emptyCategoryContent(.songs)
         } else {
             ForEach(songs) { song in
                 playRow(
@@ -572,7 +734,7 @@ struct LocalLibraryView: View {
     @ViewBuilder
     private func albumList(_ albums: [Album]) -> some View {
         if albums.isEmpty {
-            emptyCategoryContent
+            emptyCategoryContent(.albums)
         } else {
             ForEach(albums) { album in
                 NavigationLink {
@@ -600,7 +762,7 @@ struct LocalLibraryView: View {
     @ViewBuilder
     private func artistList(_ artists: [Artist]) -> some View {
         if artists.isEmpty {
-            emptyCategoryContent
+            emptyCategoryContent(.artists)
         } else {
             ForEach(artists) { artist in
                 if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
@@ -651,7 +813,7 @@ struct LocalLibraryView: View {
     @ViewBuilder
     private func playlistList(_ playlists: [Playlist]) -> some View {
         if playlists.isEmpty {
-            emptyCategoryContent
+            emptyCategoryContent(.playlists)
         } else {
             ForEach(playlists) { playlist in
                 NavigationLink {
@@ -677,10 +839,10 @@ struct LocalLibraryView: View {
         }
     }
 
-    private var emptyCategoryContent: some View {
+    private func emptyCategoryContent(_ category: LocalLibraryCategory) -> some View {
         ContentUnavailableView(
-            selectedCategory.emptyTitle,
-            systemImage: selectedCategory.systemImage
+            category.emptyTitle,
+            systemImage: category.systemImage
         )
         .frame(maxWidth: .infinity)
         .padding(.top, 40)
@@ -821,6 +983,68 @@ private enum LocalServiceRowAccessory {
     case play
     case chevron
     case progress
+}
+
+private struct LocalLibraryIndexedSection<Item>: Identifiable {
+    let title: String
+    let items: [Item]
+
+    var id: String { title }
+}
+
+private struct LocalLibraryAlphabetIndexBar: View {
+    let titles: [String]
+    let onSelect: (String) -> Void
+
+    @State private var lastSelectedTitle: String?
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 1) {
+                ForEach(titles, id: \.self) { title in
+                    Text(title)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.pink)
+                        .frame(width: 24, height: itemHeight(in: proxy.size.height))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            select(title)
+                        }
+                }
+            }
+            .frame(width: 28, height: proxy.size.height, alignment: .center)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        selectTitle(at: value.location.y, height: proxy.size.height)
+                    }
+                    .onEnded { _ in
+                        lastSelectedTitle = nil
+                    }
+            )
+        }
+        .frame(width: 28)
+        .padding(.trailing, 2)
+    }
+
+    private func itemHeight(in height: CGFloat) -> CGFloat {
+        guard !titles.isEmpty else { return 14 }
+        return min(18, max(12, height / CGFloat(titles.count)))
+    }
+
+    private func selectTitle(at yPosition: CGFloat, height: CGFloat) {
+        guard !titles.isEmpty else { return }
+        let itemHeight = max(1, height / CGFloat(titles.count))
+        let index = min(max(Int(yPosition / itemHeight), 0), titles.count - 1)
+        select(titles[index])
+    }
+
+    private func select(_ title: String) {
+        guard lastSelectedTitle != title else { return }
+        lastSelectedTitle = title
+        onSelect(title)
+    }
 }
 
 private enum LocalLibraryArtworkStyle {

@@ -13,6 +13,34 @@ final class LocalLibraryModelsTests: XCTestCase {
         XCTAssertEqual(LocalLibraryCategory.playlists.systemImage, "music.note.list")
     }
 
+    func testLibraryHomeOrderMatchesAppleMusicStyleEntryList() {
+        XCTAssertEqual(LocalLibraryCategory.homeOrder, [
+            .playlists,
+            .artists,
+            .albums,
+            .songs
+        ])
+    }
+
+    func testAlphabetIndexIsHiddenOnlyForPlaylists() {
+        XCTAssertFalse(LocalLibraryCategory.playlists.showsAlphabetIndex)
+        XCTAssertTrue(LocalLibraryCategory.artists.showsAlphabetIndex)
+        XCTAssertTrue(LocalLibraryCategory.albums.showsAlphabetIndex)
+        XCTAssertTrue(LocalLibraryCategory.songs.showsAlphabetIndex)
+    }
+
+    func testLibrarySectionIndexUsesLeadingLettersAndNumbers() {
+        XCTAssertEqual(LocalLibrarySectionIndex.indexTitle(for: "  15 Step"), "#")
+        XCTAssertEqual(LocalLibrarySectionIndex.indexTitle(for: "Élan"), "E")
+        XCTAssertEqual(LocalLibrarySectionIndex.indexTitle(for: "zebra"), "Z")
+        XCTAssertEqual(LocalLibrarySectionIndex.indexTitle(for: "   "), "#")
+
+        XCTAssertEqual(
+            LocalLibrarySectionIndex.indexTitles(for: ["zebra", "Élan", "15 Step", "apple"]),
+            ["#", "A", "E", "Z"]
+        )
+    }
+
     func testSnapshotSummaryIsEmptyOnlyWhenAllSectionsAreEmpty() {
         XCTAssertTrue(
             LocalLibrarySnapshotSummary(

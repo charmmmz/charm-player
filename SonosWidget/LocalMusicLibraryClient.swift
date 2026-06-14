@@ -72,7 +72,7 @@ struct LocalMusicLibraryClient {
         }
     }
 
-    func loadSnapshot(limit: Int = 60) async throws -> LocalMusicLibrarySnapshot {
+    func loadSnapshot(limit: Int? = nil) async throws -> LocalMusicLibrarySnapshot {
         _ = try await authorize()
 
         async let songs = librarySongs(limit: limit)
@@ -89,7 +89,7 @@ struct LocalMusicLibraryClient {
     }
 
     func loadHomeContent(
-        snapshotLimit: Int = 60,
+        snapshotLimit: Int? = nil,
         recentlyPlayedLimit: Int = 12,
         recommendationLimit: Int = 6
     ) async throws -> LocalMusicHomeContent {
@@ -211,7 +211,7 @@ struct LocalMusicLibraryClient {
         try await play(songs, startingAt: first)
     }
 
-    private func librarySnapshot(limit: Int) async throws -> LocalMusicLibrarySnapshot {
+    private func librarySnapshot(limit: Int?) async throws -> LocalMusicLibrarySnapshot {
         async let songs = librarySongs(limit: limit)
         async let albums = libraryAlbums(limit: limit)
         async let artists = libraryArtists(limit: limit)
@@ -247,33 +247,41 @@ struct LocalMusicLibraryClient {
         (try? await personalRecommendations(limit: limit)) ?? []
     }
 
-    private func librarySongs(limit: Int) async throws -> [Song] {
+    private func librarySongs(limit: Int?) async throws -> [Song] {
         var request = MusicLibraryRequest<Song>()
-        request.limit = limit
+        if let limit {
+            request.limit = limit
+        }
         request.sort(by: \.libraryAddedDate, ascending: false)
         let response = try await request.response()
         return Array(response.items)
     }
 
-    private func libraryAlbums(limit: Int) async throws -> [Album] {
+    private func libraryAlbums(limit: Int?) async throws -> [Album] {
         var request = MusicLibraryRequest<Album>()
-        request.limit = limit
+        if let limit {
+            request.limit = limit
+        }
         request.sort(by: \.libraryAddedDate, ascending: false)
         let response = try await request.response()
         return Array(response.items)
     }
 
-    private func libraryArtists(limit: Int) async throws -> [Artist] {
+    private func libraryArtists(limit: Int?) async throws -> [Artist] {
         var request = MusicLibraryRequest<Artist>()
-        request.limit = limit
+        if let limit {
+            request.limit = limit
+        }
         request.sort(by: \.name, ascending: true)
         let response = try await request.response()
         return Array(response.items)
     }
 
-    private func libraryPlaylists(limit: Int) async throws -> [Playlist] {
+    private func libraryPlaylists(limit: Int?) async throws -> [Playlist] {
         var request = MusicLibraryRequest<Playlist>()
-        request.limit = limit
+        if let limit {
+            request.limit = limit
+        }
         request.sort(by: \.libraryAddedDate, ascending: false)
         let response = try await request.response()
         return Array(response.items)
