@@ -8,7 +8,7 @@ struct AlbumPrimaryActionBar: View {
     let isFavoriteActive: Bool
     let isFavoriteBusy: Bool
     let isFavoriteDisabled: Bool
-    let isDisabled: Bool
+    let isPlaybackDisabled: Bool
     let play: () -> Void
     let shuffle: () -> Void
     let toggleFavorite: () -> Void
@@ -23,7 +23,7 @@ struct AlbumPrimaryActionBar: View {
                     accessibilityTitle: "Shuffle",
                     tint: tint,
                     isActive: isShuffleActive,
-                    isDisabled: isDisabled || isShuffleActive,
+                    isDisabled: isPlaybackDisabled || isShuffleActive,
                     dimension: metrics.circleDimension,
                     action: shuffle
                 )
@@ -47,8 +47,8 @@ struct AlbumPrimaryActionBar: View {
                     .background(.white, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(isDisabled || isPlayActive)
-                .opacity((isDisabled || isPlayActive) ? 0.45 : 1)
+                .disabled(isPlaybackDisabled || isPlayActive)
+                .opacity((isPlaybackDisabled || isPlayActive) ? 0.45 : 1)
                 .accessibilityLabel("Play")
 
                 AlbumCircleActionButton(
@@ -57,7 +57,7 @@ struct AlbumPrimaryActionBar: View {
                     accessibilityValue: favoriteAccessibilityValue,
                     tint: tint,
                     isActive: isFavoriteBusy,
-                    isDisabled: isDisabled || isFavoriteDisabled || isFavoriteBusy,
+                    isDisabled: isFavoriteDisabled || isFavoriteBusy,
                     dimension: metrics.circleDimension,
                     action: toggleFavorite
                 )

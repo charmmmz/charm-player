@@ -243,7 +243,7 @@ struct AlbumDetailView: View {
             isFavoriteActive: isFavorited,
             isFavoriteBusy: false,
             isFavoriteDisabled: false,
-            isDisabled: playingItemId != nil,
+            isPlaybackDisabled: playingItemId != nil,
             play: playAlbum,
             shuffle: playAlbumShuffled,
             toggleFavorite: toggleFavorite
