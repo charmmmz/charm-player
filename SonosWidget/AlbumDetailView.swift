@@ -93,8 +93,10 @@ struct AlbumDetailView: View {
             let (data, _) = try await URLSession.shared.data(from: url)
             let img = UIImage(data: data)
             coverImage = img
-            if let color = img?.dominantColor() {
-                themeColor = color
+            if let uiColor = img?.dominantUIColor() {
+                themeColor = AlbumThemeColorPolicy.mutedColor(from: uiColor)
+            } else if let color = img?.dominantColor() {
+                themeColor = color.opacity(0.55)
             }
         } catch {
             SonosLog.error(.albumDetail, "Cover image load failed: \(error)")
@@ -105,15 +107,6 @@ struct AlbumDetailView: View {
 
     private var albumMenu: some View {
         Menu {
-            Button {
-                toggleFavorite()
-            } label: {
-                Label(isFavorited ? "Remove from Sonos Favorites" : "Add to Sonos Favorites",
-                      systemImage: isFavorited ? "heart.fill" : "heart")
-            }
-
-            Divider()
-
             Button {
                 Task {
                     await searchManager.playNext(item: albumItem, manager: manager)
@@ -242,43 +235,19 @@ struct AlbumDetailView: View {
     // MARK: - Action Bar (Play / Shuffle)
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            actionButton(icon: "play.fill", label: "Play", id: "play-all") {
-                playAlbum()
-            }
-
-            actionButton(icon: "shuffle", label: "Shuffle", id: "shuffle") {
-                playAlbumShuffled()
-            }
-        }
-        .padding(.horizontal)
-    }
-
-    private func actionButton(icon: String, label: String, id: String,
-                              action: @escaping () -> Void) -> some View {
-        let isActive = playingItemId == id
-        let isDisabled = playingItemId != nil && !isActive
-
-        return Button(action: action) {
-            HStack(spacing: 6) {
-                if isActive {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                } else {
-                    Image(systemName: icon)
-                        .font(.subheadline.weight(.semibold))
-                }
-                Text(label)
-                    .font(.subheadline.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(themeColor ?? .white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-            .foregroundStyle(.white)
-        }
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
+        AlbumPrimaryActionBar(
+            favoriteKind: .sonos,
+            tint: themeColor,
+            isPlayActive: playingItemId == "play-all",
+            isShuffleActive: playingItemId == "shuffle",
+            isFavoriteActive: isFavorited,
+            isFavoriteBusy: false,
+            isFavoriteDisabled: false,
+            isDisabled: playingItemId != nil,
+            play: playAlbum,
+            shuffle: playAlbumShuffled,
+            toggleFavorite: toggleFavorite
+        )
     }
 
     // MARK: - Track List
