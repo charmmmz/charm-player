@@ -76,6 +76,119 @@ struct AlbumPrimaryActionBar: View {
     }
 }
 
+struct AlbumTrackRow<MenuContent: View>: View {
+    let number: String
+    let title: String
+    let subtitle: String?
+    let duration: String?
+    let isExplicit: Bool
+    let isPlaying: Bool
+    let isDisabled: Bool
+    let isLast: Bool
+    let action: () -> Void
+
+    private let menuContent: () -> MenuContent
+
+    init(
+        number: String,
+        title: String,
+        subtitle: String?,
+        duration: String?,
+        isExplicit: Bool,
+        isPlaying: Bool,
+        isDisabled: Bool,
+        isLast: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder menuContent: @escaping () -> MenuContent
+    ) {
+        self.number = number
+        self.title = title
+        self.subtitle = subtitle
+        self.duration = duration
+        self.isExplicit = isExplicit
+        self.isPlaying = isPlaying
+        self.isDisabled = isDisabled
+        self.isLast = isLast
+        self.action = action
+        self.menuContent = menuContent
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(number)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, alignment: .trailing)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text(title)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if isExplicit {
+                            Image(systemName: "e.square.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                trailingAccessory
+            }
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .opacity(isDisabled ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .contextMenu { menuContent() }
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Divider().padding(.leading, 40)
+            }
+        }
+    }
+
+    private var trailingAccessory: some View {
+        HStack(spacing: 8) {
+            if isPlaying {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 32, height: 32)
+            } else {
+                if let duration {
+                    Text(duration)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Menu {
+                    menuContent()
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+            }
+        }
+        .frame(minWidth: 64, alignment: .trailing)
+    }
+}
+
 private struct AlbumCircleActionButton: View {
     let systemImage: String
     let accessibilityTitle: String
@@ -116,24 +229,24 @@ private struct AlbumCircleActionButton: View {
     }
 }
 
-private struct AlbumPrimaryActionBarMetrics {
-    static let maximumHeight: CGFloat = 64
+struct AlbumPrimaryActionBarMetrics: Equatable {
+    static let maximumHeight: CGFloat = 56
 
     let circleDimension: CGFloat
     let horizontalPadding: CGFloat = 16
-    let playHeight: CGFloat = 56
+    let playHeight: CGFloat = 54
     let playWidth: CGFloat
     let spacing: CGFloat
 
     init(width: CGFloat) {
-        circleDimension = width < 360 ? 56 : 64
-        spacing = width < 360 ? 18 : 30
+        circleDimension = width < 360 ? 52 : 56
+        spacing = width < 360 ? 18 : 24
 
         let remainingWidth = width
             - (horizontalPadding * 2)
             - (circleDimension * 2)
             - (spacing * 2)
 
-        playWidth = min(max(remainingWidth, 0), 184)
+        playWidth = min(max(remainingWidth, 0), 177)
     }
 }

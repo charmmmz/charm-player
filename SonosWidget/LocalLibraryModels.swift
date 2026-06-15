@@ -44,6 +44,113 @@ enum LocalLibraryCategory: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum LocalServiceSearchScope: String, CaseIterable, Identifiable, Sendable {
+    case library
+    case appleMusic
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .library:
+            return "Library"
+        case .appleMusic:
+            return "Apple Music"
+        }
+    }
+}
+
+struct LocalServiceSubmittedSearchFieldDisplay: Equatable, Sendable {
+    let term: String
+    let scopeHint: String
+}
+
+enum LocalServiceSearchPresentation {
+    static let catalogCategoryOrder: [LocalLibraryCategory] = [
+        .artists,
+        .albums,
+        .songs,
+        .playlists
+    ]
+
+    static func prompt(for scope: LocalServiceSearchScope) -> String {
+        switch scope {
+        case .library:
+            return "Search Library"
+        case .appleMusic:
+            return "Search in Apple Music"
+        }
+    }
+
+    static func contextLabel(
+        for term: String,
+        scope: LocalServiceSearchScope
+    ) -> String {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return prompt(for: scope) }
+        return "\(trimmed) in \(scope.title)"
+    }
+
+    static func submittedFieldDisplay(
+        for term: String,
+        scope: LocalServiceSearchScope
+    ) -> LocalServiceSubmittedSearchFieldDisplay? {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return LocalServiceSubmittedSearchFieldDisplay(
+            term: trimmed,
+            scopeHint: " in \(scope.title)"
+        )
+    }
+
+    static func showsCatalogCategories(
+        scope: LocalServiceSearchScope,
+        hasSubmittedSearch: Bool
+    ) -> Bool {
+        scope == .appleMusic && hasSubmittedSearch
+    }
+}
+
+struct LocalServiceCatalogSearchResults: Equatable, Sendable {
+    var items: [AppleMusicCatalogSearchItem] = []
+
+    var isEmpty: Bool {
+        items.isEmpty
+    }
+
+    var visibleCategories: [LocalLibraryCategory] {
+        LocalLibraryCategory.homeOrder.filter { count(for: $0) > 0 }
+    }
+
+    func count(for category: LocalLibraryCategory) -> Int {
+        items(for: category).count
+    }
+
+    func items(for category: LocalLibraryCategory) -> [AppleMusicCatalogSearchItem] {
+        items.filter { item in
+            switch (category, item.type) {
+            case (.songs, .song), (.albums, .album), (.artists, .artist), (.playlists, .playlist):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
+enum LocalServiceCatalogSearchInteraction {
+    static func primaryAction(
+        for type: AppleMusicCatalogItemType
+    ) -> LocalServiceLibraryPrimaryAction {
+        switch type {
+        case .song:
+            return .play
+        case .album, .artist, .playlist:
+            return .navigate
+        }
+    }
+}
+
 nonisolated enum LocalLibrarySectionIndex {
     static func indexTitle(for title: String) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -116,6 +223,10 @@ enum LocalServiceSectionKind: String, CaseIterable, Identifiable, Sendable {
         case .recommendations: return "sparkles"
         case .library: return "music.note.list"
         }
+    }
+
+    var headerSystemImage: String? {
+        nil
     }
 }
 
@@ -366,5 +477,52 @@ nonisolated enum LocalMusicArtistAlbumSummaryBuilder {
         if lhs.title == "Unknown Album" { return false }
         if rhs.title == "Unknown Album" { return true }
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+}
+
+nonisolated enum LocalMusicPlaylistTrackArtworkLookup {
+    static func lookupItem(
+        title: String,
+        artistName: String,
+        albumTitle: String?,
+        directArtworkURLString: String?
+    ) -> LocalMusicCatalogArtworkLookupItem {
+        LocalMusicCatalogArtworkLookupItem(
+            id: storageID(title: title, artistName: artistName, albumTitle: albumTitle),
+            kind: .song,
+            title: clean(title),
+            artist: clean(artistName),
+            album: clean(albumTitle),
+            directArtworkURLString: directArtworkURLString)
+    }
+
+    static func storageID(title: String, artistName: String, albumTitle: String?) -> String {
+        [
+            "playlist-track",
+            clean(artistName),
+            clean(albumTitle),
+            clean(title)
+        ].joined(separator: ":")
+    }
+
+    static func selectedArtworkURL(
+        trackArtworkURL: URL?,
+        catalogArtworkURL: URL?,
+        playlistArtworkURL _: URL?
+    ) -> URL? {
+        if let trackArtworkURL,
+           let loadableTrackArtworkURL = LocalMusicArtworkURL.loadableURL(
+               from: trackArtworkURL,
+               shortSidePixels: 120
+           ) {
+            return loadableTrackArtworkURL
+        }
+        return catalogArtworkURL
+    }
+
+    private static func clean(_ value: String?) -> String {
+        (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 }

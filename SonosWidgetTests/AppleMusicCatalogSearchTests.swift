@@ -16,6 +16,19 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertTrue(AppleMusicCatalogItemType.playlist.isContainer)
     }
 
+    func testExternalResourceKindMapsFavoriteResourceTypes() {
+        XCTAssertEqual(AppleMusicExternalResourceKind(.songs), .song)
+        XCTAssertEqual(AppleMusicExternalResourceKind(.albums), .album)
+        XCTAssertEqual(AppleMusicExternalResourceKind(.artists), .artist)
+        XCTAssertEqual(AppleMusicExternalResourceKind(.playlists), .playlist)
+    }
+
+    func testCatalogSearchLimitIsClampedToMusicKitSafeRange() {
+        XCTAssertEqual(AppleMusicCatalogSearchClient.effectiveSearchLimit(requested: 40), 25)
+        XCTAssertEqual(AppleMusicCatalogSearchClient.effectiveSearchLimit(requested: 0), 1)
+        XCTAssertEqual(AppleMusicCatalogSearchClient.effectiveSearchLimit(requested: 12), 12)
+    }
+
     func testSearchItemMapsToBrowseItemShape() {
         let item = AppleMusicCatalogSearchItem(
             id: "1440857781",

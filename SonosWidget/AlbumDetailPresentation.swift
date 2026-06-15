@@ -40,6 +40,32 @@ enum AlbumOverflowActionPolicy {
     static let albumActions: [AlbumOverflowAction] = [.playNext, .addToQueue]
 }
 
+enum AlbumTrackMenuActionPolicy {
+    static func actions(
+        favoriteKind: AlbumFavoriteKind,
+        isFavoriteActive: Bool,
+        isQueueable: Bool
+    ) -> [MusicResourceMenuAction] {
+        var actions: [MusicResourceMenuAction] = [.playNow]
+        if isQueueable {
+            actions.append(contentsOf: [.playNext, .addToQueue])
+        }
+        actions.append(.favorite(favoriteKind, isActive: isFavoriteActive))
+        return actions
+    }
+}
+
+enum AlbumTrackSubtitlePolicy {
+    static func subtitle(trackArtist: String?, albumArtist: String) -> String? {
+        guard let trackArtist,
+              !trackArtist.isEmpty,
+              trackArtist.localizedCaseInsensitiveCompare(albumArtist) != .orderedSame else {
+            return nil
+        }
+        return trackArtist
+    }
+}
+
 struct AlbumThemeColorComponents: Equatable, Sendable {
     let hue: CGFloat
     let saturation: CGFloat

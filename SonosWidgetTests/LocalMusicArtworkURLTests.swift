@@ -118,4 +118,15 @@ final class LocalMusicArtworkURLTests: XCTestCase {
                 maximumHeight: 1080),
             .fill)
     }
+
+    func testImageDownloadURLKeepsMusicKitPlaylistArtworkWhenAATIsRelative() {
+        let url = URL(
+            string: "musicKit://artwork/library/ABC/600x600?aat=Features125%2Fv4%2Fad%2F0e%2F48%2Fcover%2Epng&at=playlist&et=collection"
+        )!
+
+        XCTAssertEqual(
+            LocalMusicArtworkURL.imageDownloadURL(from: url, shortSidePixels: 600)?.absoluteString,
+            url.absoluteString
+        )
+    }
 }

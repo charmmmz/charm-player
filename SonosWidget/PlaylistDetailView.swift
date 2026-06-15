@@ -15,16 +15,27 @@ struct PlaylistDetailView: View {
     @State private var isFavorited = false
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
+    @State private var isOpeningAppleMusicLink = false
     private static let playlistFetchLimit = 1000
 
     private var playlistTitle: String { response?.title ?? playlistItem.title }
     private var subtitleText: String { response?.subtitle ?? playlistItem.artist }
     private var coverURL: String? {
-        response?.images?.tile1x1 ?? playlistItem.albumArtURL
+        DetailArtworkURLSelection.firstAvailable(
+            entryArtworkURL: playlistItem.albumArtURL,
+            responseArtworkURL: response?.images?.tile1x1
+        )
     }
     private var tracks: [SonosCloudAPI.AlbumTrackItem] {
         let base = response?.tracks?.items ?? response?.section?.items ?? []
         return extraTracks.isEmpty ? base : base + extraTracks
+    }
+    private var appleMusicArtworkResource: AppleMusicFavoriteResource? {
+        AppleMusicDetailArtworkLink.resource(
+            from: playlistItem,
+            searchManager: searchManager,
+            allowedTypes: [.playlists]
+        )
     }
 
     var body: some View {
@@ -131,22 +142,7 @@ struct PlaylistDetailView: View {
 
     private var headerSection: some View {
         VStack(spacing: 10) {
-            AsyncImage(url: URL(string: coverURL ?? "")) { phase in
-                if let img = phase.image {
-                    img.resizable().aspectRatio(contentMode: .fit)
-                } else {
-                    RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
-                        .aspectRatio(1, contentMode: .fit)
-                        .overlay {
-                            Image(systemName: playlistItem.cloudType == "COLLECTION" ? "folder.fill" : "music.note.list")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.tertiary)
-                        }
-                }
-            }
-            .frame(maxWidth: 280)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+            headerArtwork
 
             VStack(spacing: 4) {
                 Text(playlistTitle)
@@ -183,6 +179,54 @@ struct PlaylistDetailView: View {
             .padding(.horizontal)
         }
         .padding(.top, 20)
+    }
+
+    @ViewBuilder
+    private var headerArtwork: some View {
+        if let resource = appleMusicArtworkResource {
+            Button {
+                openAppleMusicFromArtwork(resource: resource)
+            } label: {
+                headerArtworkImage
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpeningAppleMusicLink)
+            .accessibilityLabel("Open playlist in Apple Music")
+        } else {
+            headerArtworkImage
+        }
+    }
+
+    private var headerArtworkImage: some View {
+        AsyncImage(url: URL(string: coverURL ?? "")) { phase in
+            if let img = phase.image {
+                img.resizable().aspectRatio(contentMode: .fit)
+            } else {
+                RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: playlistItem.cloudType == "COLLECTION" ? "folder.fill" : "music.note.list")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.tertiary)
+                    }
+            }
+        }
+        .frame(maxWidth: 280)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+    }
+
+    private func openAppleMusicFromArtwork(resource: AppleMusicFavoriteResource) {
+        guard !isOpeningAppleMusicLink else { return }
+        isOpeningAppleMusicLink = true
+        Task { @MainActor in
+            defer { isOpeningAppleMusicLink = false }
+            await AppleMusicDetailArtworkLink.open(
+                resource: resource,
+                title: playlistTitle,
+                context: "sonos-playlist-artwork"
+            )
+        }
     }
 
     private func playlistSubtitle(trackCount: Int) -> String {

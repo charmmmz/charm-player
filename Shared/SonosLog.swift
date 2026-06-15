@@ -96,6 +96,9 @@ enum SonosLog {
 
     #if DEBUG
     private static let diagnosticCategories: Set<Category> = [
+        .albumDetail,
+        .cloudAPI,
+        .cloudSearch,
         .localService,
         .playback,
         .station,

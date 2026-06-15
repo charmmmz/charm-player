@@ -1,7 +1,7 @@
 import Foundation
 import MusicKit
 
-enum LocalMusicArtworkURL {
+nonisolated enum LocalMusicArtworkURL {
     enum ContentMode: Equatable {
         case fit
         case fill
@@ -22,7 +22,46 @@ enum LocalMusicArtworkURL {
             maximumWidth: artwork.maximumWidth,
             maximumHeight: artwork.maximumHeight,
             shortSidePixels: shortSidePixels)
-        return artwork.url(width: size.width, height: size.height)
+        return artwork.url(width: size.width, height: size.height).flatMap {
+            loadableURL(from: $0, shortSidePixels: shortSidePixels)
+        }
+    }
+
+    static func imageDownloadURL(for artwork: Artwork, shortSidePixels: Int) -> URL? {
+        let size = fittedRequestSize(
+            maximumWidth: artwork.maximumWidth,
+            maximumHeight: artwork.maximumHeight,
+            shortSidePixels: shortSidePixels)
+        return artwork.url(width: size.width, height: size.height).flatMap {
+            imageDownloadURL(from: $0, shortSidePixels: shortSidePixels)
+        }
+    }
+
+    static func imageDownloadURL(from url: URL, shortSidePixels: Int? = nil) -> URL? {
+        if let loadableURL = loadableURL(from: url, shortSidePixels: shortSidePixels) {
+            return loadableURL
+        }
+
+        guard url.scheme?.lowercased() == "musickit" else {
+            return nil
+        }
+        return url
+    }
+
+    static func loadableURL(from url: URL, shortSidePixels: Int? = nil) -> URL? {
+        if LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(url.absoluteString) {
+            return resizedAppleArtworkURL(url, shortSidePixels: shortSidePixels)
+        }
+
+        guard let appleArtworkURL = appleArtworkURL(fromMusicKitArtworkURL: url) else {
+            return nil
+        }
+        return resizedAppleArtworkURL(appleArtworkURL, shortSidePixels: shortSidePixels)
+    }
+
+    static func loadableURLString(from value: String?, shortSidePixels: Int? = nil) -> String? {
+        guard let value, let url = URL(string: value) else { return nil }
+        return loadableURL(from: url, shortSidePixels: shortSidePixels)?.absoluteString
     }
 
     static func fittedRequestSize(
@@ -117,5 +156,44 @@ enum LocalMusicArtworkURL {
                 boundingWidth: boundingWidth,
                 boundingHeight: boundingHeight)
         }
+    }
+
+    private static func appleArtworkURL(fromMusicKitArtworkURL url: URL) -> URL? {
+        guard url.scheme?.lowercased() == "musickit",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let artworkURLString = components.queryItems?.first(where: {
+                  $0.name.lowercased() == "aat"
+              })?.value,
+              let artworkURL = URL(string: artworkURLString),
+              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(artworkURL.absoluteString) else {
+            return nil
+        }
+        return artworkURL
+    }
+
+    private static func resizedAppleArtworkURL(_ url: URL, shortSidePixels: Int?) -> URL {
+        guard let shortSidePixels, shortSidePixels > 0,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+
+        var path = components.percentEncodedPath
+        guard let range = path.range(
+            of: #"/\d+x\d+bb(\.[^/]+)?$"#,
+            options: .regularExpression
+        ) else {
+            return url
+        }
+
+        let matchedComponent = String(path[range])
+        let suffix: String
+        if let dotIndex = matchedComponent.lastIndex(of: ".") {
+            suffix = String(matchedComponent[dotIndex...])
+        } else {
+            suffix = ""
+        }
+        path.replaceSubrange(range, with: "/\(shortSidePixels)x\(shortSidePixels)bb\(suffix)")
+        components.percentEncodedPath = path
+        return components.url ?? url
     }
 }

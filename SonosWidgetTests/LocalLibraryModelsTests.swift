@@ -79,12 +79,16 @@ final class LocalLibraryModelsTests: XCTestCase {
     func testLocalServiceSectionsExposeStableLabels() {
         XCTAssertEqual(LocalServiceSectionKind.recentlyAdded.title, "Recently Added")
         XCTAssertEqual(LocalServiceSectionKind.recentlyAdded.systemImage, "clock.badge.plus")
+        XCTAssertNil(LocalServiceSectionKind.recentlyAdded.headerSystemImage)
         XCTAssertEqual(LocalServiceSectionKind.recentlyPlayed.title, "Recently Played")
         XCTAssertEqual(LocalServiceSectionKind.recentlyPlayed.systemImage, "clock.arrow.circlepath")
+        XCTAssertNil(LocalServiceSectionKind.recentlyPlayed.headerSystemImage)
         XCTAssertEqual(LocalServiceSectionKind.recommendations.title, "For You")
         XCTAssertEqual(LocalServiceSectionKind.recommendations.systemImage, "sparkles")
+        XCTAssertNil(LocalServiceSectionKind.recommendations.headerSystemImage)
         XCTAssertEqual(LocalServiceSectionKind.library.title, "Your Library")
         XCTAssertEqual(LocalServiceSectionKind.library.systemImage, "music.note.list")
+        XCTAssertNil(LocalServiceSectionKind.library.headerSystemImage)
     }
 
     func testMusicResourcePresentationUsesOneTapIdentityForCardRegions() {

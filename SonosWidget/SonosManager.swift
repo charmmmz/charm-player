@@ -35,6 +35,11 @@ enum LiveActivityArtworkThumbnail {
 
 @Observable
 final class SonosManager {
+    struct SpeakerSelectionCachedArtwork {
+        let urlString: String
+        let image: UIImage
+    }
+
     var speakers: [SonosPlayer] = []
     var allSpeakers: [SonosPlayer] = []
     var groupStatuses: [SpeakerGroupStatus] = []
@@ -95,6 +100,9 @@ final class SonosManager {
     private var eventSubscriptions = SonosEventSubscriptionRegistry()
     private var eventSubscriptionIP: String?
     private var lastAlbumArtURL: String?
+    private var loadingAlbumArtURL: String?
+    private var displayedAlbumArtTrackIdentity: String?
+    private var deferredMissingAlbumArtTrackIdentity: String?
     private var lastWidgetTrackTitle: String?
     private var lastEnrichedTrackKey: String?
     private var lastCloudQualityAttempt: Date = .distantPast
@@ -103,6 +111,7 @@ final class SonosManager {
     /// `refreshState` ticks (e.g. user scrubbing) doesn't fan out to a
     /// burst of `nowplaying` requests.
     private static let cloudQualityRefreshCooldown: TimeInterval = 15
+    private static let albumArtColorTransitionDuration: TimeInterval = 0.45
     private static let fastRefreshIntervalSeconds = 3
     private static let lanEventWatchdogRefreshIntervalSeconds = 30
     private static let sonosEventSubscriptionTimeout = 600
@@ -195,6 +204,14 @@ final class SonosManager {
     var isPlaying: Bool { transportState == .playing }
     var isConfigured: Bool { selectedSpeaker != nil }
     var currentCloudGroupId: String? { cloudGroupId }
+
+    func albumArtTransitionID(hasDisplayedArtwork: Bool? = nil) -> String {
+        AlbumArtTransitionIdentity.id(
+            displayedTrackIdentity: displayedAlbumArtTrackIdentity,
+            currentTrackIdentity: AlbumArtTrackIdentity.make(from: trackInfo),
+            hasDisplayedArtwork: hasDisplayedArtwork ?? (albumArtImage != nil)
+        )
+    }
 
     /// Apply a freshly-read transport state, suppressing the brief
     /// `TRANSITIONING` window Sonos returns immediately after a
@@ -449,6 +466,22 @@ final class SonosManager {
         let previousLiveActivityGroupId = liveActivityGroupId()
         let previousSpeakerName = selectedSpeaker?.name
         let previousPlaybackIP = selectedSpeaker?.playbackIP
+        let targetGroup = groupStatuses.first(where: {
+            $0.coordinator.id == speaker.id || $0.coordinator.groupId == speaker.groupId
+        })
+        let targetGroupID = targetGroup?.id ?? speaker.groupId ?? speaker.id
+        let cachedSelectionArtwork = Self.cachedArtworkForSpeakerSelection(
+            groupID: targetGroupID,
+            trackInfo: targetGroup?.trackInfo,
+            groupImages: groupAlbumImages,
+            groupLastArtURL: groupLastArtURL,
+            imageForURL: { [queueArtCache] urlString in
+                queueArtCache.object(forKey: urlString as NSString)
+                    ?? QueueArtDiskCache.shared.image(for: urlString)
+            }
+        )
+        let cachedSelectionColor = groupAlbumColors[targetGroupID]
+        let cachedSelectionTrackIdentity = AlbumArtTrackIdentity.make(from: targetGroup?.trackInfo)
         selectedSpeaker = speaker
         syncSpeakerToStorage(speaker)
         let nextLiveActivityGroupId = liveActivityGroupId()
@@ -473,7 +506,12 @@ final class SonosManager {
 
         albumArtTask?.cancel()
         lastAlbumArtURL = nil
+        loadingAlbumArtURL = nil
+        displayedAlbumArtTrackIdentity = nil
+        deferredMissingAlbumArtTrackIdentity = nil
         albumArtImage = nil
+        albumArtDominantColor = nil
+        albumArtBottomEdgeColor = nil
         consecutiveFailures = 0
         cloudGroupId = nil
         cloudPlayerId = nil
@@ -496,9 +534,7 @@ final class SonosManager {
         dominantColorCache = [:]
 
         // Pre-populate from the group's cached trackInfo to avoid progress bar flash
-        if let group = groupStatuses.first(where: {
-            $0.coordinator.id == speaker.id || $0.coordinator.groupId == speaker.groupId
-        }) {
+        if let group = targetGroup {
             trackInfo = group.trackInfo
             positionSeconds = group.trackInfo?.positionSeconds ?? 0
             durationSeconds = group.trackInfo?.durationSeconds ?? 0
@@ -507,6 +543,12 @@ final class SonosManager {
             positionSeconds = 0
             durationSeconds = 0
         }
+        applyCachedArtworkForSpeakerSelection(
+            cachedSelectionArtwork,
+            groupID: targetGroupID,
+            preferredColor: cachedSelectionColor,
+            trackIdentity: cachedSelectionTrackIdentity
+        )
 
         // Resolve cloud + probe FIRST so refreshState() can pick the right
         // path (cloud endpoints need cloudGroupId; probe result drives
@@ -517,6 +559,70 @@ final class SonosManager {
         await resolveCloudGroupId()
         _ = await probeBackend()
         await refreshState()
+    }
+
+    static func cachedArtworkForSpeakerSelection(
+        groupID: String?,
+        trackInfo: TrackInfo?,
+        groupImages: [String: UIImage],
+        groupLastArtURL: [String: String],
+        imageForURL: (String) -> UIImage?
+    ) -> SpeakerSelectionCachedArtwork? {
+        guard let urlString = trackInfo?.albumArtURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !urlString.isEmpty else {
+            return nil
+        }
+
+        if let groupID,
+           groupLastArtURL[groupID] == urlString,
+           let image = groupImages[groupID] {
+            return SpeakerSelectionCachedArtwork(urlString: urlString, image: image)
+        }
+
+        if let image = imageForURL(urlString) {
+            return SpeakerSelectionCachedArtwork(urlString: urlString, image: image)
+        }
+
+        return nil
+    }
+
+    private func applyCachedArtworkForSpeakerSelection(
+        _ cachedArtwork: SpeakerSelectionCachedArtwork?,
+        groupID: String,
+        preferredColor: Color?,
+        trackIdentity: String?
+    ) {
+        guard let cachedArtwork else { return }
+
+        let urlString = cachedArtwork.urlString
+        let image = cachedArtwork.image
+        let color = preferredColor ?? dominantColorCache[urlString] ?? image.dominantColor()
+        let bottomEdge = image.bottomEdgeColor()
+
+        lastAlbumArtURL = urlString
+        loadingAlbumArtURL = nil
+        deferredMissingAlbumArtTrackIdentity = nil
+        albumArtImage = image
+        displayedAlbumArtTrackIdentity = trackIdentity
+        withAnimation(.easeInOut(duration: Self.albumArtColorTransitionDuration)) {
+            albumArtDominantColor = color
+            albumArtBottomEdgeColor = bottomEdge
+        }
+        dominantColorCache[urlString] = color
+        groupAlbumImages[groupID] = image
+        groupAlbumColors[groupID] = color
+        groupLastArtURL[groupID] = urlString
+        queueArtCache.setObject(
+            image,
+            forKey: urlString as NSString,
+            cost: Int(image.size.width * image.size.height * 4)
+        )
+        cachedArtURLs.insert(urlString)
+
+        if let data = image.jpegData(compressionQuality: 0.9) {
+            SharedStorage.albumArtData = data
+        }
+        SharedStorage.cachedDominantColorHex = image.dominantColorHex()
     }
 
     func rescan() {
@@ -1636,15 +1742,20 @@ final class SonosManager {
             let durationSec: TimeInterval = (track?.durationMillis).map { TimeInterval($0) / 1000.0 } ?? 0
             let positionSec: TimeInterval = (status.positionMillis).map { TimeInterval($0) / 1000.0 } ?? 0
 
-            var info = trackInfo ?? TrackInfo(title: "", artist: "", album: "")
+            let previousTrackInfo = trackInfo
+            var info = previousTrackInfo ?? TrackInfo(title: "", artist: "", album: "")
             info.title = track?.name ?? info.title
             info.artist = track?.artist?.name ?? info.artist
             info.album = track?.album?.name ?? info.album
             let artURL = Self.pickPublicArtURL(
                 track?.imageUrl,
                 track?.album?.imageUrl,
-                meta.container?.imageUrl) ?? info.albumArtURL
-            info.albumArtURL = artURL
+                meta.container?.imageUrl)
+            info.albumArtURL = AlbumArtURLCarryoverPolicy.albumArtURL(
+                incomingURL: artURL,
+                previousTrackInfo: previousTrackInfo,
+                incomingTrackInfo: info
+            )
             info.duration = SonosTime.apiFormat(durationSec)
             info.position = SonosTime.apiFormat(positionSec)
             let sourceHint = track?.service?.name ?? meta.container?.name
@@ -1790,7 +1901,8 @@ final class SonosManager {
             let durationSec: TimeInterval = (track?.durationMillis).map { TimeInterval($0) / 1000.0 } ?? 0
             let positionSec: TimeInterval = (status.positionMillis).map { TimeInterval($0) / 1000.0 } ?? 0
 
-            var info = trackInfo ?? TrackInfo(title: "", artist: "", album: "")
+            let previousTrackInfo = trackInfo
+            var info = previousTrackInfo ?? TrackInfo(title: "", artist: "", album: "")
             info.title = track?.name ?? info.title
             info.artist = track?.artist?.name ?? info.artist
             info.album = track?.album?.name ?? info.album
@@ -1807,8 +1919,12 @@ final class SonosManager {
             let artURL = Self.pickPublicArtURL(
                 track?.imageUrl,
                 track?.album?.imageUrl,
-                meta.container?.imageUrl) ?? info.albumArtURL
-            info.albumArtURL = artURL
+                meta.container?.imageUrl)
+            info.albumArtURL = AlbumArtURLCarryoverPolicy.albumArtURL(
+                incomingURL: artURL,
+                previousTrackInfo: previousTrackInfo,
+                incomingTrackInfo: info
+            )
             info.duration = SonosTime.apiFormat(durationSec)
             info.position = SonosTime.apiFormat(positionSec)
             // Tag the playback source so the now-playing badge renders.
@@ -3266,6 +3382,7 @@ final class SonosManager {
 
     private func loadAlbumArt() async {
         let urlStr = trackInfo?.albumArtURL ?? ""
+        let incomingTrackIdentity = AlbumArtTrackIdentity.make(from: trackInfo)
 
         // No artwork in the current track — TV input, line-in, idle, etc.
         // Old code `guard let urlStr = ...` short-circuited and the previous
@@ -3274,11 +3391,28 @@ final class SonosManager {
         // properly resets the art (the player view falls back to its `tv`
         // glyph; the home card falls back to the speaker glyph).
         if urlStr.isEmpty {
-            guard lastAlbumArtURL != "" else { return }
+            let hasDeferredMissingArtwork = deferredMissingAlbumArtTrackIdentity == incomingTrackIdentity
+            let shouldClearArtwork = AlbumArtLoadAttemptPolicy.shouldClearArtworkForMissingURL(
+                trackSource: trackInfo?.source,
+                hasDisplayedArtwork: albumArtImage != nil,
+                displayedTrackIdentity: displayedAlbumArtTrackIdentity,
+                incomingTrackIdentity: incomingTrackIdentity,
+                hasDeferredMissingArtworkForIncomingTrack: hasDeferredMissingArtwork
+            )
+            guard shouldClearArtwork else {
+                loadingAlbumArtURL = nil
+                albumArtTask?.cancel()
+                deferredMissingAlbumArtTrackIdentity = incomingTrackIdentity
+                return
+            }
+            deferredMissingAlbumArtTrackIdentity = nil
+            guard lastAlbumArtURL != "" || albumArtImage != nil else { return }
             lastAlbumArtURL = ""
+            loadingAlbumArtURL = nil
             albumArtTask?.cancel()
             withAnimation(.easeInOut(duration: 0.5)) {
                 albumArtImage = nil
+                displayedAlbumArtTrackIdentity = nil
                 albumArtDominantColor = nil
                 if let gid = selectedSpeaker?.groupId ?? selectedSpeaker?.id {
                     groupAlbumImages[gid] = nil
@@ -3291,14 +3425,29 @@ final class SonosManager {
             return
         }
 
-        guard urlStr != lastAlbumArtURL else { return }
-        lastAlbumArtURL = urlStr
+        guard AlbumArtLoadAttemptPolicy.shouldStartLoad(
+            urlString: urlStr,
+            lastLoadedURL: lastAlbumArtURL,
+            hasDisplayedArtwork: albumArtImage != nil,
+            loadingURL: loadingAlbumArtURL
+        ) else {
+            return
+        }
+        deferredMissingAlbumArtTrackIdentity = nil
+        let shouldPreserveDisplayedArtwork = AlbumArtRefreshPolicy.shouldPreserveDisplayedArtwork(
+            hasDisplayedArtwork: albumArtImage != nil,
+            displayedTrackIdentity: displayedAlbumArtTrackIdentity,
+            incomingTrackIdentity: incomingTrackIdentity
+        )
+        loadingAlbumArtURL = urlStr
         albumArtTask?.cancel()
 
         guard let url = URL(string: urlStr) else {
             await MainActor.run {
+                self.finishAlbumArtLoadAttempt(urlString: urlStr, loadedImage: nil)
                 withAnimation(.easeInOut(duration: 0.5)) {
                     albumArtImage = nil
+                    displayedAlbumArtTrackIdentity = nil
                     albumArtDominantColor = nil
                 }
             }
@@ -3311,21 +3460,20 @@ final class SonosManager {
         albumArtTask = Task {
             // Fast path: image already in memory cache.
             if let cached = self.queueArtCache.object(forKey: urlStr as NSString) {
+                guard !Task.isCancelled, self.loadingAlbumArtURL == urlStr else { return }
                 let color = self.dominantColorCache[urlStr] ?? cached.dominantColor()
                 let bottomEdge = cached.bottomEdgeColor()
                 // Keep disk entry warm so LRU eviction doesn't drop the current song's art.
                 QueueArtDiskCache.shared.touch(urlStr)
                 await MainActor.run {
-                    withAnimation(.easeInOut(duration: 0.8)) {
-                        self.albumArtImage = cached
-                        self.albumArtDominantColor = color
-                        self.albumArtBottomEdgeColor = bottomEdge
-                        self.dominantColorCache[urlStr] = color
-                        if let gid = self.selectedSpeaker?.groupId ?? self.selectedSpeaker?.id {
-                            self.groupAlbumColors[gid] = color
-                            self.groupAlbumImages[gid] = cached
-                        }
-                    }
+                    self.applyLoadedAlbumArt(
+                        cached,
+                        color: color,
+                        bottomEdge: bottomEdge,
+                        urlString: urlStr,
+                        trackIdentity: incomingTrackIdentity,
+                        preserveDisplayedArtwork: shouldPreserveDisplayedArtwork
+                    )
                 }
                 if let data = cached.jpegData(compressionQuality: 0.9) {
                     SharedStorage.albumArtData = data
@@ -3336,21 +3484,20 @@ final class SonosManager {
 
             // L2: check disk cache before hitting the network.
             if let cached = QueueArtDiskCache.shared.image(for: urlStr) {
+                guard !Task.isCancelled, self.loadingAlbumArtURL == urlStr else { return }
                 let color = self.dominantColorCache[urlStr] ?? cached.dominantColor()
                 let bottomEdge = cached.bottomEdgeColor()
                 self.queueArtCache.setObject(cached, forKey: urlStr as NSString,
                                              cost: Int(cached.size.width * cached.size.height * 4))
                 await MainActor.run {
-                    withAnimation(.easeInOut(duration: 0.8)) {
-                        self.albumArtImage = cached
-                        self.albumArtDominantColor = color
-                        self.albumArtBottomEdgeColor = bottomEdge
-                        self.dominantColorCache[urlStr] = color
-                        if let gid = self.selectedSpeaker?.groupId ?? self.selectedSpeaker?.id {
-                            self.groupAlbumColors[gid] = color
-                            self.groupAlbumImages[gid] = cached
-                        }
-                    }
+                    self.applyLoadedAlbumArt(
+                        cached,
+                        color: color,
+                        bottomEdge: bottomEdge,
+                        urlString: urlStr,
+                        trackIdentity: incomingTrackIdentity,
+                        preserveDisplayedArtwork: shouldPreserveDisplayedArtwork
+                    )
                 }
                 if let data = cached.jpegData(compressionQuality: 0.9) {
                     SharedStorage.albumArtData = data
@@ -3362,30 +3509,35 @@ final class SonosManager {
             // Slow path: download from network.
             do {
                 let (data, _) = try await Self.albumArtSession.data(from: url)
-                guard !Task.isCancelled, lastAlbumArtURL == capturedURL else { return }
+                guard !Task.isCancelled,
+                      self.loadingAlbumArtURL == capturedURL,
+                      self.trackInfo?.albumArtURL == capturedURL else { return }
                 let image = UIImage(data: data)
                 let dominantColor = self.dominantColorCache[urlStr] ?? image?.dominantColor()
                 let bottomEdge = image?.bottomEdgeColor()
-                if let image { QueueArtDiskCache.shared.store(data, for: urlStr) }
+                if image != nil { QueueArtDiskCache.shared.store(data, for: urlStr) }
                 await MainActor.run {
-                    withAnimation(.easeInOut(duration: 0.8)) {
-                        self.albumArtImage = image
-                        self.albumArtDominantColor = dominantColor
-                        self.albumArtBottomEdgeColor = bottomEdge
-                        if let color = dominantColor { self.dominantColorCache[urlStr] = color }
-                        if let gid = self.selectedSpeaker?.groupId ?? self.selectedSpeaker?.id {
-                            if let color = dominantColor { self.groupAlbumColors[gid] = color }
-                            if let img = image { self.groupAlbumImages[gid] = img }
-                        }
-                    }
+                    self.applyLoadedAlbumArt(
+                        image,
+                        color: dominantColor,
+                        bottomEdge: bottomEdge,
+                        urlString: urlStr,
+                        trackIdentity: incomingTrackIdentity,
+                        preserveDisplayedArtwork: shouldPreserveDisplayedArtwork
+                    )
                 }
                 SharedStorage.albumArtData = data
                 SharedStorage.cachedDominantColorHex = image?.dominantColorHex()
             } catch {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    self.finishAlbumArtLoadAttempt(urlString: urlStr, loadedImage: nil)
+                }
+                guard !shouldPreserveDisplayedArtwork else { return }
+                await MainActor.run {
                     withAnimation(.easeInOut(duration: 0.5)) {
                         self.albumArtImage = nil
+                        self.displayedAlbumArtTrackIdentity = nil
                         self.albumArtDominantColor = nil
                         self.albumArtBottomEdgeColor = nil
                     }
@@ -3393,5 +3545,59 @@ final class SonosManager {
             }
         }
         await albumArtTask?.value
+    }
+
+    private func applyLoadedAlbumArt(
+        _ image: UIImage?,
+        color: Color?,
+        bottomEdge: Color?,
+        urlString: String,
+        trackIdentity: String?,
+        preserveDisplayedArtwork: Bool
+    ) {
+        finishAlbumArtLoadAttempt(urlString: urlString, loadedImage: image)
+        deferredMissingAlbumArtTrackIdentity = nil
+
+        if preserveDisplayedArtwork {
+            withAnimation(.easeInOut(duration: Self.albumArtColorTransitionDuration)) {
+                albumArtDominantColor = color
+                albumArtBottomEdgeColor = bottomEdge
+                if let gid = selectedSpeaker?.groupId ?? selectedSpeaker?.id {
+                    groupAlbumColors[gid] = color
+                }
+            }
+            dominantColorCache[urlString] = color
+            if let gid = selectedSpeaker?.groupId ?? selectedSpeaker?.id {
+                if let image {
+                    groupAlbumImages[gid] = image
+                    groupLastArtURL[gid] = urlString
+                }
+            }
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 0.65)) {
+            albumArtImage = image
+            displayedAlbumArtTrackIdentity = image == nil ? nil : trackIdentity
+            albumArtDominantColor = color
+            albumArtBottomEdgeColor = bottomEdge
+            if let gid = selectedSpeaker?.groupId ?? selectedSpeaker?.id {
+                groupAlbumColors[gid] = color
+                groupAlbumImages[gid] = image
+                groupLastArtURL[gid] = image == nil ? nil : urlString
+            }
+        }
+        dominantColorCache[urlString] = color
+    }
+
+    private func finishAlbumArtLoadAttempt(urlString: String, loadedImage image: UIImage?) {
+        if loadingAlbumArtURL == urlString {
+            loadingAlbumArtURL = nil
+        }
+        if image != nil {
+            lastAlbumArtURL = urlString
+        } else if lastAlbumArtURL == urlString {
+            lastAlbumArtURL = nil
+        }
     }
 }

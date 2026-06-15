@@ -34,14 +34,17 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
         hasMusicKitArtwork: Bool? = nil,
         directArtworkURLString: String?
     ) {
+        let normalizedDirectArtworkURLString = LocalMusicArtworkURL.loadableURLString(
+            from: directArtworkURLString
+        )
         self.id = id
         self.kind = kind
         self.catalogID = catalogID
         self.title = title
         self.artist = artist
         self.album = album
-        self.hasMusicKitArtwork = hasMusicKitArtwork ?? (directArtworkURLString != nil)
-        self.directArtworkURLString = directArtworkURLString
+        self.hasMusicKitArtwork = hasMusicKitArtwork ?? (normalizedDirectArtworkURLString != nil)
+        self.directArtworkURLString = normalizedDirectArtworkURLString ?? directArtworkURLString
     }
 
     var key: LocalMusicCatalogArtworkKey {

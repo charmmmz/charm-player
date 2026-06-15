@@ -7,26 +7,26 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3A2D72F47477633484367ADC /* AppleMusicShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BA832D652F90D2A80023DEE7 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BA832D642F90D2A80023DEE7 /* WidgetKit.framework */; };
 		BA832D672F90D2A80023DEE7 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BA832D662F90D2A80023DEE7 /* SwiftUI.framework */; };
 		BA832D782F90D2AA0023DEE7 /* TheWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BA832D622F90D2A80023DEE7 /* TheWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		3A2D72F47477633484367ADC /* AppleMusicShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		BA832D762F90D2AA0023DEE7 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BA832D482F90D1690023DEE7 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BA832D612F90D2A80023DEE7;
-			remoteInfo = TheWidgetExtension;
-		};
 		4BFFCA8AAE4E1FE7D453C015 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = BA832D482F90D1690023DEE7 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 8D65F719D012899BDE575D0A;
 			remoteInfo = AppleMusicShareExtension;
+		};
+		BA832D762F90D2AA0023DEE7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BA832D482F90D1690023DEE7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BA832D612F90D2A80023DEE7;
+			remoteInfo = TheWidgetExtension;
 		};
 		BA832DA02F92E1000023DEE7 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -55,28 +55,28 @@
 /* Begin PBXFileReference section */
 		BA832D502F90D1690023DEE7 /* SonosWidget.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SonosWidget.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA832D622F90D2A80023DEE7 /* TheWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TheWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AppleMusicShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA832D642F90D2A80023DEE7 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		BA832D662F90D2A80023DEE7 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		BA832D932F90E0020023DEE7 /* SonosOAuth.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SonosOAuth.xcconfig; sourceTree = "<group>"; };
 		BA832D942F90E0020023DEE7 /* SonosSecrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SonosSecrets.example.xcconfig; sourceTree = "<group>"; };
 		BA832D972F92E1000023DEE7 /* SonosWidgetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SonosWidgetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AppleMusicShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		BA832D792F90D2AA0023DEE7 /* Exceptions for "TheWidget" folder in "TheWidgetExtension" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-			);
-			target = BA832D612F90D2A80023DEE7 /* TheWidgetExtension */;
-		};
 		6EC748E641EF79A68F8D3565 /* Exceptions for "AppleMusicShareExtension" folder in "AppleMusicShareExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
 			target = 8D65F719D012899BDE575D0A /* AppleMusicShareExtension */;
+		};
+		BA832D792F90D2AA0023DEE7 /* Exceptions for "TheWidget" folder in "TheWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = BA832D612F90D2A80023DEE7 /* TheWidgetExtension */;
 		};
 		BA832D7E2F90D3000023DEE7 /* Exceptions for "SonosWidget" folder in "SonosWidget" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -138,6 +138,14 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		9288B861AA7E06A6E5623D0D /* AppleMusicShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				6EC748E641EF79A68F8D3565 /* Exceptions for "AppleMusicShareExtension" folder in "AppleMusicShareExtension" target */,
+			);
+			path = AppleMusicShareExtension;
+			sourceTree = "<group>";
+		};
 		BA832D522F90D1690023DEE7 /* SonosWidget */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -152,14 +160,6 @@
 				BA832D792F90D2AA0023DEE7 /* Exceptions for "TheWidget" folder in "TheWidgetExtension" target */,
 			);
 			path = TheWidget;
-			sourceTree = "<group>";
-		};
-		9288B861AA7E06A6E5623D0D /* AppleMusicShareExtension */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				6EC748E641EF79A68F8D3565 /* Exceptions for "AppleMusicShareExtension" folder in "AppleMusicShareExtension" target */,
-			);
-			path = AppleMusicShareExtension;
 			sourceTree = "<group>";
 		};
 		BA832D802F90D3000023DEE7 /* Shared */ = {
@@ -195,14 +195,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F368F35FA2491DDD1FE27C76 /* Frameworks */ = {
+		BA832D9A2F92E1000023DEE7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BA832D9A2F92E1000023DEE7 /* Frameworks */ = {
+		F368F35FA2491DDD1FE27C76 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -258,6 +258,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		8D65F719D012899BDE575D0A /* AppleMusicShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AE870425246F7A922E9A6CA3 /* Build configuration list for PBXNativeTarget "AppleMusicShareExtension" */;
+			buildPhases = (
+				52D4752D061C0A960C256C3A /* Sources */,
+				F368F35FA2491DDD1FE27C76 /* Frameworks */,
+				81ECC44FBEE6927C27894748 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9288B861AA7E06A6E5623D0D /* AppleMusicShareExtension */,
+			);
+			name = AppleMusicShareExtension;
+			packageProductDependencies = (
+			);
+			productName = AppleMusicShareExtension;
+			productReference = BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		BA832D4F2F90D1690023DEE7 /* SonosWidget */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BA832D5B2F90D16C0023DEE7 /* Build configuration list for PBXNativeTarget "SonosWidget" */;
@@ -307,28 +329,6 @@
 			productReference = BA832D622F90D2A80023DEE7 /* TheWidgetExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		8D65F719D012899BDE575D0A /* AppleMusicShareExtension */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AE870425246F7A922E9A6CA3 /* Build configuration list for PBXNativeTarget "AppleMusicShareExtension" */;
-			buildPhases = (
-				52D4752D061C0A960C256C3A /* Sources */,
-				F368F35FA2491DDD1FE27C76 /* Frameworks */,
-				81ECC44FBEE6927C27894748 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				9288B861AA7E06A6E5623D0D /* AppleMusicShareExtension */,
-			);
-			name = AppleMusicShareExtension;
-			packageProductDependencies = (
-			);
-			productName = AppleMusicShareExtension;
-			productReference = BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */;
-			productType = "com.apple.product-type.app-extension";
-		};
 		BA832D9C2F92E1000023DEE7 /* SonosWidgetTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BA832D9F2F92E1000023DEE7 /* Build configuration list for PBXNativeTarget "SonosWidgetTests" */;
@@ -363,13 +363,13 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					8D65F719D012899BDE575D0A = {
+						CreatedOnToolsVersion = 26.4;
+					};
 					BA832D4F2F90D1690023DEE7 = {
 						CreatedOnToolsVersion = 26.4;
 					};
 					BA832D612F90D2A80023DEE7 = {
-						CreatedOnToolsVersion = 26.4;
-					};
-					8D65F719D012899BDE575D0A = {
 						CreatedOnToolsVersion = 26.4;
 					};
 					BA832D9C2F92E1000023DEE7 = {
@@ -401,6 +401,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		81ECC44FBEE6927C27894748 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BA832D4E2F90D1690023DEE7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -409,13 +416,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BA832D602F90D2A80023DEE7 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		81ECC44FBEE6927C27894748 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -432,6 +432,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		52D4752D061C0A960C256C3A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BA832D4C2F90D1690023DEE7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -440,13 +447,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BA832D5E2F90D2A80023DEE7 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		52D4752D061C0A960C256C3A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -463,15 +463,15 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		BA832D772F90D2AA0023DEE7 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BA832D612F90D2A80023DEE7 /* TheWidgetExtension */;
-			targetProxy = BA832D762F90D2AA0023DEE7 /* PBXContainerItemProxy */;
-		};
 		B638E843BC2D07506F85B0BE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 8D65F719D012899BDE575D0A /* AppleMusicShareExtension */;
 			targetProxy = 4BFFCA8AAE4E1FE7D453C015 /* PBXContainerItemProxy */;
+		};
+		BA832D772F90D2AA0023DEE7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BA832D612F90D2A80023DEE7 /* TheWidgetExtension */;
+			targetProxy = BA832D762F90D2AA0023DEE7 /* PBXContainerItemProxy */;
 		};
 		BA832DA12F92E1000023DEE7 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -481,6 +481,70 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		4B843B41706AD50800647C71 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = BA832D932F90E0020023DEE7 /* SonosOAuth.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = AppleMusicShareExtension/AppleMusicShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3MSS7DJGVR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppleMusicShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Play in Charm Player";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.AppleMusicShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		730AA4BE121D160A1AFEE3D1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = BA832D932F90E0020023DEE7 /* SonosOAuth.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = AppleMusicShareExtension/AppleMusicShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3MSS7DJGVR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppleMusicShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Play in Charm Player";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.AppleMusicShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		BA832D592F90D16C0023DEE7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -742,70 +806,6 @@
 			};
 			name = Release;
 		};
-		730AA4BE121D160A1AFEE3D1 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BA832D932F90E0020023DEE7 /* SonosOAuth.xcconfig */;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = AppleMusicShareExtension/AppleMusicShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3MSS7DJGVR;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = AppleMusicShareExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Play in Charm Player";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.AppleMusicShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		4B843B41706AD50800647C71 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BA832D932F90E0020023DEE7 /* SonosOAuth.xcconfig */;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = AppleMusicShareExtension/AppleMusicShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3MSS7DJGVR;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = AppleMusicShareExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Play in Charm Player";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.AppleMusicShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
 		BA832D9D2F92E1000023DEE7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -865,6 +865,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		AE870425246F7A922E9A6CA3 /* Build configuration list for PBXNativeTarget "AppleMusicShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				730AA4BE121D160A1AFEE3D1 /* Debug */,
+				4B843B41706AD50800647C71 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		BA832D4B2F90D1690023DEE7 /* Build configuration list for PBXProject "SonosWidget" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -888,15 +897,6 @@
 			buildConfigurations = (
 				BA832D7B2F90D2AA0023DEE7 /* Debug */,
 				BA832D7C2F90D2AA0023DEE7 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		AE870425246F7A922E9A6CA3 /* Build configuration list for PBXNativeTarget "AppleMusicShareExtension" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				730AA4BE121D160A1AFEE3D1 /* Debug */,
-				4B843B41706AD50800647C71 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

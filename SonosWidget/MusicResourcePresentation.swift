@@ -41,6 +41,7 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
     case playNext
     case addToQueue
     case startStation
+    case favorite(AlbumFavoriteKind, isActive: Bool)
 
     var id: String {
         switch self {
@@ -48,6 +49,8 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "play-next"
         case .addToQueue: return "add-to-queue"
         case .startStation: return "start-station"
+        case .favorite(let kind, let isActive):
+            return "favorite-\(kind)-\(isActive)"
         }
     }
 
@@ -57,6 +60,14 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "Play Next"
         case .addToQueue: return "Add to Queue"
         case .startStation: return "Start Station"
+        case .favorite(.sonos, false):
+            return "Add to Sonos Favorites"
+        case .favorite(.sonos, true):
+            return "Remove from Sonos Favorites"
+        case .favorite(.appleMusic, false):
+            return "Add to Apple Music Favorites"
+        case .favorite(.appleMusic, true):
+            return "Remove from Apple Music Favorites"
         }
     }
 
@@ -66,6 +77,8 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "text.line.first.and.arrowtriangle.forward"
         case .addToQueue: return "text.badge.plus"
         case .startStation: return "antenna.radiowaves.left.and.right"
+        case .favorite(_, false): return "heart"
+        case .favorite(_, true): return "heart.slash"
         }
     }
 }
@@ -122,5 +135,21 @@ struct MusicResourcePresentation: Identifiable, Sendable {
 enum MusicResourceArtworkSelection {
     static func preferredRowArtworkURL(primary: URL?, fallback: URL?) -> URL? {
         primary ?? fallback
+    }
+}
+
+enum MusicResourceTrackLeadingPolicy: Equatable, Sendable {
+    case albumTrack
+    case playlistTrack
+
+    func selectedArtworkURL(primaryArtworkURL: URL?, fallbackArtworkURL: URL?) -> URL? {
+        switch self {
+        case .albumTrack:
+            nil
+        case .playlistTrack:
+            MusicResourceArtworkSelection.preferredRowArtworkURL(
+                primary: primaryArtworkURL,
+                fallback: fallbackArtworkURL)
+        }
     }
 }

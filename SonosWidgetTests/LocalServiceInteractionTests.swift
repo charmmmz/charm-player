@@ -153,6 +153,132 @@ final class LocalServiceInteractionTests: XCTestCase {
             .play)
     }
 
+    func testCatalogSearchContainersNavigateAndSongsStillPlay() {
+        XCTAssertEqual(
+            LocalServiceCatalogSearchInteraction.primaryAction(for: .song),
+            .play)
+        XCTAssertEqual(
+            LocalServiceCatalogSearchInteraction.primaryAction(for: .album),
+            .navigate)
+        XCTAssertEqual(
+            LocalServiceCatalogSearchInteraction.primaryAction(for: .artist),
+            .navigate)
+        XCTAssertEqual(
+            LocalServiceCatalogSearchInteraction.primaryAction(for: .playlist),
+            .navigate)
+    }
+
+    func testSearchScopesExposeLibraryAndAppleMusicTitles() {
+        XCTAssertEqual(LocalServiceSearchScope.allCases, [.library, .appleMusic])
+        XCTAssertEqual(LocalServiceSearchScope.library.title, "Library")
+        XCTAssertEqual(LocalServiceSearchScope.appleMusic.title, "Apple Music")
+    }
+
+    func testSearchPresentationPromptsNameActiveScope() {
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.prompt(for: .library),
+            "Search Library")
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.prompt(for: .appleMusic),
+            "Search in Apple Music")
+    }
+
+    func testAppleMusicSearchCategoriesAppearOnlyAfterSubmit() {
+        XCTAssertFalse(
+            LocalServiceSearchPresentation.showsCatalogCategories(
+                scope: .appleMusic,
+                hasSubmittedSearch: false))
+        XCTAssertFalse(
+            LocalServiceSearchPresentation.showsCatalogCategories(
+                scope: .library,
+                hasSubmittedSearch: true))
+        XCTAssertTrue(
+            LocalServiceSearchPresentation.showsCatalogCategories(
+                scope: .appleMusic,
+                hasSubmittedSearch: true))
+    }
+
+    func testAppleMusicSearchCategoryOrderMatchesAppleMusicTabs() {
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.catalogCategoryOrder,
+            [.artists, .albums, .songs, .playlists])
+    }
+
+    func testSearchContextLabelEmphasizesScope() {
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.contextLabel(
+                for: "  daniel  ",
+                scope: .appleMusic),
+            "daniel in Apple Music")
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.contextLabel(
+                for: "  daniel  ",
+                scope: .library),
+            "daniel in Library")
+    }
+
+    func testSubmittedSearchFieldDisplaySplitsTermFromScopeHint() {
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.submittedFieldDisplay(
+                for: "  Daniel  ",
+                scope: .appleMusic),
+            LocalServiceSubmittedSearchFieldDisplay(
+                term: "Daniel",
+                scopeHint: " in Apple Music")
+        )
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.submittedFieldDisplay(
+                for: "  Daniel  ",
+                scope: .library),
+            LocalServiceSubmittedSearchFieldDisplay(
+                term: "Daniel",
+                scopeHint: " in Library")
+        )
+    }
+
+    func testCatalogSearchResultsGroupByLibraryCategoryOrder() {
+        let results = LocalServiceCatalogSearchResults(items: [
+            AppleMusicCatalogSearchItem(
+                id: "song-1",
+                type: .song,
+                title: "Song",
+                artist: "Artist",
+                album: "Album",
+                artworkURLString: nil,
+                duration: nil),
+            AppleMusicCatalogSearchItem(
+                id: "album-1",
+                type: .album,
+                title: "Album",
+                artist: "Artist",
+                album: "Album",
+                artworkURLString: nil,
+                duration: nil),
+            AppleMusicCatalogSearchItem(
+                id: "artist-1",
+                type: .artist,
+                title: "Artist",
+                artist: "",
+                album: "",
+                artworkURLString: nil,
+                duration: nil),
+            AppleMusicCatalogSearchItem(
+                id: "playlist-1",
+                type: .playlist,
+                title: "Playlist",
+                artist: "Apple Music",
+                album: "",
+                artworkURLString: nil,
+                duration: nil)
+        ])
+
+        XCTAssertEqual(results.count(for: .playlists), 1)
+        XCTAssertEqual(results.count(for: .artists), 1)
+        XCTAssertEqual(results.count(for: .albums), 1)
+        XCTAssertEqual(results.count(for: .songs), 1)
+        XCTAssertEqual(results.visibleCategories, [.playlists, .artists, .albums, .songs])
+    }
+
     func testArtistAlbumSummariesUseFirstSongArtworkAndStableAlbumOrder() {
         let summaries = LocalMusicArtistAlbumSummaryBuilder.summaries(from: [
             LocalMusicArtistAlbumSummaryInput(
@@ -213,6 +339,74 @@ final class LocalServiceInteractionTests: XCTestCase {
         XCTAssertNil(items.first?.directArtworkURLString)
     }
 
+    func testPlaylistTrackArtworkLookupUsesSongSearchMetadata() {
+        let item = LocalMusicPlaylistTrackArtworkLookup.lookupItem(
+            title: "Miss Misery",
+            artistName: "Elliott Smith",
+            albumTitle: "Good Will Hunting",
+            directArtworkURLString: nil)
+
+        XCTAssertEqual(item.id, "playlist-track:Elliott Smith:Good Will Hunting:Miss Misery")
+        XCTAssertEqual(item.kind, .song)
+        XCTAssertEqual(item.title, "Miss Misery")
+        XCTAssertEqual(item.artist, "Elliott Smith")
+        XCTAssertEqual(item.album, "Good Will Hunting")
+        XCTAssertEqual(item.hasMusicKitArtwork, false)
+        XCTAssertNil(item.directArtworkURLString)
+    }
+
+    func testPlaylistTrackArtworkSelectionPrefersCatalogArtworkOverPlaylistCover() {
+        let catalogURL = URL(string: "https://example.com/catalog-track.jpg")!
+        let playlistURL = URL(string: "https://example.com/playlist.jpg")!
+
+        XCTAssertEqual(
+            LocalMusicPlaylistTrackArtworkLookup.selectedArtworkURL(
+                trackArtworkURL: nil,
+                catalogArtworkURL: catalogURL,
+                playlistArtworkURL: playlistURL),
+            catalogURL
+        )
+    }
+
+    func testPlaylistTrackArtworkSelectionIgnoresUnviewableTrackArtwork() {
+        let trackURL = URL(string: "musicKit://artwork/library/item/120x120")!
+        let catalogURL = URL(string: "https://example.com/catalog-track.jpg")!
+
+        XCTAssertEqual(
+            LocalMusicPlaylistTrackArtworkLookup.selectedArtworkURL(
+                trackArtworkURL: trackURL,
+                catalogArtworkURL: catalogURL,
+                playlistArtworkURL: nil),
+            catalogURL
+        )
+    }
+
+    func testPlaylistTrackArtworkSelectionExtractsLoadableArtworkFromMusicKitLibraryURL() {
+        let trackURL = URL(
+            string: "musicKit://artwork/library/ABC/120x120?aat=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic125%2Fv4%2Fcover%2F600x600bb.jpg&at=item&id=1054366"
+        )!
+
+        XCTAssertEqual(
+            LocalMusicPlaylistTrackArtworkLookup.selectedArtworkURL(
+                trackArtworkURL: trackURL,
+                catalogArtworkURL: nil,
+                playlistArtworkURL: nil
+            )?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/cover/120x120bb.jpg"
+        )
+    }
+
+    func testPlaylistTrackArtworkSelectionDoesNotUsePlaylistCoverAsRowFallback() {
+        let playlistURL = URL(string: "https://example.com/playlist.jpg")!
+
+        XCTAssertNil(
+            LocalMusicPlaylistTrackArtworkLookup.selectedArtworkURL(
+                trackArtworkURL: nil,
+                catalogArtworkURL: nil,
+                playlistArtworkURL: playlistURL)
+        )
+    }
+
     func testMusicResourceActionPolicyExposesQueueActionsForQueueableSongs() {
         XCTAssertEqual(
             MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
@@ -236,20 +430,54 @@ final class LocalServiceInteractionTests: XCTestCase {
 
     func testPlaylistTrackArtworkSelectionPrefersTrackArtwork() {
         let trackURL = URL(string: "https://example.com/track.jpg")!
-        let playlistURL = URL(string: "https://example.com/playlist.jpg")!
+        let fallbackURL = URL(string: "https://example.com/fallback.jpg")!
 
         XCTAssertEqual(
-            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: trackURL, fallback: playlistURL),
+            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: trackURL, fallback: fallbackURL),
             trackURL
         )
     }
 
-    func testPlaylistTrackArtworkSelectionFallsBackToPlaylistArtwork() {
+    func testPlaylistTrackArtworkSelectionUsesProvidedFallbackArtwork() {
+        let fallbackURL = URL(string: "https://example.com/fallback.jpg")!
+
+        XCTAssertEqual(
+            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: nil, fallback: fallbackURL),
+            fallbackURL
+        )
+    }
+
+    func testAlbumTrackLeadingPolicyNeverShowsArtwork() {
+        let trackURL = URL(string: "https://example.com/track.jpg")!
+        let albumURL = URL(string: "https://example.com/album.jpg")!
+
+        XCTAssertNil(
+            MusicResourceTrackLeadingPolicy.albumTrack.selectedArtworkURL(
+                primaryArtworkURL: trackURL,
+                fallbackArtworkURL: albumURL)
+        )
+    }
+
+    func testPlaylistTrackLeadingPolicyPrefersTrackArtwork() {
+        let trackURL = URL(string: "https://example.com/track.jpg")!
         let playlistURL = URL(string: "https://example.com/playlist.jpg")!
 
         XCTAssertEqual(
-            MusicResourceArtworkSelection.preferredRowArtworkURL(primary: nil, fallback: playlistURL),
-            playlistURL
+            MusicResourceTrackLeadingPolicy.playlistTrack.selectedArtworkURL(
+                primaryArtworkURL: trackURL,
+                fallbackArtworkURL: playlistURL),
+            trackURL
+        )
+    }
+
+    func testPlaylistTrackLeadingPolicyFallsBackToProvidedArtwork() {
+        let fallbackURL = URL(string: "https://example.com/fallback.jpg")!
+
+        XCTAssertEqual(
+            MusicResourceTrackLeadingPolicy.playlistTrack.selectedArtworkURL(
+                primaryArtworkURL: nil,
+                fallbackArtworkURL: fallbackURL),
+            fallbackURL
         )
     }
 

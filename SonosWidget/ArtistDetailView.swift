@@ -19,10 +19,15 @@ struct ArtistDetailView: View {
     @State private var headerImage: UIImage?
     @State private var resolvedArtistImageURL: String?
     @State private var themeColor: Color?
+    @State private var isOpeningAppleMusicLink = false
 
     private var artistName: String { response?.title ?? artistItem.title }
     private var headerImageURL: String? {
-        response?.images?.tile1x1 ?? resolvedArtistImageURL ?? artistItem.albumArtURL
+        DetailArtworkURLSelection.firstAvailable(
+            entryArtworkURL: artistItem.albumArtURL,
+            responseArtworkURL: response?.images?.tile1x1,
+            fallbackArtworkURL: resolvedArtistImageURL
+        )
     }
     private var streamingProviderName: String? {
         if let provider = response?.providerInfo?.name, !provider.isEmpty {
@@ -58,6 +63,13 @@ struct ArtistDetailView: View {
             .contains { $0.action == "ACTION_PLAY_STATION" } == true
         let isAppleMusicArtist = PlaybackSource.from(serviceName: streamingProviderName) == .appleMusic
         return hasStationAction || isAppleMusicArtist
+    }
+    private var appleMusicArtworkResource: AppleMusicFavoriteResource? {
+        AppleMusicDetailArtworkLink.resource(
+            from: artistItem,
+            searchManager: searchManager,
+            allowedTypes: [.artists]
+        )
     }
 
     var body: some View {
@@ -139,10 +151,7 @@ struct ArtistDetailView: View {
     private var headerSection: some View {
         VStack(spacing: 12) {
             ZStack(alignment: .topTrailing) {
-                artistAvatar
-                    .frame(width: 200, height: 200)
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+                headerArtwork
 
                 if shouldShowStationBadge {
                     stationBadge()
@@ -178,6 +187,42 @@ struct ArtistDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 24)
         .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var headerArtwork: some View {
+        if let resource = appleMusicArtworkResource {
+            Button {
+                openAppleMusicFromArtwork(resource: resource)
+            } label: {
+                headerArtworkImage
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpeningAppleMusicLink)
+            .accessibilityLabel("Open artist in Apple Music")
+        } else {
+            headerArtworkImage
+        }
+    }
+
+    private var headerArtworkImage: some View {
+        artistAvatar
+            .frame(width: 200, height: 200)
+            .clipShape(Circle())
+            .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+    }
+
+    private func openAppleMusicFromArtwork(resource: AppleMusicFavoriteResource) {
+        guard !isOpeningAppleMusicLink else { return }
+        isOpeningAppleMusicLink = true
+        Task { @MainActor in
+            defer { isOpeningAppleMusicLink = false }
+            await AppleMusicDetailArtworkLink.open(
+                resource: resource,
+                title: artistName,
+                context: "sonos-artist-artwork"
+            )
+        }
     }
 
     @ViewBuilder

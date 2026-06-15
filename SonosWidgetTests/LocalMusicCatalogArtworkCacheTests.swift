@@ -100,7 +100,7 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
     }
 
-    func testPlannerSkipsFallbackWhenMusicKitArtworkURLIsNotWebLoadable() {
+    func testPlannerLooksUpFallbackWhenDirectArtworkURLIsNotWebLoadable() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let item = LocalMusicCatalogArtworkLookupItem(
@@ -118,7 +118,7 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
             cache: cache)
 
         XCTAssertTrue(plan.immediateURLStrings.isEmpty)
-        XCTAssertTrue(plan.lookupItems.isEmpty)
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
     }
 
     func testPlannerSkipsCachedArtworkWhenMusicKitArtworkIsAlreadyPresent() {
