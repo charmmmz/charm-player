@@ -19,13 +19,13 @@ final class LocalServiceInteractionTests: XCTestCase {
     func testAlbumDetailActionsKeepAppleMusicLinkOnArtwork() {
         XCTAssertEqual(
             LocalMusicDetailActions.album(hasAppleMusicURL: true),
-            [.play, .shuffle])
+            [.play, .shuffle, .favorite])
     }
 
     func testAlbumDetailActionsOmitAppleMusicLinkWhenUnavailable() {
         XCTAssertEqual(
             LocalMusicDetailActions.album(hasAppleMusicURL: false),
-            [.play, .shuffle])
+            [.play, .shuffle, .favorite])
     }
 
     func testArtistDetailActionsKeepAppleMusicLinkOnArtwork() {

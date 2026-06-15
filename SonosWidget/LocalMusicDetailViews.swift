@@ -22,6 +22,8 @@ struct LocalMusicAlbumDetailView: View {
     @State private var themeColor: Color?
     @State private var actionInFlight: LocalMusicDetailAction?
     @State private var catalogAppleMusicURL: URL?
+    @State private var isAppleMusicFavorited = false
+    @State private var isAppleMusicFavoriteBusy = false
 
     private var displayAlbum: Album { detailedAlbum ?? album }
     private var coverURL: URL? {
@@ -61,9 +63,6 @@ struct LocalMusicAlbumDetailView: View {
     }
     private var appleMusicURLLookupID: String {
         "\(displayAlbum.id.rawValue)|\(displayAlbum.title)|\(displayAlbum.artistName)"
-    }
-    private var detailActions: [LocalMusicDetailAction] {
-        LocalMusicDetailActions.album(hasAppleMusicURL: appleMusicURL != nil)
     }
     private var tracks: [Track] {
         guard let tracks = detailedAlbum?.tracks else { return [] }
@@ -167,19 +166,19 @@ struct LocalMusicAlbumDetailView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            ForEach(detailActions, id: \.self) { action in
-                LocalMusicDetailActionButton(
-                    action: action,
-                    tint: actionTint,
-                    isActive: isActionActive(action),
-                    isDisabled: isActionDisabled(action)
-                ) {
-                    performAction(action)
-                }
-            }
-        }
-        .padding(.horizontal)
+        AlbumPrimaryActionBar(
+            favoriteKind: .appleMusic,
+            tint: actionTint,
+            isPlayActive: isActionActive(.play),
+            isShuffleActive: isActionActive(.shuffle),
+            isFavoriteActive: isAppleMusicFavorited,
+            isFavoriteBusy: isAppleMusicFavoriteBusy,
+            isFavoriteDisabled: false,
+            isPlaybackDisabled: actionInFlight != nil || store.isStartingPlayback,
+            play: { performAction(.play) },
+            shuffle: { performAction(.shuffle) },
+            toggleFavorite: toggleAppleMusicFavorite
+        )
     }
 
     private var actionTint: Color {
@@ -191,16 +190,11 @@ struct LocalMusicAlbumDetailView: View {
             (store.isStartingPlayback && store.activePlaybackItemID == displayID(for: action))
     }
 
-    private func isActionDisabled(_ action: LocalMusicDetailAction) -> Bool {
-        (actionInFlight != nil && actionInFlight != action) ||
-            (store.isStartingPlayback && !isActionActive(action))
-    }
-
     private func displayID(for action: LocalMusicDetailAction) -> String {
         switch action {
         case .shuffle:
             return "\(playbackAlbumID):shuffle"
-        case .play, .playStation, .openAppleMusic:
+        case .play, .favorite, .playStation, .openAppleMusic:
             return playbackAlbumID
         }
     }
@@ -215,6 +209,8 @@ struct LocalMusicAlbumDetailView: View {
             if let url = appleMusicURL {
                 openLocalMusicAppleMusicURL(url, context: "album-action title='\(displayAlbum.title)'")
             }
+        case .favorite:
+            toggleAppleMusicFavorite()
         case .playStation:
             break
         }
@@ -353,7 +349,11 @@ struct LocalMusicAlbumDetailView: View {
             guard !Task.isCancelled else { return }
             let image = UIImage(data: data)
             coverImage = image
-            themeColor = image?.dominantColor()
+            if let uiColor = image?.dominantUIColor() {
+                themeColor = AlbumThemeColorPolicy.mutedColor(from: uiColor)
+            } else {
+                themeColor = image?.dominantColor()?.opacity(0.55)
+            }
         } catch {
             guard !Task.isCancelled else { return }
             SonosLog.error(.albumDetail, "Local Music cover image load failed: \(error)")
@@ -373,6 +373,19 @@ struct LocalMusicAlbumDetailView: View {
                 return
             }
             openLocalMusicAppleMusicURL(url, context: "album-artwork title='\(displayAlbum.title)'")
+        }
+    }
+
+    private func toggleAppleMusicFavorite() {
+        guard !isAppleMusicFavoriteBusy else { return }
+        isAppleMusicFavoriteBusy = true
+
+        Task { @MainActor in
+            defer { isAppleMusicFavoriteBusy = false }
+            SonosLog.debug(
+                .localService,
+                "Apple Music album favorite tapped title='\(displayAlbum.title)' id='\(displayAlbum.id.rawValue)'")
+            isAppleMusicFavorited.toggle()
         }
     }
 
@@ -636,7 +649,7 @@ struct LocalMusicPlaylistDetailView: View {
         switch action {
         case .shuffle:
             return "\(displayPlaylist.id.rawValue):shuffle"
-        case .play, .playStation, .openAppleMusic:
+        case .play, .favorite, .playStation, .openAppleMusic:
             return displayPlaylist.id.rawValue
         }
     }
@@ -651,7 +664,7 @@ struct LocalMusicPlaylistDetailView: View {
             if let url = appleMusicURL {
                 openLocalMusicAppleMusicURL(url, context: "playlist-action title='\(displayPlaylist.name)'")
             }
-        case .playStation:
+        case .favorite, .playStation:
             break
         }
     }
@@ -1039,7 +1052,7 @@ struct LocalMusicArtistDetailView: View {
         switch action {
         case .playStation:
             return "\(artist.id.rawValue):station"
-        case .play, .shuffle, .openAppleMusic:
+        case .play, .shuffle, .favorite, .openAppleMusic:
             return artist.id.rawValue
         }
     }
@@ -1052,7 +1065,7 @@ struct LocalMusicArtistDetailView: View {
             if let url = appleMusicURL {
                 openLocalMusicAppleMusicURL(url, context: "artist-action title='\(artist.name)'")
             }
-        case .play, .shuffle:
+        case .play, .shuffle, .favorite:
             break
         }
     }

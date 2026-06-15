@@ -122,6 +122,7 @@ enum LocalServiceSectionKind: String, CaseIterable, Identifiable, Sendable {
 enum LocalMusicDetailAction: Equatable, Hashable, Sendable {
     case play
     case shuffle
+    case favorite
     case playStation
     case openAppleMusic
 
@@ -129,6 +130,7 @@ enum LocalMusicDetailAction: Equatable, Hashable, Sendable {
         switch self {
         case .play: return "Play"
         case .shuffle: return "Shuffle"
+        case .favorite: return "Favorite"
         case .playStation: return "Play Station"
         case .openAppleMusic: return "Apple Music"
         }
@@ -138,19 +140,20 @@ enum LocalMusicDetailAction: Equatable, Hashable, Sendable {
         switch self {
         case .play: return "play.fill"
         case .shuffle: return "shuffle"
+        case .favorite: return "heart"
         case .playStation: return "antenna.radiowaves.left.and.right"
         case .openAppleMusic: return "music.note"
         }
     }
 
     var isCompact: Bool {
-        self == .openAppleMusic
+        self == .openAppleMusic || self == .favorite
     }
 }
 
 enum LocalMusicDetailActions {
     static func album(hasAppleMusicURL _: Bool) -> [LocalMusicDetailAction] {
-        [.play, .shuffle]
+        [.play, .shuffle, .favorite]
     }
 
     static func artist(hasAppleMusicURL _: Bool) -> [LocalMusicDetailAction] {
