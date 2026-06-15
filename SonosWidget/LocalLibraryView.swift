@@ -6,9 +6,32 @@ struct LocalLibraryView: View {
     @Bindable var searchManager: SearchManager
     @State private var store = LocalLibraryStore()
     @State private var searchText = ""
+    @State private var searchScope: LocalServiceSearchScope = .library
+    @State private var submittedSearchText = ""
+    @State private var searchSubmissionID = 0
+    @State private var hasSubmittedSearch = false
+    @State private var catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+    @FocusState private var isSearchFieldFocused: Bool
+    @Namespace private var searchScopeSelectionNamespace
+    @Namespace private var catalogCategorySelectionNamespace
 
     private var isSearchingLibrary: Bool {
-        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !trimmedSearchText.isEmpty
+    }
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var shouldShowSearchScopeTabs: Bool {
+        isSearchFieldFocused || (isSearchingLibrary && !hasSubmittedSearch)
+    }
+
+    private var shouldShowSubmittedSearchOverlay: Bool {
+        hasSubmittedSearch
+            && !isSearchFieldFocused
+            && trimmedSearchText == submittedSearchText
+            && !submittedSearchText.isEmpty
     }
 
     var body: some View {
@@ -18,7 +41,7 @@ struct LocalLibraryView: View {
                     deniedContent
                 } else if store.isLoading && !store.hasLoaded {
                     loadingContent
-                } else if !store.hasHomeContent && searchText.isEmpty {
+                } else if !store.hasHomeContent && trimmedSearchText.isEmpty {
                     emptyLibraryContent
                 } else {
                     content
@@ -33,12 +56,20 @@ struct LocalLibraryView: View {
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .background(backgroundLayer.ignoresSafeArea())
-            .searchable(text: $searchText, prompt: "Search Library")
+            .onChange(of: searchText) { _, newValue in
+                handleSearchTextChanged(newValue)
+            }
+            .onChange(of: searchScope) { _, _ in
+                handleSearchScopeChanged()
+            }
+            .onChange(of: store.catalogSearchResults.items) { _, _ in
+                selectCatalogCategoryForAvailableResults()
+            }
             .task {
                 await store.loadIfNeeded()
             }
-            .task(id: searchText) {
-                await store.search(term: searchText)
+            .task(id: "\(searchScope.rawValue):\(submittedSearchText):\(searchSubmissionID)") {
+                await store.search(term: submittedSearchText, scope: searchScope)
             }
             .refreshable {
                 await store.reload()
@@ -55,6 +86,80 @@ struct LocalLibraryView: View {
                 }
             }
             .preferredColorScheme(.dark)
+        }
+    }
+
+    private func submitSearch() {
+        let trimmed = trimmedSearchText
+        guard !trimmed.isEmpty else {
+            resetSubmittedSearch()
+            return
+        }
+
+        if searchText != trimmed {
+            searchText = trimmed
+        }
+
+        submittedSearchText = trimmed
+        hasSubmittedSearch = true
+        searchSubmissionID += 1
+        isSearchFieldFocused = false
+
+        if searchScope == .appleMusic {
+            catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+        }
+    }
+
+    private func handleSearchTextChanged(_ newValue: String) {
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            resetSubmittedSearch()
+            return
+        }
+
+        if !submittedSearchText.isEmpty && trimmed != submittedSearchText {
+            resetSubmittedSearch()
+        }
+    }
+
+    private func handleSearchScopeChanged() {
+        if searchScope == .appleMusic {
+            catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+        }
+
+        if hasSubmittedSearch && !submittedSearchText.isEmpty {
+            searchSubmissionID += 1
+        }
+    }
+
+    private func clearSearch() {
+        searchText = ""
+        resetSubmittedSearch()
+        isSearchFieldFocused = true
+    }
+
+    private func resetSubmittedSearch() {
+        let hadSubmittedSearch = hasSubmittedSearch || !submittedSearchText.isEmpty
+        hasSubmittedSearch = false
+        submittedSearchText = ""
+        catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+
+        if hadSubmittedSearch {
+            searchSubmissionID += 1
+        }
+    }
+
+    private func selectCatalogCategoryForAvailableResults() {
+        guard searchScope == .appleMusic, hasSubmittedSearch else { return }
+        guard store.catalogSearchResults.count(for: catalogSearchCategory) == 0 else { return }
+        guard let firstCategoryWithResults = LocalServiceSearchPresentation.catalogCategoryOrder.first(
+            where: { store.catalogSearchResults.count(for: $0) > 0 }
+        ) else {
+            return
+        }
+
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            catalogSearchCategory = firstCategoryWithResults
         }
     }
 
@@ -107,25 +212,119 @@ struct LocalLibraryView: View {
     }
 
     private var content: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
-                if let errorMessage = store.errorMessage {
-                    statusBanner(errorMessage)
-                }
+        VStack(spacing: 0) {
+            localSearchControls
 
-                if isSearchingLibrary {
-                    searchResultsContent
-                } else {
-                    serviceHomeContent
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    if let errorMessage = store.errorMessage {
+                        statusBanner(errorMessage)
+                    }
+
+                    if isSearchingLibrary {
+                        searchResultsContent
+                    } else {
+                        serviceHomeContent
+                    }
                 }
+                .padding(.vertical, 12)
             }
-            .padding(.vertical, 12)
+            .scrollDismissesKeyboard(.interactively)
         }
-        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var localSearchControls: some View {
+        VStack(spacing: 10) {
+            localSearchField
+
+            if shouldShowSearchScopeTabs {
+                searchScopePicker
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.top, 8)
+        .padding(.bottom, shouldShowSearchScopeTabs ? 10 : 6)
+        .animation(
+            .spring(response: 0.32, dampingFraction: 0.86),
+            value: shouldShowSearchScopeTabs
+        )
+    }
+
+    private var localSearchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            ZStack(alignment: .leading) {
+                submittedSearchFieldOverlay
+
+                TextField(
+                    "",
+                    text: $searchText,
+                    prompt: Text(LocalServiceSearchPresentation.prompt(for: searchScope))
+                )
+                .focused($isSearchFieldFocused)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onSubmit {
+                    submitSearch()
+                }
+                .opacity(shouldShowSubmittedSearchOverlay ? 0.01 : 1)
+            }
+            .font(.title3)
+            .frame(minHeight: 30)
+
+            if !searchText.isEmpty {
+                Button {
+                    clearSearch()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Search")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.white.opacity(isSearchFieldFocused ? 0.16 : 0.10), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(.white.opacity(isSearchFieldFocused ? 0.22 : 0.08), lineWidth: 1)
+        }
+        .contentShape(Capsule())
+        .onTapGesture {
+            isSearchFieldFocused = true
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var submittedSearchFieldOverlay: some View {
+        if shouldShowSubmittedSearchOverlay,
+           let display = LocalServiceSearchPresentation.submittedFieldDisplay(
+            for: submittedSearchText,
+            scope: searchScope
+           ) {
+            HStack(spacing: 0) {
+                Text(display.term)
+                    .foregroundStyle(.primary)
+                Text(display.scopeHint)
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder
     private var serviceHomeContent: some View {
+        librarySection
+
         let recentlyAdded = recentlyAddedCards
         if !recentlyAdded.isEmpty {
             horizontalSection(
@@ -142,8 +341,6 @@ struct LocalLibraryView: View {
         }
 
         recommendationsContent
-
-        librarySection
     }
 
     @ViewBuilder
@@ -154,7 +351,7 @@ struct LocalLibraryView: View {
                 horizontalSection(
                     title: recommendation.title ?? LocalServiceSectionKind.recommendations.title,
                     subtitle: recommendation.reason,
-                    systemImage: LocalServiceSectionKind.recommendations.systemImage,
+                    systemImage: nil,
                     items: cards
                 )
             }
@@ -162,7 +359,7 @@ struct LocalLibraryView: View {
     }
 
     private var librarySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             sectionHeader(kind: .library)
             libraryCategoryRows(showEmptyCategories: true)
         }
@@ -170,17 +367,122 @@ struct LocalLibraryView: View {
 
     private var searchResultsContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Search Results", systemImage: "magnifyingglass")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                if store.isSearching {
-                    ProgressView()
+            if !hasSubmittedSearch {
+                pendingSearchContent
+            } else {
+                switch searchScope {
+                case .library:
+                    searchResultsHeader
+                    librarySearchResultsContent
+                case .appleMusic:
+                    catalogSearchResultsContent
                 }
             }
-            .padding(.horizontal)
+        }
+    }
 
-            if store.displayedSnapshot.isEmpty {
+    private var searchResultsHeader: some View {
+        HStack {
+            Label("Search Results", systemImage: "magnifyingglass")
+                .font(.title3.weight(.semibold))
+            Spacer()
+            if store.isSearching {
+                ProgressView()
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var searchScopePicker: some View {
+        HStack(spacing: 0) {
+            ForEach(LocalServiceSearchScope.allCases) { scope in
+                Button {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+                        searchScope = scope
+                    }
+                } label: {
+                    Text(scope.title)
+                        .font(.headline.weight(searchScope == scope ? .semibold : .medium))
+                        .foregroundStyle(searchScope == scope ? .primary : .secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background {
+                            if searchScope == scope {
+                                Capsule()
+                                    .fill(.white.opacity(0.22))
+                                    .matchedGeometryEffect(
+                                        id: "local-service-search-scope",
+                                        in: searchScopeSelectionNamespace
+                                    )
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(.white.opacity(0.09), in: Capsule())
+        .padding(.horizontal)
+    }
+
+    private var pendingSearchContent: some View {
+        Button {
+            submitSearch()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+
+                Text(LocalServiceSearchPresentation.contextLabel(for: searchText, scope: searchScope))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.left")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var librarySearchResultsContent: some View {
+        if store.displayedSnapshot.isEmpty {
+            ContentUnavailableView(
+                "No Results",
+                systemImage: "magnifyingglass",
+                description: Text("Try a different search term.")
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
+        } else {
+            libraryCategoryRows(showEmptyCategories: false)
+        }
+    }
+
+    @ViewBuilder
+    private var catalogSearchResultsContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            catalogCategoryPicker
+
+            if store.isSearching {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .padding(.top, 40)
+            } else if store.catalogSearchResults.isEmpty {
                 ContentUnavailableView(
                     "No Results",
                     systemImage: "magnifyingglass",
@@ -189,8 +491,205 @@ struct LocalLibraryView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
             } else {
-                libraryCategoryRows(showEmptyCategories: false)
+                let items = store.catalogSearchResults.items(for: catalogSearchCategory)
+                if items.isEmpty {
+                    ContentUnavailableView(
+                        "No \(catalogSearchCategory.title)",
+                        systemImage: catalogSearchCategory.systemImage,
+                        description: Text("Try a different search term or category.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                } else {
+                    catalogSearchItemList(items)
+                }
             }
+        }
+    }
+
+    private var catalogCategoryPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(LocalServiceSearchPresentation.catalogCategoryOrder) { category in
+                    Button {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                            catalogSearchCategory = category
+                        }
+                    } label: {
+                        Text(category.title)
+                            .font(.subheadline.weight(catalogSearchCategory == category ? .semibold : .medium))
+                            .foregroundStyle(catalogSearchCategory == category ? .white : .primary)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 10)
+                            .background {
+                                if catalogSearchCategory == category {
+                                    Capsule()
+                                        .fill(Color.pink)
+                                        .matchedGeometryEffect(
+                                            id: "local-service-catalog-category",
+                                            in: catalogCategorySelectionNamespace
+                                        )
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+        }
+        .scrollClipDisabled()
+    }
+
+    @ViewBuilder
+    private func catalogSearchItemList(_ items: [AppleMusicCatalogSearchItem]) -> some View {
+        ForEach(items) { item in
+            catalogSearchRow(item)
+        }
+    }
+
+    @ViewBuilder
+    private func catalogSearchRow(_ item: AppleMusicCatalogSearchItem) -> some View {
+        let playable = LocalServiceAppleMusicPlayable.make(catalogItem: item)
+        let displayID = "catalog-\(item.sonosPlayableObjectID)"
+        let isLoading = store.isStartingPlayback && store.activePlaybackItemID == displayID
+
+        switch LocalServiceCatalogSearchInteraction.primaryAction(for: item.type) {
+        case .navigate:
+            NavigationLink {
+                LocalMusicCatalogSearchDetailView(
+                    item: item,
+                    store: store,
+                    manager: manager,
+                    searchManager: searchManager)
+            } label: {
+                catalogSearchRowContent(item, accessory: .chevron)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: playable,
+                    displayID: displayID,
+                    kind: catalogResourceKind(for: item.type),
+                    fallbackKind: catalogPlayableKind(for: item.type),
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.artist,
+                    fallbackAlbum: item.album
+                )
+            }
+        case .play:
+            Button {
+                Task {
+                    await store.playOnSonos(
+                        playable: playable,
+                        displayID: displayID,
+                        fallbackKind: catalogPlayableKind(for: item.type),
+                        fallbackTitle: item.title,
+                        fallbackArtist: item.artist,
+                        fallbackAlbum: item.album,
+                        manager: manager,
+                        searchManager: searchManager)
+                }
+            } label: {
+                catalogSearchRowContent(item, accessory: isLoading ? .progress : .play)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isStartingPlayback)
+            .contextMenu {
+                localResourceContextMenu(
+                    playable: playable,
+                    displayID: displayID,
+                    kind: catalogResourceKind(for: item.type),
+                    fallbackKind: catalogPlayableKind(for: item.type),
+                    fallbackTitle: item.title,
+                    fallbackArtist: item.artist,
+                    fallbackAlbum: item.album
+                )
+            }
+        }
+    }
+
+    private func catalogSearchRowContent(
+        _ item: AppleMusicCatalogSearchItem,
+        accessory: LocalServiceRowAccessory
+    ) -> some View {
+        rowContent(
+            artwork: nil,
+            artworkURL: item.artworkURLString.flatMap(URL.init(string:)),
+            title: item.title,
+            subtitle: catalogSubtitle(for: item),
+            detail: catalogDetail(for: item),
+            fallbackSystemImage: catalogFallbackSystemImage(for: item.type),
+            accessory: accessory,
+            artworkStyle: item.type == .artist ? .artistAvatar : .square
+        )
+    }
+
+    private func catalogResourceKind(for type: AppleMusicCatalogItemType) -> MusicResourceKind {
+        switch type {
+        case .song:
+            return .song
+        case .album:
+            return .album
+        case .artist:
+            return .artist
+        case .playlist:
+            return .playlist
+        }
+    }
+
+    private func catalogPlayableKind(for type: AppleMusicCatalogItemType) -> LocalServiceAppleMusicPlayable.Kind {
+        switch type {
+        case .song:
+            return .song
+        case .album:
+            return .album
+        case .artist:
+            return .artist
+        case .playlist:
+            return .playlist
+        }
+    }
+
+    private func catalogFallbackSystemImage(for type: AppleMusicCatalogItemType) -> String {
+        switch type {
+        case .song:
+            return "music.note"
+        case .album:
+            return "square.stack"
+        case .artist:
+            return "music.mic"
+        case .playlist:
+            return "music.note.list"
+        }
+    }
+
+    private func catalogSubtitle(for item: AppleMusicCatalogSearchItem) -> String {
+        if !item.artist.isEmpty {
+            return item.artist
+        }
+
+        switch item.type {
+        case .song:
+            return item.album.isEmpty ? "Song" : item.album
+        case .album:
+            return "Album"
+        case .artist:
+            return "Artist"
+        case .playlist:
+            return "Playlist"
+        }
+    }
+
+    private func catalogDetail(for item: AppleMusicCatalogSearchItem) -> String? {
+        switch item.type {
+        case .song:
+            return item.album.isEmpty ? nil : item.album
+        case .album:
+            return "Album"
+        case .artist:
+            return nil
+        case .playlist:
+            return "Playlist"
         }
     }
 
@@ -205,7 +704,7 @@ struct LocalLibraryView: View {
                 if category != visibleLibraryCategories(showEmptyCategories: showEmptyCategories).last {
                     Divider()
                         .background(.white.opacity(0.16))
-                        .padding(.leading, 68)
+                        .padding(.leading, 52)
                 }
             }
         }
@@ -219,28 +718,28 @@ struct LocalLibraryView: View {
     }
 
     private func libraryCategoryRow(_ category: LocalLibraryCategory) -> some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Image(systemName: category.systemImage)
-                .font(.title2.weight(.semibold))
+                .font(.headline.weight(.semibold))
                 .foregroundStyle(.pink)
-                .frame(width: 36, height: 52)
+                .frame(width: 28, height: 38)
 
             Text(category.title)
-                .font(.title3)
+                .font(.headline)
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
             Text("\(store.summary.count(for: category))")
-                .font(.subheadline.monospacedDigit())
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
 
             Image(systemName: "chevron.right")
-                .font(.callout.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 8)
+        .padding(.vertical, 5)
     }
 
     private var recentlyAddedCards: [LocalServiceCardItem] {
@@ -288,7 +787,7 @@ struct LocalLibraryView: View {
         horizontalSection(
             title: kind.title,
             subtitle: nil,
-            systemImage: kind.systemImage,
+            systemImage: kind.headerSystemImage,
             items: items
         )
     }
@@ -296,7 +795,7 @@ struct LocalLibraryView: View {
     private func horizontalSection(
         title: String,
         subtitle: String?,
-        systemImage: String,
+        systemImage: String?,
         items: [LocalServiceCardItem]
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -314,13 +813,18 @@ struct LocalLibraryView: View {
     }
 
     private func sectionHeader(kind: LocalServiceSectionKind) -> some View {
-        sectionHeader(title: kind.title, subtitle: nil, systemImage: kind.systemImage)
+        sectionHeader(title: kind.title, subtitle: nil, systemImage: kind.headerSystemImage)
     }
 
-    private func sectionHeader(title: String, subtitle: String?, systemImage: String) -> some View {
+    private func sectionHeader(title: String, subtitle: String?, systemImage: String?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Label(title, systemImage: systemImage)
-                .font(.title3.weight(.semibold))
+            if let systemImage {
+                Label(title, systemImage: systemImage)
+                    .font(.title3.weight(.semibold))
+            } else {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+            }
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.caption)
@@ -329,6 +833,7 @@ struct LocalLibraryView: View {
             }
         }
         .padding(.horizontal)
+        .padding(.leading, 8)
     }
 
     private func localResource(

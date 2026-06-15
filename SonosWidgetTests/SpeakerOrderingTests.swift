@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import SonosWidget
 
 final class SpeakerOrderingTests: XCTestCase {
@@ -114,6 +115,51 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(manager.groupStatuses[1].volume, 4)
     }
 
+    func testSpeakerSelectionArtworkRestoreUsesMatchingGroupImage() {
+        let image = makeImage(color: .systemYellow)
+        let track = TrackInfo(
+            title: "Details In the Fabric",
+            artist: "Jason Mraz",
+            album: "We Sing. We Dance. We Steal Things.",
+            albumArtURL: "https://example.com/details.jpg"
+        )
+
+        let restored = SonosManager.cachedArtworkForSpeakerSelection(
+            groupID: "home-theater",
+            trackInfo: track,
+            groupImages: ["home-theater": image],
+            groupLastArtURL: ["home-theater": "https://example.com/details.jpg"],
+            imageForURL: { _ in nil }
+        )
+
+        XCTAssertEqual(restored?.urlString, "https://example.com/details.jpg")
+        XCTAssertTrue(restored?.image === image)
+    }
+
+    func testSpeakerSelectionArtworkRestoreFallsBackToURLCacheWhenGroupImageIsStale() {
+        let staleImage = makeImage(color: .systemGray)
+        let cachedImage = makeImage(color: .systemGreen)
+        let track = TrackInfo(
+            title: "別殺我",
+            artist: "Crowd Lu",
+            album: "一百種生活",
+            albumArtURL: "https://example.com/current.jpg"
+        )
+
+        let restored = SonosManager.cachedArtworkForSpeakerSelection(
+            groupID: "playroom",
+            trackInfo: track,
+            groupImages: ["playroom": staleImage],
+            groupLastArtURL: ["playroom": "https://example.com/old.jpg"],
+            imageForURL: { urlString in
+                urlString == "https://example.com/current.jpg" ? cachedImage : nil
+            }
+        )
+
+        XCTAssertEqual(restored?.urlString, "https://example.com/current.jpg")
+        XCTAssertTrue(restored?.image === cachedImage)
+    }
+
     private func makePlayer(id: String, name: String, groupId: String? = nil) -> SonosPlayer {
         SonosPlayer(
             id: id,
@@ -142,5 +188,13 @@ final class SpeakerOrderingTests: XCTestCase {
             transportState: transportState,
             volume: volume
         )
+    }
+
+    private func makeImage(color: UIColor) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 12))
+        return renderer.image { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 12))
+        }
     }
 }

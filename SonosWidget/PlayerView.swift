@@ -57,12 +57,16 @@ struct PlayerView: View {
                     .aspectRatio(contentMode: .fill)
                     .blur(radius: 80)
                     .scaleEffect(1.5)
-                    .id(manager.trackInfo?.albumArtURL)
+                    .id(albumArtTransitionID)
                     .transition(.opacity)
                 Color.black.opacity(0.6)
             }
         }
-        .animation(.easeInOut(duration: 0.8), value: manager.trackInfo?.albumArtURL)
+        .animation(.easeInOut(duration: 0.8), value: albumArtTransitionID)
+    }
+
+    private var albumArtTransitionID: String {
+        manager.albumArtTransitionID()
     }
 
     // MARK: - Speakers Home View
@@ -1147,6 +1151,7 @@ struct NowPlayingOverlay: View {
     @State private var dragDownOffset: CGFloat = 0
     @State private var nowPlayingInfo: SonosCloudAPI.NowPlayingResponse?
     @State private var lastFetchedTrackURI: String?
+    @State private var isOpeningAppleMusicLink = false
     /// Handle on the in-flight NowPlaying fetch so we can cancel it when
     /// the track changes again before the previous lookup resolves. Without
     /// this, a slow fetch for track A could land after track B's fetch and
@@ -1155,6 +1160,11 @@ struct NowPlayingOverlay: View {
     /// previous song, sending them to the wrong detail page.
     @State private var nowPlayingFetchTask: Task<Void, Never>?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    private let appleMusicArtworkTapThreshold = AppleMusicArtworkTapPolicy.defaultThreshold
+
+    private var albumArtTransitionID: String {
+        manager.albumArtTransitionID()
+    }
 
     var body: some View {
         NavigationStack {
@@ -1451,6 +1461,7 @@ struct NowPlayingOverlay: View {
         // boundary is automatically continuous in colour — no need for
         // a hand-tuned gradient anchor.
         let dominant = manager.albumArtDominantColor ?? Color(white: 0.10)
+        let transitionID = albumArtTransitionID
         GeometryReader { geo in
             let coverHeight = min(geo.size.width, geo.size.height * 0.55)
             let coverBottomY = geo.safeAreaInsets.top + coverHeight
@@ -1472,7 +1483,7 @@ struct NowPlayingOverlay: View {
                             .clipped()
                             .blur(radius: 60)
                             .scaleEffect(x: 1, y: -1)
-                            .id(manager.trackInfo?.albumArtURL)
+                            .id(transitionID)
                             .transition(.opacity)
                     }
                 }
@@ -1493,7 +1504,7 @@ struct NowPlayingOverlay: View {
             }
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.8), value: manager.trackInfo?.albumArtURL)
+        .animation(.easeInOut(duration: 0.8), value: transitionID)
         .animation(.easeInOut(duration: 0.8), value: manager.albumArtDominantColor)
     }
 
@@ -1504,13 +1515,20 @@ struct NowPlayingOverlay: View {
         let isTV = manager.trackInfo?.source == .tv
         let tvFormat = manager.trackInfo?.tvFormat
         let tvHasSignal = tvFormat?.hasSignal ?? false
+        let transitionID = manager.albumArtTransitionID(
+            hasDisplayedArtwork: !isTV && manager.albumArtImage != nil
+        )
+        let placeholderIconName = AlbumArtPlaceholderIcon.systemName(
+            source: manager.trackInfo?.source,
+            hasDisplayedArtwork: !isTV && manager.albumArtImage != nil
+        )
         // Atmos streams glow blue (matches the BadgeDolbyAtmos accent
         // family); everything else falls back to a neutral white sheen so
         // the TV slot doesn't blend into the dark background.
         let tvGlowColor: Color = (tvFormat?.isAtmos == true)
             ? Color(red: 0.36, green: 0.55, blue: 1.0)
             : .white
-        return ZStack {
+        let content = ZStack {
             // Edge-to-edge placeholder; no rounding now that the cover
             // pins to the screen edges. The TV-mode breathing halo and
             // glyph render on top of this backdrop unchanged.
@@ -1544,9 +1562,11 @@ struct NowPlayingOverlay: View {
                     // For TV input there's no album art — swap the music-note
                     // placeholder for a TV glyph so the now-playing screen
                     // immediately reads as "watching" instead of "buffering".
-                    Image(systemName: isTV ? "tv" : "music.note")
-                        .font(.system(size: isTV ? 96 : 60, weight: isTV ? .light : .regular))
-                        .foregroundStyle(.tertiary)
+                    if let placeholderIconName {
+                        Image(systemName: placeholderIconName)
+                            .font(.system(size: isTV ? 96 : 60, weight: isTV ? .light : .regular))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
 
             if !isTV, let image = manager.albumArtImage {
@@ -1561,7 +1581,7 @@ struct NowPlayingOverlay: View {
                             .padding(.bottom, 14)
                     }
                 }
-                .id(manager.trackInfo?.albumArtURL)
+                .id(transitionID)
                 .transition(.opacity)
             }
         }
@@ -1573,7 +1593,57 @@ struct NowPlayingOverlay: View {
                     .padding(10)
             }
         }
-        .animation(.easeInOut(duration: 0.6), value: manager.trackInfo?.albumArtURL)
+        .animation(.easeInOut(duration: 0.6), value: transitionID)
+
+        if currentAppleMusicTrackResource != nil {
+            content
+                .simultaneousGesture(appleMusicArtworkTapGesture)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Open current song in Apple Music")
+        } else {
+            content
+        }
+    }
+
+    private var appleMusicArtworkTapGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onEnded { value in
+                guard AppleMusicArtworkTapPolicy.shouldOpen(
+                    translation: value.translation,
+                    threshold: appleMusicArtworkTapThreshold
+                ) else {
+                    return
+                }
+                openCurrentAppleMusicTrack()
+            }
+    }
+
+    private func openCurrentAppleMusicTrack() {
+        guard !isOpeningAppleMusicLink,
+              let resource = currentAppleMusicTrackResource else { return }
+        isOpeningAppleMusicLink = true
+
+        Task { @MainActor in
+            defer { isOpeningAppleMusicLink = false }
+            do {
+                guard let url = try await AppleMusicExternalLinkResolver.appleMusicURL(for: resource) else {
+                    SonosLog.debug(
+                        .nowPlaying,
+                        "Apple Music current artwork lookup produced no URL id='\(resource.id)'"
+                    )
+                    return
+                }
+                AppleMusicExternalLinkOpener.open(
+                    url,
+                    context: "now-playing-artwork id='\(resource.id)'"
+                )
+            } catch {
+                SonosLog.error(
+                    .nowPlaying,
+                    "Apple Music current artwork lookup failed id='\(resource.id)' error=\(error)"
+                )
+            }
+        }
     }
 
     /// Pill that mirrors `SourceBadgeView` proportions — kept here rather
@@ -1652,6 +1722,16 @@ struct NowPlayingOverlay: View {
     }
 
     // MARK: - Now Playing Navigation
+
+    private var currentAppleMusicTrackResource: AppleMusicFavoriteResource? {
+        guard manager.trackInfo?.source == .appleMusic else { return nil }
+        let nowPlayingObjectID = nowPlayingInfo?.item?.resource?.id?.objectId
+            ?? nowPlayingInfo?.item?.id
+        return AppleMusicExternalLinkResolver.currentTrackResource(
+            trackURI: manager.trackInfo?.trackURI,
+            nowPlayingObjectID: nowPlayingObjectID
+        )
+    }
 
     private var artistBrowseItem: BrowseItem? {
         if let artist = nowPlayingInfo?.item?.artists?.first,

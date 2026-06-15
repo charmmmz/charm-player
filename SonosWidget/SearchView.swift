@@ -1195,6 +1195,8 @@ struct SearchView: View {
                     Task { await searchManager.addToQueue(item: item, manager: manager) }
                 case .startStation:
                     startStationForItem(item)
+                case .favorite:
+                    handleFavoriteAction(item)
                 }
             }
 
@@ -1678,6 +1680,8 @@ struct FavoriteCategoryDetailView: View {
                         await searchManager.startStation(item: item, manager: manager)
                         withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
                     }
+                case .favorite:
+                    handleFavoriteAction(item)
                 }
             }
 

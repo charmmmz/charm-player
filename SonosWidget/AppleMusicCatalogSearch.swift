@@ -24,6 +24,26 @@ enum AppleMusicCatalogItemType: Equatable, Sendable {
     }
 }
 
+enum AppleMusicExternalResourceKind: Equatable, Sendable {
+    case song
+    case album
+    case artist
+    case playlist
+
+    init(_ favoriteResourceType: AppleMusicFavoriteResourceType) {
+        switch favoriteResourceType {
+        case .songs:
+            self = .song
+        case .albums:
+            self = .album
+        case .artists:
+            self = .artist
+        case .playlists:
+            self = .playlist
+        }
+    }
+}
+
 struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     let id: String
     let type: AppleMusicCatalogItemType
@@ -333,6 +353,7 @@ enum AppleMusicCatalogSearchError: LocalizedError {
 
 struct AppleMusicCatalogSearchClient {
     static let shared = AppleMusicCatalogSearchClient()
+    static let maximumSearchLimit = 25
 
     func search(term: String, limit: Int = 8) async throws -> [AppleMusicCatalogSearchItem] {
         try await ensureAuthorized()
@@ -341,7 +362,7 @@ struct AppleMusicCatalogSearchClient {
             term: term,
             types: [Song.self, Album.self, Artist.self, Playlist.self]
         )
-        request.limit = limit
+        request.limit = Self.effectiveSearchLimit(requested: limit)
         let response = try await request.response()
 
         var items: [AppleMusicCatalogSearchItem] = []
@@ -350,6 +371,55 @@ struct AppleMusicCatalogSearchClient {
         items.append(contentsOf: response.artists.map(Self.item(from:)))
         items.append(contentsOf: response.playlists.map(Self.item(from:)))
         return items
+    }
+
+    static func effectiveSearchLimit(requested limit: Int) -> Int {
+        min(max(limit, 1), maximumSearchLimit)
+    }
+
+    func album(catalogID: String) async throws -> Album {
+        try await ensureAuthorized()
+
+        var request = MusicCatalogResourceRequest<Album>(
+            matching: \.id,
+            equalTo: MusicItemID(catalogID)
+        )
+        request.limit = 1
+        let response = try await request.response()
+        guard let album = response.items.first else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await album.with(.tracks)
+    }
+
+    func artist(catalogID: String) async throws -> Artist {
+        try await ensureAuthorized()
+
+        var request = MusicCatalogResourceRequest<Artist>(
+            matching: \.id,
+            equalTo: MusicItemID(catalogID)
+        )
+        request.limit = 1
+        let response = try await request.response()
+        guard let artist = response.items.first else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await artist.with(.fullAlbums, .singles, .latestRelease, .topSongs)
+    }
+
+    func playlist(catalogID: String) async throws -> Playlist {
+        try await ensureAuthorized()
+
+        var request = MusicCatalogResourceRequest<Playlist>(
+            matching: \.id,
+            equalTo: MusicItemID(catalogID)
+        )
+        request.limit = 1
+        let response = try await request.response()
+        guard let playlist = response.items.first else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await playlist.with(.tracks)
     }
 
     func playlistArtworkURLString(catalogID: String) async throws -> String? {
@@ -395,6 +465,30 @@ struct AppleMusicCatalogSearchClient {
             request.limit = 1
             let response = try await request.response()
             return response.items.first?.url?.absoluteString
+        }
+    }
+
+    func appleMusicURLString(
+        kind: AppleMusicExternalResourceKind,
+        catalogID: String
+    ) async throws -> String? {
+        try await ensureAuthorized()
+
+        switch kind {
+        case .song:
+            var request = MusicCatalogResourceRequest<Song>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first?.url?.absoluteString
+        case .album:
+            return try await appleMusicURLString(kind: LocalMusicAppleMusicURL.Kind.album, catalogID: catalogID)
+        case .artist:
+            return try await appleMusicURLString(kind: LocalMusicAppleMusicURL.Kind.artist, catalogID: catalogID)
+        case .playlist:
+            return try await appleMusicURLString(kind: LocalMusicAppleMusicURL.Kind.playlist, catalogID: catalogID)
         }
     }
 

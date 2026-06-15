@@ -8,6 +8,11 @@ extension UIImage {
         return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
     }
 
+    func dominantUIColor() -> UIColor? {
+        guard let (r, g, b) = extractVibrantRGB() else { return nil }
+        return UIColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: 1)
+    }
+
     func dominantColorHex() -> String? {
         guard let (r, g, b) = extractVibrantRGB() else { return nil }
         return String(format: "#%02X%02X%02X",
