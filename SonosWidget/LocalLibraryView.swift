@@ -11,9 +11,14 @@ struct LocalLibraryView: View {
     @State private var searchSubmissionID = 0
     @State private var hasSubmittedSearch = false
     @State private var catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+    @State private var librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+    @State private var categoryDetailSearchText = ""
+    @State private var categorySortSelections: [LocalLibraryCategory: LocalLibraryCategorySortOption] = [:]
     @FocusState private var isSearchFieldFocused: Bool
+    @FocusState private var isCategorySearchFieldFocused: Bool
     @Namespace private var searchScopeSelectionNamespace
     @Namespace private var catalogCategorySelectionNamespace
+    @Namespace private var librarySearchCategorySelectionNamespace
 
     private var isSearchingLibrary: Bool {
         !trimmedSearchText.isEmpty
@@ -21,6 +26,10 @@ struct LocalLibraryView: View {
 
     private var trimmedSearchText: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedCategoryDetailSearchText: String {
+        categoryDetailSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var shouldShowSearchScopeTabs: Bool {
@@ -32,6 +41,10 @@ struct LocalLibraryView: View {
             && !isSearchFieldFocused
             && trimmedSearchText == submittedSearchText
             && !submittedSearchText.isEmpty
+    }
+
+    private var shouldUseExpandedSearchFieldStyle: Bool {
+        isSearchFieldFocused || isSearchingLibrary || hasSubmittedSearch
     }
 
     var body: some View {
@@ -47,8 +60,8 @@ struct LocalLibraryView: View {
                     content
                 }
             }
-            .navigationTitle("Local Service")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: LocalLibraryCategory.self) { category in
                 libraryCategoryDetail(category)
                     .background(backgroundLayer.ignoresSafeArea())
@@ -64,6 +77,9 @@ struct LocalLibraryView: View {
             }
             .onChange(of: store.catalogSearchResults.items) { _, _ in
                 selectCatalogCategoryForAvailableResults()
+            }
+            .onChange(of: store.summary) { _, _ in
+                selectLibrarySearchCategoryForAvailableResults()
             }
             .task {
                 await store.loadIfNeeded()
@@ -107,6 +123,8 @@ struct LocalLibraryView: View {
 
         if searchScope == .appleMusic {
             catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+        } else {
+            librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
         }
     }
 
@@ -125,6 +143,8 @@ struct LocalLibraryView: View {
     private func handleSearchScopeChanged() {
         if searchScope == .appleMusic {
             catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+        } else {
+            librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
         }
 
         if hasSubmittedSearch && !submittedSearchText.isEmpty {
@@ -143,6 +163,7 @@ struct LocalLibraryView: View {
         hasSubmittedSearch = false
         submittedSearchText = ""
         catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
+        librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
 
         if hadSubmittedSearch {
             searchSubmissionID += 1
@@ -163,6 +184,20 @@ struct LocalLibraryView: View {
         }
     }
 
+    private func selectLibrarySearchCategoryForAvailableResults() {
+        guard searchScope == .library, hasSubmittedSearch else { return }
+        guard store.displayedSnapshot.summary.count(for: librarySearchCategory) == 0 else { return }
+        guard let firstCategoryWithResults = LocalServiceSearchPresentation.catalogCategoryOrder.first(
+            where: { store.displayedSnapshot.summary.count(for: $0) > 0 }
+        ) else {
+            return
+        }
+
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            librarySearchCategory = firstCategoryWithResults
+        }
+    }
+
     private var isAccessDenied: Bool {
         store.authorizationStatus == .denied || store.authorizationStatus == .restricted
     }
@@ -179,10 +214,16 @@ struct LocalLibraryView: View {
     private var loadingContent: some View {
         VStack(spacing: 16) {
             ProgressView()
-            Text("Loading Library")
-                .font(.headline)
+                .progressViewStyle(.circular)
+                .controlSize(.large)
+                .tint(.white.opacity(0.72))
+
+            Text("Loading library")
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 96)
     }
 
     private var deniedContent: some View {
@@ -212,25 +253,23 @@ struct LocalLibraryView: View {
     }
 
     private var content: some View {
-        VStack(spacing: 0) {
-            localSearchControls
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                localSearchControls
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    if let errorMessage = store.errorMessage {
-                        statusBanner(errorMessage)
-                    }
-
-                    if isSearchingLibrary {
-                        searchResultsContent
-                    } else {
-                        serviceHomeContent
-                    }
+                if let errorMessage = store.errorMessage {
+                    statusBanner(errorMessage)
                 }
-                .padding(.vertical, 12)
+
+                if isSearchingLibrary {
+                    searchResultsContent
+                } else {
+                    serviceHomeContent
+                }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .padding(.vertical, 12)
         }
+        .scrollDismissesKeyboard(.immediately)
     }
 
     private var localSearchControls: some View {
@@ -251,11 +290,13 @@ struct LocalLibraryView: View {
     }
 
     private var localSearchField: some View {
-        HStack(spacing: 10) {
+        let isExpandedStyle = shouldUseExpandedSearchFieldStyle
+
+        return HStack(spacing: isExpandedStyle ? 10 : 8) {
             Image(systemName: "magnifyingglass")
-                .font(.title3.weight(.semibold))
+                .font(isExpandedStyle ? .title3.weight(.semibold) : .subheadline)
                 .foregroundStyle(.secondary)
-                .frame(width: 24)
+                .frame(width: isExpandedStyle ? 24 : 20)
 
             ZStack(alignment: .leading) {
                 submittedSearchFieldOverlay
@@ -274,29 +315,43 @@ struct LocalLibraryView: View {
                 }
                 .opacity(shouldShowSubmittedSearchOverlay ? 0.01 : 1)
             }
-            .font(.title3)
-            .frame(minHeight: 30)
+            .font(isExpandedStyle ? .title3 : .subheadline)
+            .frame(minHeight: isExpandedStyle ? 30 : 22)
 
             if !searchText.isEmpty {
                 Button {
                     clearSearch()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3.weight(.semibold))
+                        .font(isExpandedStyle ? .title3.weight(.semibold) : .subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear Search")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.white.opacity(isSearchFieldFocused ? 0.16 : 0.10), in: Capsule())
+        .padding(.horizontal, isExpandedStyle ? 16 : 12)
+        .padding(.vertical, isExpandedStyle ? 12 : 10)
+        .background(
+            .white.opacity(isSearchFieldFocused ? 0.16 : 0.10),
+            in: RoundedRectangle(
+                cornerRadius: isExpandedStyle ? 999 : 12,
+                style: .continuous
+            )
+        )
         .overlay {
-            Capsule()
+            RoundedRectangle(
+                cornerRadius: isExpandedStyle ? 999 : 12,
+                style: .continuous
+            )
                 .stroke(.white.opacity(isSearchFieldFocused ? 0.22 : 0.08), lineWidth: 1)
         }
-        .contentShape(Capsule())
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: isExpandedStyle ? 999 : 12,
+                style: .continuous
+            )
+        )
         .onTapGesture {
             isSearchFieldFocused = true
         }
@@ -367,9 +422,7 @@ struct LocalLibraryView: View {
 
     private var searchResultsContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if !hasSubmittedSearch {
-                pendingSearchContent
-            } else {
+            if hasSubmittedSearch {
                 switch searchScope {
                 case .library:
                     searchResultsHeader
@@ -425,36 +478,6 @@ struct LocalLibraryView: View {
         .padding(.horizontal)
     }
 
-    private var pendingSearchContent: some View {
-        Button {
-            submitSearch()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-
-                Text(LocalServiceSearchPresentation.contextLabel(for: searchText, scope: searchScope))
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "arrow.up.left")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal)
-    }
-
     @ViewBuilder
     private var librarySearchResultsContent: some View {
         if store.displayedSnapshot.isEmpty {
@@ -466,8 +489,22 @@ struct LocalLibraryView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
         } else {
-            libraryCategoryRows(showEmptyCategories: false)
+            VStack(alignment: .leading, spacing: 14) {
+                librarySearchCategoryPicker
+                librarySearchResultList(librarySearchCategory)
+            }
         }
+    }
+
+    private var librarySearchCategoryPicker: some View {
+        categoryPicker(
+            selection: Binding(
+                get: { librarySearchCategory },
+                set: { librarySearchCategory = $0 }
+            ),
+            namespace: librarySearchCategorySelectionNamespace,
+            matchedGeometryID: "local-service-library-search-category"
+        )
     }
 
     @ViewBuilder
@@ -508,26 +545,41 @@ struct LocalLibraryView: View {
     }
 
     private var catalogCategoryPicker: some View {
+        categoryPicker(
+            selection: Binding(
+                get: { catalogSearchCategory },
+                set: { catalogSearchCategory = $0 }
+            ),
+            namespace: catalogCategorySelectionNamespace,
+            matchedGeometryID: "local-service-catalog-category"
+        )
+    }
+
+    private func categoryPicker(
+        selection: Binding<LocalLibraryCategory>,
+        namespace: Namespace.ID,
+        matchedGeometryID: String
+    ) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(LocalServiceSearchPresentation.catalogCategoryOrder) { category in
                     Button {
                         withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                            catalogSearchCategory = category
+                            selection.wrappedValue = category
                         }
                     } label: {
                         Text(category.title)
-                            .font(.subheadline.weight(catalogSearchCategory == category ? .semibold : .medium))
-                            .foregroundStyle(catalogSearchCategory == category ? .white : .primary)
+                            .font(.subheadline.weight(selection.wrappedValue == category ? .semibold : .medium))
+                            .foregroundStyle(selection.wrappedValue == category ? .white : .primary)
                             .padding(.horizontal, 18)
                             .padding(.vertical, 10)
                             .background {
-                                if catalogSearchCategory == category {
+                                if selection.wrappedValue == category {
                                     Capsule()
                                         .fill(Color.pink)
                                         .matchedGeometryEffect(
-                                            id: "local-service-catalog-category",
-                                            in: catalogCategorySelectionNamespace
+                                            id: matchedGeometryID,
+                                            in: namespace
                                         )
                                 }
                             }
@@ -538,6 +590,20 @@ struct LocalLibraryView: View {
             .padding(.horizontal)
         }
         .scrollClipDisabled()
+    }
+
+    @ViewBuilder
+    private func librarySearchResultList(_ category: LocalLibraryCategory) -> some View {
+        switch category {
+        case .songs:
+            songList(store.displayedSnapshot.songs)
+        case .albums:
+            albumList(store.displayedSnapshot.albums)
+        case .artists:
+            artistList(store.displayedSnapshot.artists)
+        case .playlists:
+            playlistList(store.displayedSnapshot.playlists)
+        }
     }
 
     @ViewBuilder
@@ -612,12 +678,13 @@ struct LocalLibraryView: View {
         _ item: AppleMusicCatalogSearchItem,
         accessory: LocalServiceRowAccessory
     ) -> some View {
-        rowContent(
+        let rowText = LocalServiceSearchPresentation.catalogRowText(for: item)
+        return rowContent(
             artwork: nil,
             artworkURL: item.artworkURLString.flatMap(URL.init(string:)),
             title: item.title,
-            subtitle: catalogSubtitle(for: item),
-            detail: catalogDetail(for: item),
+            subtitle: rowText.subtitle,
+            detail: rowText.detail,
             fallbackSystemImage: catalogFallbackSystemImage(for: item.type),
             accessory: accessory,
             artworkStyle: item.type == .artist ? .artistAvatar : .square
@@ -663,36 +730,6 @@ struct LocalLibraryView: View {
         }
     }
 
-    private func catalogSubtitle(for item: AppleMusicCatalogSearchItem) -> String {
-        if !item.artist.isEmpty {
-            return item.artist
-        }
-
-        switch item.type {
-        case .song:
-            return item.album.isEmpty ? "Song" : item.album
-        case .album:
-            return "Album"
-        case .artist:
-            return "Artist"
-        case .playlist:
-            return "Playlist"
-        }
-    }
-
-    private func catalogDetail(for item: AppleMusicCatalogSearchItem) -> String? {
-        switch item.type {
-        case .song:
-            return item.album.isEmpty ? nil : item.album
-        case .album:
-            return "Album"
-        case .artist:
-            return nil
-        case .playlist:
-            return "Playlist"
-        }
-    }
-
     private func libraryCategoryRows(showEmptyCategories: Bool) -> some View {
         VStack(spacing: 0) {
             ForEach(visibleLibraryCategories(showEmptyCategories: showEmptyCategories)) { category in
@@ -729,10 +766,6 @@ struct LocalLibraryView: View {
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
-
-            Text("\(store.summary.count(for: category))")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
 
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
@@ -1267,14 +1300,14 @@ struct LocalLibraryView: View {
             ZStack(alignment: .trailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        categoryDetailHeader(category)
+                        categoryDetailControls(category)
                         libraryCategoryDetailContent(category)
                     }
                     .padding(.top, 12)
                     .padding(.bottom, 40)
                     .padding(.trailing, category.showsAlphabetIndex ? 26 : 0)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .scrollDismissesKeyboard(.immediately)
 
                 if category.showsAlphabetIndex {
                     let titles = categoryIndexTitles(category)
@@ -1291,17 +1324,100 @@ struct LocalLibraryView: View {
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.large)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .onAppear {
+            prepareCategoryDetail(category)
+        }
     }
 
-    private func categoryDetailHeader(_ category: LocalLibraryCategory) -> some View {
-        HStack {
-            Label(category.title, systemImage: category.systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text("\(store.summary.count(for: category))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
+    private func prepareCategoryDetail(_ category: LocalLibraryCategory) {
+        categoryDetailSearchText = ""
+        if categorySortSelections[category] == nil {
+            categorySortSelections[category] = LocalLibraryCategorySortOption.defaultOption(for: category)
+        }
+    }
+
+    private func categorySortSelection(for category: LocalLibraryCategory) -> LocalLibraryCategorySortOption {
+        categorySortSelections[category] ?? LocalLibraryCategorySortOption.defaultOption(for: category)
+    }
+
+    private func setCategorySortSelection(
+        _ option: LocalLibraryCategorySortOption,
+        for category: LocalLibraryCategory
+    ) {
+        categorySortSelections[category] = option
+    }
+
+    private func categoryDetailControls(_ category: LocalLibraryCategory) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
+
+                    TextField(
+                        "",
+                        text: $categoryDetailSearchText,
+                        prompt: Text("Search \(category.title)")
+                    )
+                    .focused($isCategorySearchFieldFocused)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        isCategorySearchFieldFocused = false
+                    }
+
+                    if !categoryDetailSearchText.isEmpty {
+                        Button {
+                            categoryDetailSearchText = ""
+                            isCategorySearchFieldFocused = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear Category Search")
+                    }
+                }
+                .font(.body)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.white.opacity(isCategorySearchFieldFocused ? 0.16 : 0.10), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(.white.opacity(isCategorySearchFieldFocused ? 0.22 : 0.08), lineWidth: 1)
+                }
+
+                let options = LocalLibraryCategorySortOption.options(for: category)
+                if options.count > 1 {
+                    Menu {
+                        Picker(
+                            "Sort",
+                            selection: Binding(
+                                get: { categorySortSelection(for: category) },
+                                set: { setCategorySortSelection($0, for: category) }
+                            )
+                        ) {
+                            ForEach(options) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 42, height: 42)
+                            .background(.white.opacity(0.10), in: Circle())
+                            .overlay {
+                                Circle().stroke(.white.opacity(0.10), lineWidth: 1)
+                            }
+                    }
+                    .accessibilityLabel("Sort \(category.title)")
+                }
+            }
         }
         .padding(.horizontal)
     }
@@ -1310,13 +1426,130 @@ struct LocalLibraryView: View {
     private func libraryCategoryDetailContent(_ category: LocalLibraryCategory) -> some View {
         switch category {
         case .songs:
-            indexedSongList(store.displayedSnapshot.songs, category: category)
+            indexedSongList(displayedSongs(for: category), category: category)
         case .albums:
-            indexedAlbumList(store.displayedSnapshot.albums, category: category)
+            indexedAlbumList(displayedAlbums(for: category), category: category)
         case .artists:
-            indexedArtistList(store.displayedSnapshot.artists, category: category)
+            indexedArtistList(displayedArtists(for: category), category: category)
         case .playlists:
-            playlistList(store.displayedSnapshot.playlists)
+            playlistList(displayedPlaylists(for: category))
+        }
+    }
+
+    private func displayedSongs(for category: LocalLibraryCategory) -> [Song] {
+        let filtered = store.displayedSnapshot.songs.filter {
+            matchesCategorySearch([$0.title, $0.artistName, $0.albumTitle])
+        }
+
+        switch categorySortSelection(for: category) {
+        case .artist:
+            return filtered.sorted { lhs, rhs in
+                compareStrings(lhs.artistName, rhs.artistName)
+                    || (lhs.artistName.localizedCaseInsensitiveCompare(rhs.artistName) == .orderedSame
+                        && compareStrings(lhs.title, rhs.title))
+            }
+        case .album:
+            return filtered.sorted { lhs, rhs in
+                let lhsAlbum = lhs.albumTitle ?? ""
+                let rhsAlbum = rhs.albumTitle ?? ""
+                return compareStrings(lhsAlbum, rhsAlbum)
+                    || (lhsAlbum.localizedCaseInsensitiveCompare(rhsAlbum) == .orderedSame
+                        && compareStrings(lhs.title, rhs.title))
+            }
+        case .recentlyAdded:
+            return filtered.sorted { lhs, rhs in
+                compareDatesDescending(lhs.libraryAddedDate, rhs.libraryAddedDate, fallback: {
+                    compareStrings(lhs.title, rhs.title)
+                })
+            }
+        case .title, .curator:
+            return filtered.sorted { compareStrings($0.title, $1.title) }
+        }
+    }
+
+    private func displayedAlbums(for category: LocalLibraryCategory) -> [Album] {
+        let filtered = store.displayedSnapshot.albums.filter {
+            matchesCategorySearch([$0.title, $0.artistName])
+        }
+
+        switch categorySortSelection(for: category) {
+        case .artist:
+            return filtered.sorted { lhs, rhs in
+                compareStrings(lhs.artistName, rhs.artistName)
+                    || (lhs.artistName.localizedCaseInsensitiveCompare(rhs.artistName) == .orderedSame
+                        && compareStrings(lhs.title, rhs.title))
+            }
+        case .recentlyAdded:
+            return filtered.sorted { lhs, rhs in
+                compareDatesDescending(lhs.libraryAddedDate, rhs.libraryAddedDate, fallback: {
+                    compareStrings(lhs.title, rhs.title)
+                })
+            }
+        case .title, .album, .curator:
+            return filtered.sorted { compareStrings($0.title, $1.title) }
+        }
+    }
+
+    private func displayedArtists(for category: LocalLibraryCategory) -> [Artist] {
+        store.displayedSnapshot.artists
+            .filter { matchesCategorySearch([$0.name]) }
+            .sorted { compareStrings($0.name, $1.name) }
+    }
+
+    private func displayedPlaylists(for category: LocalLibraryCategory) -> [Playlist] {
+        let filtered = store.displayedSnapshot.playlists.filter {
+            matchesCategorySearch([$0.name, $0.curatorName, $0.shortDescription])
+        }
+
+        switch categorySortSelection(for: category) {
+        case .curator:
+            return filtered.sorted { lhs, rhs in
+                let lhsCurator = lhs.curatorName ?? ""
+                let rhsCurator = rhs.curatorName ?? ""
+                return compareStrings(lhsCurator, rhsCurator)
+                    || (lhsCurator.localizedCaseInsensitiveCompare(rhsCurator) == .orderedSame
+                        && compareStrings(lhs.name, rhs.name))
+            }
+        case .recentlyAdded:
+            return filtered.sorted { lhs, rhs in
+                compareDatesDescending(lhs.libraryAddedDate, rhs.libraryAddedDate, fallback: {
+                    compareStrings(lhs.name, rhs.name)
+                })
+            }
+        case .title, .artist, .album:
+            return filtered.sorted { compareStrings($0.name, $1.name) }
+        }
+    }
+
+    private func matchesCategorySearch(_ fields: [String?]) -> Bool {
+        let term = trimmedCategoryDetailSearchText
+        guard !term.isEmpty else { return true }
+        return fields.contains { field in
+            field?.localizedCaseInsensitiveContains(term) == true
+        }
+    }
+
+    private func compareStrings(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+    }
+
+    private func compareDatesDescending(
+        _ lhs: Date?,
+        _ rhs: Date?,
+        fallback: () -> Bool
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case let (left?, right?):
+            if left == right {
+                return fallback()
+            }
+            return left > right
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return fallback()
         }
     }
 
@@ -1372,11 +1605,11 @@ struct LocalLibraryView: View {
     private func categoryIndexTitles(_ category: LocalLibraryCategory) -> [String] {
         switch category {
         case .songs:
-            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.songs.map(\.title))
+            return LocalLibrarySectionIndex.indexTitles(for: displayedSongs(for: category).map(\.title))
         case .albums:
-            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.albums.map(\.title))
+            return LocalLibrarySectionIndex.indexTitles(for: displayedAlbums(for: category).map(\.title))
         case .artists:
-            return LocalLibrarySectionIndex.indexTitles(for: store.displayedSnapshot.artists.map(\.name))
+            return LocalLibrarySectionIndex.indexTitles(for: displayedArtists(for: category).map(\.name))
         case .playlists:
             return []
         }
@@ -1386,14 +1619,11 @@ struct LocalLibraryView: View {
         _ items: [Item],
         title: KeyPath<Item, String>
     ) -> [LocalLibraryIndexedSection<Item>] {
-        let sortedItems = items.sorted {
-            $0[keyPath: title].localizedCaseInsensitiveCompare($1[keyPath: title]) == .orderedAscending
-        }
-        let grouped = Dictionary(grouping: sortedItems) {
+        let grouped = Dictionary(grouping: items) {
             LocalLibrarySectionIndex.indexTitle(for: $0[keyPath: title])
         }
 
-        return LocalLibrarySectionIndex.indexTitles(for: sortedItems.map { $0[keyPath: title] })
+        return LocalLibrarySectionIndex.indexTitles(for: items.map { $0[keyPath: title] })
             .map { sectionTitle in
                 LocalLibraryIndexedSection(
                     title: sectionTitle,
@@ -1464,7 +1694,7 @@ struct LocalLibraryView: View {
                         artworkURL: store.catalogArtworkURL(for: album),
                         title: album.title,
                         subtitle: album.artistName,
-                        detail: "\(album.trackCount) tracks",
+                        detail: nil,
                         fallbackSystemImage: "square.stack",
                         accessory: .chevron
                     )
@@ -1503,7 +1733,7 @@ struct LocalLibraryView: View {
                             artwork: artist.artwork,
                             artworkURL: store.catalogArtworkURL(for: artist),
                             title: artist.name,
-                            subtitle: "Artist",
+                            subtitle: nil,
                             detail: nil,
                             fallbackSystemImage: "music.mic",
                             accessory: .chevron,
@@ -1527,7 +1757,7 @@ struct LocalLibraryView: View {
                         artwork: artist.artwork,
                         artworkURL: store.catalogArtworkURL(for: artist),
                         title: artist.name,
-                        subtitle: "Artist",
+                        subtitle: nil,
                         detail: nil,
                         fallbackSystemImage: "music.mic",
                         artworkStyle: .artistAvatar
@@ -1573,7 +1803,7 @@ struct LocalLibraryView: View {
                         artwork: playlist.artwork,
                         artworkURL: store.catalogArtworkURL(for: playlist),
                         title: playlist.name,
-                        subtitle: playlist.curatorName ?? "Playlist",
+                        subtitle: playlist.curatorName,
                         detail: playlist.shortDescription,
                         fallbackSystemImage: "music.note.list",
                         accessory: .chevron,
@@ -1609,7 +1839,7 @@ struct LocalLibraryView: View {
         artwork: Artwork?,
         artworkURL: URL? = nil,
         title: String,
-        subtitle: String,
+        subtitle: String?,
         detail: String?,
         fallbackSystemImage: String,
         artworkStyle: LocalLibraryArtworkStyle = .square,
@@ -1637,7 +1867,7 @@ struct LocalLibraryView: View {
         artwork: Artwork?,
         artworkURL: URL? = nil,
         title: String,
-        subtitle: String,
+        subtitle: String?,
         detail: String?,
         fallbackSystemImage: String,
         accessory: LocalServiceRowAccessory,
@@ -1645,10 +1875,10 @@ struct LocalLibraryView: View {
         artworkStyle: LocalLibraryArtworkStyle = .square
     ) -> some View {
         let resource = MusicResourcePresentation(
-            id: "\(title)|\(subtitle)|\(detail ?? "")",
+            id: "\(title)|\(subtitle ?? "")|\(detail ?? "")",
             kind: .unknown,
             title: title,
-            subtitle: subtitle,
+            subtitle: subtitle ?? "",
             detail: detail,
             fallbackSystemImage: fallbackSystemImage,
             accessory: accessory.musicResourceAccessory,
@@ -2124,19 +2354,20 @@ private struct LocalLibraryArtworkTile: View {
 
                 fallbackIcon
 
-                if let artwork {
+                switch LocalMusicArtworkSource.preferred(artwork: artwork, remoteURL: artworkURL) {
+                case .musicKit(let artwork):
                     LocalMusicArtworkView(
                         artwork: artwork,
                         diagnosticLabel: diagnosticLabel,
                         contentMode: artworkContentMode)
                         .frame(width: proxy.size.width, height: proxy.size.height)
-                }
-
-                if let artworkURL {
+                case .remote(let artworkURL):
                     LocalLibraryRemoteArtworkView(
                         url: artworkURL,
                         diagnosticLabel: diagnosticLabel,
                         artworkContentMode: artworkContentMode)
+                case .placeholder:
+                    EmptyView()
                 }
             }
         }

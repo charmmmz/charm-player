@@ -279,6 +279,58 @@ final class LocalServiceInteractionTests: XCTestCase {
         XCTAssertEqual(results.visibleCategories, [.playlists, .artists, .albums, .songs])
     }
 
+    func testCatalogSearchRowTextDoesNotRepeatSelectedCategoryTypes() {
+        let album = AppleMusicCatalogSearchItem(
+            id: "album-1",
+            type: .album,
+            title: "In Rainbows",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            artworkURLString: nil,
+            duration: nil)
+        let artist = AppleMusicCatalogSearchItem(
+            id: "artist-1",
+            type: .artist,
+            title: "Radiohead",
+            artist: "",
+            album: "",
+            artworkURLString: nil,
+            duration: nil)
+        let playlist = AppleMusicCatalogSearchItem(
+            id: "playlist-1",
+            type: .playlist,
+            title: "Imagine Dragons Essentials",
+            artist: "Apple Music Alternative",
+            album: "",
+            artworkURLString: nil,
+            duration: nil)
+        let song = AppleMusicCatalogSearchItem(
+            id: "song-1",
+            type: .song,
+            title: "15 Step",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            artworkURLString: nil,
+            duration: nil)
+
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.catalogRowText(for: album),
+            LocalServiceCatalogRowText(subtitle: "Radiohead", detail: nil)
+        )
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.catalogRowText(for: artist),
+            LocalServiceCatalogRowText(subtitle: nil, detail: nil)
+        )
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.catalogRowText(for: playlist),
+            LocalServiceCatalogRowText(subtitle: "Apple Music Alternative", detail: nil)
+        )
+        XCTAssertEqual(
+            LocalServiceSearchPresentation.catalogRowText(for: song),
+            LocalServiceCatalogRowText(subtitle: "Radiohead", detail: "In Rainbows")
+        )
+    }
+
     func testArtistAlbumSummariesUseFirstSongArtworkAndStableAlbumOrder() {
         let summaries = LocalMusicArtistAlbumSummaryBuilder.summaries(from: [
             LocalMusicArtistAlbumSummaryInput(

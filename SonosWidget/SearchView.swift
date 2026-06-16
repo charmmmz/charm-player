@@ -281,6 +281,7 @@ struct SearchView: View {
             }
             .padding(.vertical)
         }
+        .scrollDismissesKeyboard(.immediately)
     }
 
     // MARK: - Recently Played Section
@@ -769,6 +770,7 @@ struct SearchView: View {
                         groupedResultsForSelectedTab
                             .padding(.vertical, 12)
                     }
+                    .scrollDismissesKeyboard(.immediately)
                 }
             }
         }
@@ -1349,6 +1351,7 @@ struct FavoriteCategoryDetailView: View {
             }
             .padding(.top, 8)
         }
+        .scrollDismissesKeyboard(.immediately)
         .navigationTitle(category.rawValue)
         .navigationBarTitleDisplayMode(.large)
         .scrollContentBackground(.hidden)

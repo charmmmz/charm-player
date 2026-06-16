@@ -44,6 +44,51 @@ enum LocalLibraryCategory: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum LocalLibraryCategorySortOption: String, CaseIterable, Identifiable, Sendable {
+    case title
+    case artist
+    case album
+    case curator
+    case recentlyAdded
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .title:
+            return "Title"
+        case .artist:
+            return "Artist"
+        case .album:
+            return "Album"
+        case .curator:
+            return "Curator"
+        case .recentlyAdded:
+            return "Recently Added"
+        }
+    }
+
+    static func defaultOption(for category: LocalLibraryCategory) -> LocalLibraryCategorySortOption {
+        switch category {
+        case .songs, .albums, .artists, .playlists:
+            return .title
+        }
+    }
+
+    static func options(for category: LocalLibraryCategory) -> [LocalLibraryCategorySortOption] {
+        switch category {
+        case .songs:
+            return [.title, .artist, .album, .recentlyAdded]
+        case .albums:
+            return [.title, .artist, .recentlyAdded]
+        case .artists:
+            return [.title]
+        case .playlists:
+            return [.title, .curator, .recentlyAdded]
+        }
+    }
+}
+
 enum LocalServiceSearchScope: String, CaseIterable, Identifiable, Sendable {
     case library
     case appleMusic
@@ -63,6 +108,11 @@ enum LocalServiceSearchScope: String, CaseIterable, Identifiable, Sendable {
 struct LocalServiceSubmittedSearchFieldDisplay: Equatable, Sendable {
     let term: String
     let scopeHint: String
+}
+
+struct LocalServiceCatalogRowText: Equatable, Sendable {
+    let subtitle: String?
+    let detail: String?
 }
 
 enum LocalServiceSearchPresentation {
@@ -108,6 +158,36 @@ enum LocalServiceSearchPresentation {
         hasSubmittedSearch: Bool
     ) -> Bool {
         scope == .appleMusic && hasSubmittedSearch
+    }
+
+    static func catalogRowText(for item: AppleMusicCatalogSearchItem) -> LocalServiceCatalogRowText {
+        switch item.type {
+        case .song:
+            return LocalServiceCatalogRowText(
+                subtitle: nonEmpty(item.artist) ?? nonEmpty(item.album),
+                detail: nonEmpty(item.album)
+            )
+        case .album:
+            return LocalServiceCatalogRowText(
+                subtitle: nonEmpty(item.artist),
+                detail: nil
+            )
+        case .artist:
+            return LocalServiceCatalogRowText(
+                subtitle: nonEmpty(item.artist),
+                detail: nil
+            )
+        case .playlist:
+            return LocalServiceCatalogRowText(
+                subtitle: nonEmpty(item.artist),
+                detail: nil
+            )
+        }
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

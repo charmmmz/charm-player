@@ -10,7 +10,7 @@ struct MusicResourceCardLabel<ArtworkContent: View>: View {
     @ViewBuilder let artwork: () -> ArtworkContent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             ZStack {
                 artwork()
                     .frame(width: width, height: height)
@@ -30,7 +30,6 @@ struct MusicResourceCardLabel<ArtworkContent: View>: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
                 .lineLimit(2)
-                .frame(height: 34, alignment: .topLeading)
 
             Text(resource.subtitle)
                 .font(.caption2)
@@ -54,16 +53,18 @@ struct MusicResourceRowLabel<ArtworkContent: View>: View {
             artwork()
                 .frame(width: 56, height: 56)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(resource.title)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(resource.subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !resource.subtitle.isEmpty {
+                    Text(resource.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
 
                 if let detail = resource.detail, !detail.isEmpty {
                     Text(detail)
