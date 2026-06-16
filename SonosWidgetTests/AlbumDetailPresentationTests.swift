@@ -97,9 +97,92 @@ final class AlbumDetailPresentationTests: XCTestCase {
     func testAlbumPrimaryActionBarUsesAppleMusicSizedControls() {
         let metrics = AlbumPrimaryActionBarMetrics(width: 393)
 
-        XCTAssertEqual(metrics.circleDimension, 56)
-        XCTAssertEqual(metrics.playHeight, 54)
-        XCTAssertEqual(metrics.playWidth, 177)
-        XCTAssertEqual(metrics.spacing, 24)
+        XCTAssertEqual(metrics.circleDimension, 50)
+        XCTAssertEqual(metrics.playHeight, 48)
+        XCTAssertEqual(metrics.playWidth, 160)
+        XCTAssertEqual(metrics.spacing, 16)
+    }
+
+    func testAlbumPrimaryActionBarCentersControlGroupOnRegularWidths() {
+        let metrics = AlbumPrimaryActionBarMetrics(width: 393)
+
+        XCTAssertEqual(metrics.contentWidth, 292)
+        XCTAssertEqual(metrics.contentLeadingInset, 50.5)
+        XCTAssertGreaterThan(metrics.contentLeadingInset, metrics.horizontalPadding)
+    }
+
+    func testAlbumPrimaryActionBarKeepsMinimumSideInsetOnCompactWidths() {
+        let metrics = AlbumPrimaryActionBarMetrics(width: 260)
+
+        XCTAssertEqual(metrics.contentLeadingInset, metrics.horizontalPadding)
+    }
+
+    func testEditorialDescriptionPrefersStandardText() {
+        XCTAssertEqual(
+            EditorialDescriptionPolicy.text(
+                standard: "Full editorial copy",
+                short: "Short copy",
+                tagline: "Tagline"
+            ),
+            "Full editorial copy"
+        )
+    }
+
+    func testEditorialDescriptionFallsBackToShortThenTagline() {
+        XCTAssertEqual(
+            EditorialDescriptionPolicy.text(
+                standard: " ",
+                short: "Short copy",
+                tagline: "Tagline"
+            ),
+            "Short copy"
+        )
+
+        XCTAssertEqual(
+            EditorialDescriptionPolicy.text(
+                standard: nil,
+                short: "",
+                tagline: "Tagline"
+            ),
+            "Tagline"
+        )
+    }
+
+    func testExpandableDescriptionUsesAppleMusicMoreLabel() {
+        XCTAssertEqual(ExpandableDescriptionPolicy.moreLabel, "MORE")
+    }
+
+    func testExpandableDescriptionStripsSimpleItalicMarkupForPlainText() {
+        XCTAssertEqual(
+            ExpandableDescriptionTextFormatter.plainText(
+                from: "The 2023's <i>NEVER ENOUGH</i> and <em>Son of Spergy</em> era"
+            ),
+            "The 2023's NEVER ENOUGH and Son of Spergy era"
+        )
+    }
+
+    func testExpandableDescriptionSegmentsItalicMarkup() {
+        XCTAssertEqual(
+            ExpandableDescriptionTextFormatter.segments(
+                from: "A <i>NEVER</i> B <em>ENOUGH</em>"
+            ),
+            [
+                ExpandableDescriptionTextSegment(text: "A ", isItalic: false),
+                ExpandableDescriptionTextSegment(text: "NEVER", isItalic: true),
+                ExpandableDescriptionTextSegment(text: " B ", isItalic: false),
+                ExpandableDescriptionTextSegment(text: "ENOUGH", isItalic: true)
+            ]
+        )
+    }
+
+    func testArtistTopSongsPreviewShowsAtMostFiveSongs() {
+        XCTAssertEqual(LocalMusicArtistTopSongsPolicy.previewCount(totalCount: 3), 3)
+        XCTAssertEqual(LocalMusicArtistTopSongsPolicy.previewCount(totalCount: 5), 5)
+        XCTAssertEqual(LocalMusicArtistTopSongsPolicy.previewCount(totalCount: 12), 5)
+    }
+
+    func testArtistTopSongsOnlyShowsFullListLinkWhenThereAreMoreThanFiveSongs() {
+        XCTAssertFalse(LocalMusicArtistTopSongsPolicy.shouldShowFullListLink(totalCount: 5))
+        XCTAssertTrue(LocalMusicArtistTopSongsPolicy.shouldShowFullListLink(totalCount: 6))
     }
 }

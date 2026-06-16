@@ -129,33 +129,16 @@ struct FavoriteControlSheet: View {
                 Task { await loadAppleMusicState() }
             }
         case .loaded(let isFavorited):
-            if isFavorited {
-                FavoriteControlRow(
-                    iconName: "apple.logo",
-                    iconTint: .pink,
-                    title: "Apple Music Favorites",
-                    subtitle: "Favorited",
-                    isBusy: false,
-                    buttonTitle: nil,
-                    buttonRole: nil,
-                    accessory: {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    },
-                    action: {}
-                )
-            } else {
-                FavoriteControlRow(
-                    iconName: "apple.logo",
-                    iconTint: .pink,
-                    title: "Apple Music Favorites",
-                    subtitle: "Not favorited",
-                    isBusy: isChangingAppleMusic,
-                    buttonTitle: "Add",
-                    buttonRole: nil
-                ) {
-                    Task { await addAppleMusicFavorite() }
-                }
+            FavoriteControlRow(
+                iconName: "apple.logo",
+                iconTint: .pink,
+                title: "Apple Music Favorites",
+                subtitle: isFavorited ? "Favorited" : "Not favorited",
+                isBusy: isChangingAppleMusic,
+                buttonTitle: isFavorited ? "Remove" : "Add",
+                buttonRole: isFavorited ? .destructive : nil
+            ) {
+                Task { await toggleAppleMusicFavorite(isCurrentlyFavorited: isFavorited) }
             }
         }
     }
@@ -198,6 +181,28 @@ struct FavoriteControlSheet: View {
         do {
             try await searchManager.addToAppleMusicFavorites(resource: resource)
             appleState = .loaded(true)
+        } catch {
+            appleState = .failed(Self.errorMessage(from: error))
+        }
+    }
+
+    private func toggleAppleMusicFavorite(isCurrentlyFavorited: Bool) async {
+        guard let resource = searchManager.appleMusicFavoriteResource(for: item) else {
+            appleState = .notAvailable("Not available")
+            return
+        }
+
+        isChangingAppleMusic = true
+        defer { isChangingAppleMusic = false }
+
+        do {
+            if isCurrentlyFavorited {
+                try await searchManager.removeFromAppleMusicFavorites(resource: resource)
+                appleState = .loaded(false)
+            } else {
+                try await searchManager.addToAppleMusicFavorites(resource: resource)
+                appleState = .loaded(true)
+            }
         } catch {
             appleState = .failed(Self.errorMessage(from: error))
         }

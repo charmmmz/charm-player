@@ -21,10 +21,10 @@ struct LocalMusicAlbumDetailView: View {
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
     @State private var actionInFlight: LocalMusicDetailAction?
-    @State private var catalogAppleMusicURL: URL?
     @State private var isAppleMusicFavorited = false
     @State private var isAppleMusicFavoriteBusy = false
     @State private var appleMusicFavoritedTrackIDs: Set<String> = []
+    @State private var catalogAppleMusicURL: URL?
 
     private var displayAlbum: Album { detailedAlbum ?? album }
     private var coverURL: URL? {
@@ -34,6 +34,9 @@ struct LocalMusicAlbumDetailView: View {
     }
     private var albumPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(album: displayAlbum)
+    }
+    private var albumFavoriteResource: AppleMusicFavoriteResource? {
+        AppleMusicFavoriteResource.fromLocalServicePlayable(albumPlayable)
     }
     private var playbackAlbumID: String {
         LocalMusicAlbumDetailPresentation.playbackAlbumID(
@@ -113,6 +116,12 @@ struct LocalMusicAlbumDetailView: View {
             catalogAppleMusicURL = nil
             await resolveAppleMusicURLIfNeeded()
         }
+        .task(id: albumFavoriteResource?.id ?? "") {
+            await loadAppleMusicFavoriteState()
+        }
+        .task(id: tracks.map(\.id.rawValue).joined(separator: "|")) {
+            await loadAppleMusicTrackFavoriteStates()
+        }
     }
 
     private var detailBackground: some View {
@@ -154,10 +163,30 @@ struct LocalMusicAlbumDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
+
+                if let description = albumDescription {
+                    ExpandableText(
+                        text: description,
+                        title: displayAlbum.title,
+                        collapsedLineLimit: 3,
+                        font: .caption,
+                        textColor: Color.secondary.opacity(0.72),
+                        toggleColor: .white.opacity(0.92),
+                        multilineTextAlignment: .center
+                    )
+                    .padding(.top, 2)
+                }
             }
             .padding(.horizontal)
         }
         .padding(.top, 20)
+    }
+
+    private var albumDescription: String? {
+        EditorialDescriptionPolicy.text(
+            standard: completeCatalogAlbum?.editorialNotes?.standard ?? displayAlbum.editorialNotes?.standard,
+            short: completeCatalogAlbum?.editorialNotes?.short ?? displayAlbum.editorialNotes?.short,
+            tagline: completeCatalogAlbum?.editorialNotes?.tagline ?? displayAlbum.editorialNotes?.tagline)
     }
 
     private var albumMetadata: String {
@@ -180,7 +209,7 @@ struct LocalMusicAlbumDetailView: View {
             isShuffleActive: isActionActive(.shuffle),
             isFavoriteActive: isAppleMusicFavorited,
             isFavoriteBusy: isAppleMusicFavoriteBusy,
-            isFavoriteDisabled: false,
+            isFavoriteDisabled: albumFavoriteResource == nil,
             isPlaybackDisabled: actionInFlight != nil || store.isStartingPlayback,
             play: { performAction(.play) },
             shuffle: { performAction(.shuffle) },
@@ -474,28 +503,120 @@ struct LocalMusicAlbumDetailView: View {
 
     private func toggleAppleMusicFavorite() {
         guard !isAppleMusicFavoriteBusy else { return }
+        guard let resource = albumFavoriteResource else {
+            SonosLog.debug(
+                .localService,
+                "Apple Music album favorite unavailable title='\(displayAlbum.title)' id='\(displayAlbum.id.rawValue)'")
+            return
+        }
         isAppleMusicFavoriteBusy = true
+        let targetState = !isAppleMusicFavorited
+        isAppleMusicFavorited = targetState
 
         Task { @MainActor in
             defer { isAppleMusicFavoriteBusy = false }
-            SonosLog.debug(
-                .localService,
-                "Apple Music album favorite tapped title='\(displayAlbum.title)' id='\(displayAlbum.id.rawValue)'")
-            isAppleMusicFavorited.toggle()
+            do {
+                if targetState {
+                    try await searchManager.addToAppleMusicFavorites(resource: resource)
+                } else {
+                    try await searchManager.removeFromAppleMusicFavorites(resource: resource)
+                }
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music album favorite updated title='\(displayAlbum.title)' " +
+                        "resource='\(resource.id)' isFavorited=\(targetState)")
+            } catch {
+                isAppleMusicFavorited.toggle()
+                SonosLog.error(
+                    .localService,
+                    "Apple Music album favorite failed title='\(displayAlbum.title)' " +
+                        "resource='\(resource.id)' target=\(targetState) error=\(error)")
+            }
         }
     }
 
     private func toggleAppleMusicTrackFavorite(_ track: Track) {
-        if appleMusicFavoritedTrackIDs.contains(track.id.rawValue) {
-            appleMusicFavoritedTrackIDs.remove(track.id.rawValue)
-        } else {
-            appleMusicFavoritedTrackIDs.insert(track.id.rawValue)
+        guard let resource = favoriteResource(for: track) else {
+            SonosLog.debug(
+                .localService,
+                "Apple Music track favorite unavailable title='\(track.title)' id='\(track.id.rawValue)'")
+            return
         }
 
-        SonosLog.debug(
-            .localService,
-            "Apple Music track favorite tapped title='\(track.title)' id='\(track.id.rawValue)' " +
-            "isFavorited=\(appleMusicFavoritedTrackIDs.contains(track.id.rawValue))")
+        let trackID = track.id.rawValue
+        let targetState = !appleMusicFavoritedTrackIDs.contains(trackID)
+        if targetState {
+            appleMusicFavoritedTrackIDs.insert(trackID)
+        } else {
+            appleMusicFavoritedTrackIDs.remove(trackID)
+        }
+
+        Task { @MainActor in
+            do {
+                if targetState {
+                    try await searchManager.addToAppleMusicFavorites(resource: resource)
+                } else {
+                    try await searchManager.removeFromAppleMusicFavorites(resource: resource)
+                }
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music track favorite updated title='\(track.title)' " +
+                        "resource='\(resource.id)' isFavorited=\(targetState)")
+            } catch {
+                if targetState {
+                    appleMusicFavoritedTrackIDs.remove(trackID)
+                } else {
+                    appleMusicFavoritedTrackIDs.insert(trackID)
+                }
+                SonosLog.error(
+                    .localService,
+                    "Apple Music track favorite failed title='\(track.title)' " +
+                        "resource='\(resource.id)' target=\(targetState) error=\(error)")
+            }
+        }
+    }
+
+    private func loadAppleMusicFavoriteState() async {
+        guard let resource = albumFavoriteResource else {
+            isAppleMusicFavorited = false
+            return
+        }
+
+        do {
+            isAppleMusicFavorited = try await searchManager.appleMusicFavoriteStatus(for: resource)
+        } catch {
+            SonosLog.debug(
+                .localService,
+                "Apple Music album favorite status skipped title='\(displayAlbum.title)' " +
+                    "resource='\(resource.id)' error=\(error)")
+        }
+    }
+
+    private func loadAppleMusicTrackFavoriteStates() async {
+        var favorited: Set<String> = []
+        for track in tracks {
+            guard !Task.isCancelled else { return }
+            guard let resource = favoriteResource(for: track) else { continue }
+            do {
+                if try await searchManager.appleMusicFavoriteStatus(for: resource) {
+                    favorited.insert(track.id.rawValue)
+                }
+            } catch {
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music album track favorite status skipped title='\(track.title)' " +
+                        "resource='\(resource.id)' error=\(error)")
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        appleMusicFavoritedTrackIDs = favorited
+    }
+
+    private func favoriteResource(for track: Track) -> AppleMusicFavoriteResource? {
+        AppleMusicFavoriteResource.fromLocalServicePlayable(
+            LocalServiceAppleMusicPlayable.make(track: track)
+        )
     }
 
     @discardableResult
@@ -627,6 +748,9 @@ struct LocalMusicPlaylistDetailView: View {
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
     @State private var actionInFlight: LocalMusicDetailAction?
+    @State private var isAppleMusicFavorited = false
+    @State private var isAppleMusicFavoriteBusy = false
+    @State private var appleMusicFavoritedTrackIDs: Set<String> = []
 
     private var displayPlaylist: Playlist { detailedPlaylist ?? playlist }
     private var coverURL: URL? {
@@ -637,14 +761,14 @@ struct LocalMusicPlaylistDetailView: View {
     private var playlistPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(playlist: displayPlaylist)
     }
+    private var playlistFavoriteResource: AppleMusicFavoriteResource? {
+        AppleMusicFavoriteResource.fromLocalServicePlayable(playlistPlayable)
+    }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
             existingURL: displayPlaylist.url,
             catalogURL: nil,
             kind: .playlist)
-    }
-    private var detailActions: [LocalMusicDetailAction] {
-        LocalMusicDetailActions.playlist(hasAppleMusicURL: appleMusicURL != nil)
     }
     private var tracks: [Track] {
         guard let tracks = detailedPlaylist?.tracks else { return [] }
@@ -669,6 +793,12 @@ struct LocalMusicPlaylistDetailView: View {
             await loadDetails()
         }
         .task(id: coverURL) { await loadCoverImage(from: coverURL) }
+        .task(id: playlistFavoriteResource?.id ?? "") {
+            await loadAppleMusicFavoriteState()
+        }
+        .task(id: tracks.map(\.id.rawValue).joined(separator: "|")) {
+            await loadAppleMusicTrackFavoriteStates()
+        }
     }
 
     private var detailBackground: some View {
@@ -707,12 +837,16 @@ struct LocalMusicPlaylistDetailView: View {
                     .lineLimit(2)
 
                 if let description = playlistDescription {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                        .padding(.top, 2)
+                    ExpandableText(
+                        text: description,
+                        title: displayPlaylist.name,
+                        collapsedLineLimit: 3,
+                        font: .caption,
+                        textColor: Color.secondary.opacity(0.72),
+                        toggleColor: .white.opacity(0.92),
+                        multilineTextAlignment: .center
+                    )
+                    .padding(.top, 2)
                 }
             }
             .padding(.horizontal)
@@ -721,23 +855,26 @@ struct LocalMusicPlaylistDetailView: View {
     }
 
     private var playlistDescription: String? {
-        displayPlaylist.shortDescription ?? displayPlaylist.standardDescription
+        EditorialDescriptionPolicy.text(
+            standard: displayPlaylist.standardDescription,
+            short: displayPlaylist.shortDescription,
+            tagline: nil)
     }
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            ForEach(detailActions, id: \.self) { action in
-                LocalMusicDetailActionButton(
-                    action: action,
-                    tint: actionTint,
-                    isActive: isActionActive(action),
-                    isDisabled: isActionDisabled(action)
-                ) {
-                    performAction(action)
-                }
-            }
-        }
-        .padding(.horizontal)
+        AlbumPrimaryActionBar(
+            favoriteKind: .appleMusic,
+            tint: actionTint,
+            isPlayActive: isActionActive(.play),
+            isShuffleActive: isActionActive(.shuffle),
+            isFavoriteActive: isAppleMusicFavorited,
+            isFavoriteBusy: isAppleMusicFavoriteBusy,
+            isFavoriteDisabled: playlistFavoriteResource == nil,
+            isPlaybackDisabled: actionInFlight != nil || store.isStartingPlayback,
+            play: { performAction(.play) },
+            shuffle: { performAction(.shuffle) },
+            toggleFavorite: toggleAppleMusicFavorite
+        )
     }
 
     private var actionTint: Color {
@@ -747,11 +884,6 @@ struct LocalMusicPlaylistDetailView: View {
     private func isActionActive(_ action: LocalMusicDetailAction) -> Bool {
         actionInFlight == action ||
             (store.isStartingPlayback && store.activePlaybackItemID == displayID(for: action))
-    }
-
-    private func isActionDisabled(_ action: LocalMusicDetailAction) -> Bool {
-        (actionInFlight != nil && actionInFlight != action) ||
-            (store.isStartingPlayback && !isActionActive(action))
     }
 
     private func displayID(for action: LocalMusicDetailAction) -> String {
@@ -773,7 +905,9 @@ struct LocalMusicPlaylistDetailView: View {
             if let url = appleMusicURL {
                 openLocalMusicAppleMusicURL(url, context: "playlist-action title='\(displayPlaylist.name)'")
             }
-        case .favorite, .playStation:
+        case .favorite:
+            toggleAppleMusicFavorite()
+        case .playStation:
             break
         }
     }
@@ -801,24 +935,18 @@ struct LocalMusicPlaylistDetailView: View {
                         track: track,
                         index: index,
                         leadingPolicy: .playlistTrack,
+                        artwork: track.artwork,
                         artworkURL: selectedArtworkURL,
                         fallbackArtworkURL: nil,
                         numberStyle: .listPosition,
                         isPlaying: store.isStartingPlayback && store.activePlaybackItemID == track.id.rawValue,
-                        contextMenuActions: MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
+                        contextMenuActions: AlbumTrackMenuActionPolicy.actions(
+                            favoriteKind: .appleMusic,
+                            isFavoriteActive: appleMusicFavoritedTrackIDs.contains(track.id.rawValue),
+                            isQueueable: true
+                        ),
                         menuAction: { action in
-                            Task {
-                                await store.performSonosQueueAction(
-                                    action,
-                                    playable: LocalServiceAppleMusicPlayable.make(track: track),
-                                    displayID: track.id.rawValue,
-                                    fallbackKind: .song,
-                                    fallbackTitle: track.title,
-                                    fallbackArtist: track.artistName,
-                                    fallbackAlbum: track.albumTitle,
-                                    manager: manager,
-                                    searchManager: searchManager)
-                            }
+                            performPlaylistTrackMenuAction(action, track: track)
                         }
                     ) {
                         await store.playOnSonos(
@@ -951,6 +1079,161 @@ struct LocalMusicPlaylistDetailView: View {
             return
         }
         openLocalMusicAppleMusicURL(url, context: "playlist-artwork title='\(displayPlaylist.name)'")
+    }
+
+    private func toggleAppleMusicFavorite() {
+        guard !isAppleMusicFavoriteBusy else { return }
+        guard let resource = playlistFavoriteResource else {
+            SonosLog.debug(
+                .localService,
+                "Apple Music playlist favorite unavailable title='\(displayPlaylist.name)' id='\(displayPlaylist.id.rawValue)'")
+            return
+        }
+        isAppleMusicFavoriteBusy = true
+        let targetState = !isAppleMusicFavorited
+        isAppleMusicFavorited = targetState
+
+        Task { @MainActor in
+            defer { isAppleMusicFavoriteBusy = false }
+            do {
+                if targetState {
+                    try await searchManager.addToAppleMusicFavorites(resource: resource)
+                } else {
+                    try await searchManager.removeFromAppleMusicFavorites(resource: resource)
+                }
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music playlist favorite updated title='\(displayPlaylist.name)' " +
+                        "resource='\(resource.id)' isFavorited=\(targetState)")
+            } catch {
+                isAppleMusicFavorited.toggle()
+                SonosLog.error(
+                    .localService,
+                    "Apple Music playlist favorite failed title='\(displayPlaylist.name)' " +
+                        "resource='\(resource.id)' target=\(targetState) error=\(error)")
+            }
+        }
+    }
+
+    private func performPlaylistTrackMenuAction(
+        _ action: MusicResourceMenuAction,
+        track: Track
+    ) {
+        switch action {
+        case .playNow:
+            Task {
+                await store.playOnSonos(
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    displayID: track.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .playNext, .addToQueue:
+            Task {
+                await store.performSonosQueueAction(
+                    action,
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    displayID: track.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite(.appleMusic, _):
+            toggleAppleMusicTrackFavorite(track)
+        case .favorite(.sonos, _), .startStation:
+            break
+        }
+    }
+
+    private func toggleAppleMusicTrackFavorite(_ track: Track) {
+        guard let resource = favoriteResource(for: track) else {
+            SonosLog.debug(
+                .localService,
+                "Apple Music playlist track favorite unavailable title='\(track.title)' id='\(track.id.rawValue)'")
+            return
+        }
+
+        let trackID = track.id.rawValue
+        let targetState = !appleMusicFavoritedTrackIDs.contains(trackID)
+        if targetState {
+            appleMusicFavoritedTrackIDs.insert(trackID)
+        } else {
+            appleMusicFavoritedTrackIDs.remove(trackID)
+        }
+
+        Task { @MainActor in
+            do {
+                if targetState {
+                    try await searchManager.addToAppleMusicFavorites(resource: resource)
+                } else {
+                    try await searchManager.removeFromAppleMusicFavorites(resource: resource)
+                }
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music playlist track favorite updated title='\(track.title)' " +
+                        "resource='\(resource.id)' isFavorited=\(targetState)")
+            } catch {
+                if targetState {
+                    appleMusicFavoritedTrackIDs.remove(trackID)
+                } else {
+                    appleMusicFavoritedTrackIDs.insert(trackID)
+                }
+                SonosLog.error(
+                    .localService,
+                    "Apple Music playlist track favorite failed title='\(track.title)' " +
+                        "resource='\(resource.id)' target=\(targetState) error=\(error)")
+            }
+        }
+    }
+
+    private func loadAppleMusicFavoriteState() async {
+        guard let resource = playlistFavoriteResource else {
+            isAppleMusicFavorited = false
+            return
+        }
+
+        do {
+            isAppleMusicFavorited = try await searchManager.appleMusicFavoriteStatus(for: resource)
+        } catch {
+            SonosLog.debug(
+                .localService,
+                "Apple Music playlist favorite status skipped title='\(displayPlaylist.name)' " +
+                    "resource='\(resource.id)' error=\(error)")
+        }
+    }
+
+    private func loadAppleMusicTrackFavoriteStates() async {
+        var favorited: Set<String> = []
+        for track in tracks {
+            guard !Task.isCancelled else { return }
+            guard let resource = favoriteResource(for: track) else { continue }
+            do {
+                if try await searchManager.appleMusicFavoriteStatus(for: resource) {
+                    favorited.insert(track.id.rawValue)
+                }
+            } catch {
+                SonosLog.debug(
+                    .localService,
+                    "Apple Music playlist track favorite status skipped title='\(track.title)' " +
+                        "resource='\(resource.id)' error=\(error)")
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        appleMusicFavoritedTrackIDs = favorited
+    }
+
+    private func favoriteResource(for track: Track) -> AppleMusicFavoriteResource? {
+        AppleMusicFavoriteResource.fromLocalServicePlayable(
+            LocalServiceAppleMusicPlayable.make(track: track)
+        )
     }
 
     private func playPlaylist(shuffle: Bool, action: LocalMusicDetailAction) {
@@ -1087,6 +1370,7 @@ struct LocalMusicArtistDetailView: View {
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
 
+    @State private var detailedArtist: Artist?
     @State private var albums: [Album] = []
     @State private var songs: [Song] = []
     @State private var isLoading = true
@@ -1096,23 +1380,24 @@ struct LocalMusicArtistDetailView: View {
     @State private var actionInFlight: LocalMusicDetailAction?
     @State private var catalogAppleMusicURL: URL?
 
+    private var displayArtist: Artist { detailedArtist ?? artist }
     private var coverURL: URL? {
-        artist.artwork.flatMap {
+        displayArtist.artwork.flatMap {
             LocalMusicArtworkURL.imageDownloadURL(for: $0, shortSidePixels: 600)
-        } ?? store.catalogArtworkURL(for: artist)
+        } ?? store.catalogArtworkURL(for: displayArtist) ?? store.catalogArtworkURL(for: artist)
     }
     private var artistPlayable: LocalServiceAppleMusicPlayable? {
-        LocalServiceAppleMusicPlayable.make(artist: artist)
+        LocalServiceAppleMusicPlayable.make(artist: displayArtist)
     }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
-            existingURL: artist.url,
+            existingURL: displayArtist.url,
             catalogURL: catalogAppleMusicURL,
             kind: .artist,
             requiresCatalogURL: true)
     }
     private var appleMusicURLLookupID: String {
-        "\(artist.id.rawValue)|\(artist.name)"
+        "\(displayArtist.id.rawValue)|\(displayArtist.name)"
     }
     private var detailActions: [LocalMusicDetailAction] {
         LocalMusicDetailActions.artist(hasAppleMusicURL: appleMusicURL != nil)
@@ -1127,6 +1412,10 @@ struct LocalMusicArtistDetailView: View {
     private var albumSections: [LocalMusicArtistAlbumSection] {
         LocalMusicArtistAlbumSection.sections(from: songs)
     }
+    private var artistTopSongs: [Song] {
+        let catalogTopSongs = Array(displayArtist.topSongs ?? [])
+        return catalogTopSongs.isEmpty ? songs : catalogTopSongs
+    }
 
     var body: some View {
         ScrollView {
@@ -1135,6 +1424,7 @@ struct LocalMusicArtistDetailView: View {
                 actionBar
                     .padding(.top, 16)
                     .padding(.bottom, 8)
+                topSongsSection
                 albumOverview
             }
             .padding(.bottom, 24)
@@ -1142,6 +1432,7 @@ struct LocalMusicArtistDetailView: View {
         .background(detailBackground.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadArtistContent() }
+        .task(id: "\(artist.id.rawValue)|\(artist.name)") { await loadArtistDetails() }
         .task(id: coverURL) { await loadCoverImage(from: coverURL) }
         .task(id: appleMusicURLLookupID) {
             catalogAppleMusicURL = nil
@@ -1165,19 +1456,19 @@ struct LocalMusicArtistDetailView: View {
                     openAppleMusicFromArtwork()
                 } label: {
                     LocalMusicArtistArtwork(
-                        artwork: artist.artwork,
-                        artworkURL: store.catalogArtworkURL(for: artist)
+                        artwork: displayArtist.artwork,
+                        artworkURL: store.catalogArtworkURL(for: displayArtist) ?? store.catalogArtworkURL(for: artist)
                     )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open \(artist.name) in Apple Music")
+                .accessibilityLabel("Open \(displayArtist.name) in Apple Music")
 
                 stationBadge
                     .offset(x: 6, y: 6)
             }
 
             VStack(spacing: 5) {
-                Text(artist.name)
+                Text(displayArtist.name)
                     .font(.title2.weight(.bold))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -1194,10 +1485,30 @@ struct LocalMusicArtistDetailView: View {
                     .foregroundStyle(.tertiary)
                     .opacity(isLoading ? 0 : 1)
                     .accessibilityHidden(isLoading)
+
+                if let description = artistDescription {
+                    ExpandableText(
+                        text: description,
+                        title: displayArtist.name,
+                        collapsedLineLimit: 3,
+                        font: .caption,
+                        textColor: Color.secondary.opacity(0.72),
+                        toggleColor: .white.opacity(0.92),
+                        multilineTextAlignment: .center
+                    )
+                    .padding(.top, 2)
+                }
             }
             .padding(.horizontal)
         }
         .padding(.top, 20)
+    }
+
+    private var artistDescription: String? {
+        EditorialDescriptionPolicy.text(
+            standard: displayArtist.editorialNotes?.standard,
+            short: displayArtist.editorialNotes?.short,
+            tagline: displayArtist.editorialNotes?.tagline)
     }
 
     private var actionBar: some View {
@@ -1264,9 +1575,9 @@ struct LocalMusicArtistDetailView: View {
     private func displayID(for action: LocalMusicDetailAction) -> String {
         switch action {
         case .playStation:
-            return "\(artist.id.rawValue):station"
+            return "\(displayArtist.id.rawValue):station"
         case .play, .shuffle, .favorite, .openAppleMusic:
-            return artist.id.rawValue
+            return displayArtist.id.rawValue
         }
     }
 
@@ -1276,10 +1587,25 @@ struct LocalMusicArtistDetailView: View {
             playArtistStation()
         case .openAppleMusic:
             if let url = appleMusicURL {
-                openLocalMusicAppleMusicURL(url, context: "artist-action title='\(artist.name)'")
+                openLocalMusicAppleMusicURL(url, context: "artist-action title='\(displayArtist.name)'")
             }
         case .play, .shuffle, .favorite:
             break
+        }
+    }
+
+    @ViewBuilder
+    private var topSongsSection: some View {
+        if !artistTopSongs.isEmpty {
+            LocalMusicArtistTopSongsSection(
+                artistName: displayArtist.name,
+                songs: artistTopSongs,
+                store: store,
+                manager: manager,
+                searchManager: searchManager
+            )
+            .padding(.top, 10)
+            .padding(.bottom, 22)
         }
     }
 
@@ -1386,6 +1712,16 @@ struct LocalMusicArtistDetailView: View {
         }
     }
 
+    private func loadArtistDetails() async {
+        do {
+            detailedArtist = try await LocalMusicLibraryClient.shared.artistDetails(for: artist)
+        } catch {
+            SonosLog.debug(
+                .localService,
+                "Local Music artist catalog detail load failed title='\(artist.name)' error=\(error)")
+        }
+    }
+
     private func loadCoverImage(from url: URL?) async {
         guard let url else {
             coverImage = nil
@@ -1446,12 +1782,12 @@ struct LocalMusicArtistDetailView: View {
             guard let url = await resolveAppleMusicURLIfNeeded() else {
                 SonosLog.debug(
                     .localService,
-                    "Artist Apple Music artwork tap has no resolved URL title='\(artist.name)' " +
-                        "rawURL='\(artist.url?.absoluteString ?? "nil")' " +
+                    "Artist Apple Music artwork tap has no resolved URL title='\(displayArtist.name)' " +
+                        "rawURL='\(displayArtist.url?.absoluteString ?? "nil")' " +
                         "playableID='\(artistPlayable?.catalogID ?? "nil")'")
                 return
             }
-            openLocalMusicAppleMusicURL(url, context: "artist-artwork title='\(artist.name)'")
+            openLocalMusicAppleMusicURL(url, context: "artist-artwork title='\(displayArtist.name)'")
         }
     }
 
@@ -1475,7 +1811,7 @@ struct LocalMusicArtistDetailView: View {
                     guard !Task.isCancelled else { return nil }
                     SonosLog.debug(
                         .localService,
-                        "Artist Apple Music link resolved by catalog id title='\(artist.name)' " +
+                        "Artist Apple Music link resolved by catalog id title='\(displayArtist.name)' " +
                             "catalogID='\(catalogID)' url='\(urlString)'")
                     catalogAppleMusicURL = resolved
                     return resolved
@@ -1484,15 +1820,15 @@ struct LocalMusicArtistDetailView: View {
                 guard !Task.isCancelled else { return nil }
                 SonosLog.debug(
                     .localService,
-                    "Artist Apple Music catalog id lookup failed title='\(artist.name)' " +
+                    "Artist Apple Music catalog id lookup failed title='\(displayArtist.name)' " +
                         "catalogID='\(catalogID)' error=\(error)")
             }
         }
 
         let term = LocalMusicCatalogMatcher.searchTerm(
             kind: .artist,
-            title: artist.name,
-            artist: artist.name,
+            title: displayArtist.name,
+            artist: displayArtist.name,
             album: nil)
         guard !term.isEmpty else { return nil }
 
@@ -1501,8 +1837,8 @@ struct LocalMusicArtistDetailView: View {
             let urlString = LocalMusicCatalogWebURLFallback.urlString(
                 in: items,
                 kind: .artist,
-                title: artist.name,
-                artist: artist.name,
+                title: displayArtist.name,
+                artist: displayArtist.name,
                 album: nil,
                 allowGeneratedFallback: false)
             guard !Task.isCancelled,
@@ -1515,16 +1851,16 @@ struct LocalMusicArtistDetailView: View {
                   ) else {
                 SonosLog.debug(
                     .localService,
-                    "Artist Apple Music link search produced no usable URL title='\(artist.name)' term='\(term)'")
+                    "Artist Apple Music link search produced no usable URL title='\(displayArtist.name)' term='\(term)'")
                 return nil
             }
 
-            SonosLog.debug(.localService, "Artist Apple Music link resolved title='\(artist.name)' url='\(urlString)'")
+            SonosLog.debug(.localService, "Artist Apple Music link resolved title='\(displayArtist.name)' url='\(urlString)'")
             catalogAppleMusicURL = resolved
             return resolved
         } catch {
             guard !Task.isCancelled else { return nil }
-            SonosLog.debug(.localService, "Artist Apple Music link lookup failed title='\(artist.name)' error=\(error)")
+            SonosLog.debug(.localService, "Artist Apple Music link lookup failed title='\(displayArtist.name)' error=\(error)")
             return nil
         }
     }
@@ -1538,8 +1874,8 @@ struct LocalMusicArtistDetailView: View {
                 playable: artistPlayable,
                 displayID: displayID(for: .playStation),
                 fallbackKind: .artist,
-                fallbackTitle: artist.name,
-                fallbackArtist: artist.name,
+                fallbackTitle: displayArtist.name,
+                fallbackArtist: displayArtist.name,
                 manager: manager,
                 searchManager: searchManager)
             withAnimation(.easeOut(duration: 0.2)) {
@@ -1695,8 +2031,8 @@ private struct LocalMusicCatalogArtistDetailView: View {
         ScrollView {
             VStack(spacing: 0) {
                 header
-                albumOverview
                 topSongsSection
+                albumOverview
             }
             .padding(.bottom, 24)
         }
@@ -1748,10 +2084,30 @@ private struct LocalMusicCatalogArtistDetailView: View {
                 Text("\(albums.count) albums · \(topSongs.count) songs")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+
+                if let description = artistDescription {
+                    ExpandableText(
+                        text: description,
+                        title: artist.name,
+                        collapsedLineLimit: 3,
+                        font: .caption,
+                        textColor: Color.secondary.opacity(0.72),
+                        toggleColor: .white.opacity(0.92),
+                        multilineTextAlignment: .center
+                    )
+                    .padding(.top, 2)
+                }
             }
             .padding(.horizontal)
         }
         .padding(.top, 20)
+    }
+
+    private var artistDescription: String? {
+        EditorialDescriptionPolicy.text(
+            standard: artist.editorialNotes?.standard,
+            short: artist.editorialNotes?.short,
+            tagline: artist.editorialNotes?.tagline)
     }
 
     private var stationBadge: some View {
@@ -1823,46 +2179,15 @@ private struct LocalMusicCatalogArtistDetailView: View {
     @ViewBuilder
     private var topSongsSection: some View {
         if !topSongs.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Top Songs")
-                    .font(.headline)
-                    .padding(.horizontal)
-
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(topSongs.enumerated()), id: \.element.id) { index, song in
-                        LocalMusicSongRow(
-                            song: song,
-                            index: index,
-                            isPlaying: store.isStartingPlayback && store.activePlaybackItemID == song.id.rawValue,
-                            contextMenuActions: MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
-                            menuAction: { action in
-                                Task {
-                                    await store.performSonosQueueAction(
-                                        action,
-                                        playable: LocalServiceAppleMusicPlayable.make(song: song),
-                                        displayID: song.id.rawValue,
-                                        fallbackKind: .song,
-                                        fallbackTitle: song.title,
-                                        fallbackArtist: song.artistName,
-                                        fallbackAlbum: song.albumTitle,
-                                        manager: manager,
-                                        searchManager: searchManager)
-                                }
-                            }
-                        ) {
-                            await store.playOnSonos(
-                                playable: LocalServiceAppleMusicPlayable.make(song: song),
-                                displayID: song.id.rawValue,
-                                fallbackKind: .song,
-                                fallbackTitle: song.title,
-                                fallbackArtist: song.artistName,
-                                fallbackAlbum: song.albumTitle,
-                                manager: manager,
-                                searchManager: searchManager)
-                        }
-                    }
-                }
-            }
+            LocalMusicArtistTopSongsSection(
+                artistName: artist.name,
+                songs: topSongs,
+                store: store,
+                manager: manager,
+                searchManager: searchManager
+            )
+            .padding(.top, 22)
+            .padding(.bottom, 22)
         }
     }
 
@@ -1942,6 +2267,185 @@ private struct LocalMusicCatalogArtistDetailView: View {
             SonosLog.error(.artistDetail, "Catalog artist image load failed: \(error)")
             coverImage = nil
             themeColor = nil
+        }
+    }
+}
+
+private struct LocalMusicArtistTopSongsSection: View {
+    let artistName: String
+    let songs: [Song]
+    let store: LocalLibraryStore
+    @Bindable var manager: SonosManager
+    @Bindable var searchManager: SearchManager
+
+    private var previewSongs: [Song] {
+        Array(songs.prefix(LocalMusicArtistTopSongsPolicy.previewCount(totalCount: songs.count)))
+    }
+
+    private var showsFullListLink: Bool {
+        LocalMusicArtistTopSongsPolicy.shouldShowFullListLink(totalCount: songs.count)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader
+
+            LocalMusicArtistTopSongsRows(
+                songs: previewSongs,
+                store: store,
+                manager: manager,
+                searchManager: searchManager
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var sectionHeader: some View {
+        if showsFullListLink {
+            NavigationLink {
+                LocalMusicArtistTopSongsListView(
+                    artistName: artistName,
+                    songs: songs,
+                    store: store,
+                    manager: manager,
+                    searchManager: searchManager
+                )
+            } label: {
+                titleLabel(showChevron: true)
+            }
+            .buttonStyle(.plain)
+        } else {
+            titleLabel(showChevron: false)
+        }
+    }
+
+    private func titleLabel(showChevron: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text("Top Songs")
+                .font(.headline)
+            if showChevron {
+                Image(systemName: "chevron.right")
+                    .font(.headline.weight(.semibold))
+            }
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct LocalMusicArtistTopSongsListView: View {
+    let artistName: String
+    let songs: [Song]
+    let store: LocalLibraryStore
+    @Bindable var manager: SonosManager
+    @Bindable var searchManager: SearchManager
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Top Songs")
+                        .font(.largeTitle.weight(.bold))
+                    Text(artistName)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.top, 24)
+
+                LocalMusicArtistTopSongsRows(
+                    songs: songs,
+                    store: store,
+                    manager: manager,
+                    searchManager: searchManager
+                )
+            }
+            .padding(.bottom, 24)
+        }
+        .background(
+            SonosArtworkBackground(
+                image: manager.albumArtImage,
+                fallbackColor: manager.albumArtDominantColor
+            )
+            .ignoresSafeArea()
+        )
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct LocalMusicArtistTopSongsRows: View {
+    let songs: [Song]
+    let store: LocalLibraryStore
+    @Bindable var manager: SonosManager
+    @Bindable var searchManager: SearchManager
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                LocalMusicSongRow(
+                    song: song,
+                    index: index,
+                    subtitle: subtitle(for: song),
+                    artwork: song.artwork,
+                    artworkURL: store.catalogArtworkURL(for: song),
+                    showsArtwork: true,
+                    isPlaying: store.isStartingPlayback && store.activePlaybackItemID == song.id.rawValue,
+                    contextMenuActions: MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
+                    menuAction: { action in
+                        performMenuAction(action, song: song)
+                    }
+                ) {
+                    await store.playOnSonos(
+                        playable: LocalServiceAppleMusicPlayable.make(song: song),
+                        displayID: song.id.rawValue,
+                        fallbackKind: .song,
+                        fallbackTitle: song.title,
+                        fallbackArtist: song.artistName,
+                        fallbackAlbum: song.albumTitle,
+                        manager: manager,
+                        searchManager: searchManager)
+                }
+            }
+        }
+    }
+
+    private func subtitle(for song: Song) -> String {
+        if let albumTitle = song.albumTitle, !albumTitle.isEmpty {
+            return albumTitle
+        }
+        return song.artistName
+    }
+
+    private func performMenuAction(_ action: MusicResourceMenuAction, song: Song) {
+        switch action {
+        case .playNow:
+            Task {
+                await store.playOnSonos(
+                    playable: LocalServiceAppleMusicPlayable.make(song: song),
+                    displayID: song.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: song.title,
+                    fallbackArtist: song.artistName,
+                    fallbackAlbum: song.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .playNext, .addToQueue:
+            Task {
+                await store.performSonosQueueAction(
+                    action,
+                    playable: LocalServiceAppleMusicPlayable.make(song: song),
+                    displayID: song.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: song.title,
+                    fallbackArtist: song.artistName,
+                    fallbackAlbum: song.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite, .startStation:
+            break
         }
     }
 }
@@ -2349,14 +2853,29 @@ private struct LocalMusicDetailArtwork: View {
 
             fallbackIcon
 
-            if let artwork {
-                LocalMusicArtworkView(artwork: artwork, diagnosticLabel: diagnosticLabel)
+            switch LocalMusicArtworkSource.preferred(artwork: artwork, remoteURL: artworkURL) {
+            case .musicKit(let artwork):
+                LocalMusicArtworkView(
+                    artwork: artwork,
+                    diagnosticLabel: diagnosticLabel,
+                    contentMode: LocalMusicDetailArtworkPresentation.contentMode(
+                        maximumWidth: artwork.maximumWidth,
+                        maximumHeight: artwork.maximumHeight
+                    )
+                )
                     .frame(width: size, height: size)
-            }
-
-            if let artworkURL {
-                LocalMusicDetailRemoteArtworkView(url: artworkURL, diagnosticLabel: diagnosticLabel)
+            case .remote(let artworkURL):
+                LocalMusicDetailRemoteArtworkView(
+                    url: artworkURL,
+                    diagnosticLabel: diagnosticLabel,
+                    contentMode: LocalMusicDetailArtworkPresentation.contentMode(
+                        maximumWidth: nil,
+                        maximumHeight: nil
+                    )
+                )
                     .frame(width: size, height: size)
+            case .placeholder:
+                EmptyView()
             }
         }
         .frame(width: size, height: size)
@@ -2375,6 +2894,17 @@ private struct LocalMusicDetailArtwork: View {
 private struct LocalMusicDetailRemoteArtworkView: View {
     let url: URL
     let diagnosticLabel: String?
+    let contentMode: LocalMusicArtworkURL.ContentMode
+
+    init(
+        url: URL,
+        diagnosticLabel: String?,
+        contentMode: LocalMusicArtworkURL.ContentMode = .fit
+    ) {
+        self.url = url
+        self.diagnosticLabel = diagnosticLabel
+        self.contentMode = contentMode
+    }
 
     @State private var didLogSuccess = false
     @State private var didLogFailure = false
@@ -2384,7 +2914,7 @@ private struct LocalMusicDetailRemoteArtworkView: View {
             if let image = phase.image {
                 image
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: contentMode.swiftUIContentMode)
                     .onAppear { logSuccessIfNeeded() }
             } else if case .failure(let error) = phase {
                 Color.clear
@@ -2418,6 +2948,17 @@ private struct LocalMusicDetailRemoteArtworkView: View {
     }
 }
 
+private extension LocalMusicArtworkURL.ContentMode {
+    var swiftUIContentMode: ContentMode {
+        switch self {
+        case .fit:
+            return .fit
+        case .fill:
+            return .fill
+        }
+    }
+}
+
 struct LocalMusicArtistArtwork: View {
     let artwork: Artwork?
     let artworkURL: URL?
@@ -2445,16 +2986,17 @@ struct LocalMusicArtistArtwork: View {
                 .font(.system(size: max(18, size * 0.26)))
                 .foregroundStyle(.secondary)
 
-            if let artwork {
+            switch LocalMusicArtworkSource.preferred(artwork: artwork, remoteURL: artworkURL) {
+            case .musicKit(let artwork):
                 LocalMusicArtworkView(artwork: artwork)
                     .frame(width: size, height: size)
                     .clipShape(Circle())
-            }
-
-            if let artworkURL {
+            case .remote(let artworkURL):
                 remoteArtwork(url: artworkURL)
                     .frame(width: size, height: size)
                     .clipShape(Circle())
+            case .placeholder:
+                EmptyView()
             }
         }
         .frame(width: size, height: size)
@@ -2478,6 +3020,7 @@ private struct LocalMusicTrackRow: View {
     let track: Track
     let index: Int
     let leadingPolicy: MusicResourceTrackLeadingPolicy
+    let artwork: Artwork?
     let artworkURL: URL?
     let fallbackArtworkURL: URL?
     let numberStyle: LocalMusicTrackNumberStyle
@@ -2527,12 +3070,18 @@ private struct LocalMusicTrackRow: View {
 
     @ViewBuilder
     private var leadingArtworkOrNumber: some View {
-        if let selectedArtworkURL {
+        switch LocalMusicArtworkSource.preferred(artwork: artwork, remoteURL: selectedArtworkURL) {
+        case .musicKit(let artwork):
+            LocalMusicArtworkView(artwork: artwork, contentMode: .fill)
+                .frame(width: 44, height: 44)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        case .remote(let selectedArtworkURL):
             LocalMusicDetailRemoteArtworkView(url: selectedArtworkURL, diagnosticLabel: nil)
                 .frame(width: 44, height: 44)
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-        } else {
+        case .placeholder:
             Text(trackNumber)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -2557,6 +3106,10 @@ private struct LocalMusicTrackRow: View {
 private struct LocalMusicSongRow: View {
     let song: Song
     let index: Int
+    var subtitle: String? = nil
+    var artwork: Artwork? = nil
+    var artworkURL: URL? = nil
+    var showsArtwork = false
     let isPlaying: Bool
     let contextMenuActions: [MusicResourceMenuAction]
     let menuAction: (MusicResourceMenuAction) -> Void
@@ -2567,17 +3120,14 @@ private struct LocalMusicSongRow: View {
             Task { await action() }
         } label: {
             HStack(spacing: 12) {
-                Text("\(index + 1)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, alignment: .trailing)
+                leadingContent
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(song.title)
                         .font(.body)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(song.artistName)
+                    Text(subtitle ?? song.artistName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2601,6 +3151,38 @@ private struct LocalMusicSongRow: View {
         .buttonStyle(.plain)
         .contextMenu {
             MusicResourceContextMenu(actions: contextMenuActions, perform: menuAction)
+        }
+    }
+
+    @ViewBuilder
+    private var leadingContent: some View {
+        if showsArtwork {
+            switch LocalMusicArtworkSource.preferred(artwork: artwork, remoteURL: artworkURL) {
+            case .musicKit(let artwork):
+                LocalMusicArtworkView(artwork: artwork, contentMode: .fill)
+                    .frame(width: 44, height: 44)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            case .remote(let artworkURL):
+                LocalMusicDetailRemoteArtworkView(url: artworkURL, diagnosticLabel: nil)
+                    .frame(width: 44, height: 44)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            case .placeholder:
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.white.opacity(0.08))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "music.note")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        } else {
+            Text("\(index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .trailing)
         }
     }
 }

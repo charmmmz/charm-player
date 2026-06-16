@@ -66,6 +66,33 @@ enum AlbumTrackSubtitlePolicy {
     }
 }
 
+enum EditorialDescriptionPolicy {
+    static func text(
+        standard: String?,
+        short: String?,
+        tagline: String?
+    ) -> String? {
+        [standard, short, tagline]
+            .compactMap { value -> String? in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed?.isEmpty == false ? trimmed : nil
+            }
+            .first
+    }
+}
+
+enum LocalMusicArtistTopSongsPolicy {
+    static let previewLimit = 5
+
+    static func previewCount(totalCount: Int) -> Int {
+        min(max(totalCount, 0), previewLimit)
+    }
+
+    static func shouldShowFullListLink(totalCount: Int) -> Bool {
+        totalCount > previewLimit
+    }
+}
+
 struct AlbumThemeColorComponents: Equatable, Sendable {
     let hue: CGFloat
     let saturation: CGFloat

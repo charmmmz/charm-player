@@ -1160,7 +1160,6 @@ struct NowPlayingOverlay: View {
     /// previous song, sending them to the wrong detail page.
     @State private var nowPlayingFetchTask: Task<Void, Never>?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    private let appleMusicArtworkTapThreshold = AppleMusicArtworkTapPolicy.defaultThreshold
 
     private var albumArtTransitionID: String {
         manager.albumArtTransitionID()
@@ -1576,7 +1575,7 @@ struct NowPlayingOverlay: View {
 
                     if verticalSizeClass != .compact,
                        let source = manager.trackInfo?.source, source != .unknown {
-                        SourceBadgeView(source: source, tintColor: manager.albumArtDominantColor)
+                        sourceBadge(source)
                             .padding(.horizontal, 18)
                             .padding(.bottom, 14)
                     }
@@ -1595,27 +1594,25 @@ struct NowPlayingOverlay: View {
         }
         .animation(.easeInOut(duration: 0.6), value: transitionID)
 
-        if currentAppleMusicTrackResource != nil {
-            content
-                .simultaneousGesture(appleMusicArtworkTapGesture)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Open current song in Apple Music")
-        } else {
-            content
-        }
+        content
     }
 
-    private var appleMusicArtworkTapGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onEnded { value in
-                guard AppleMusicArtworkTapPolicy.shouldOpen(
-                    translation: value.translation,
-                    threshold: appleMusicArtworkTapThreshold
-                ) else {
-                    return
-                }
+    @ViewBuilder
+    private func sourceBadge(_ source: PlaybackSource) -> some View {
+        let badge = SourceBadgeView(source: source, tintColor: manager.albumArtDominantColor)
+
+        if source == .appleMusic, currentAppleMusicTrackResource != nil {
+            Button {
                 openCurrentAppleMusicTrack()
+            } label: {
+                badge
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Open current song in Apple Music")
+        } else {
+            badge
+        }
     }
 
     private func openCurrentAppleMusicTrack() {
@@ -1635,7 +1632,7 @@ struct NowPlayingOverlay: View {
                 }
                 AppleMusicExternalLinkOpener.open(
                     url,
-                    context: "now-playing-artwork id='\(resource.id)'"
+                    context: "now-playing-source-badge id='\(resource.id)'"
                 )
             } catch {
                 SonosLog.error(

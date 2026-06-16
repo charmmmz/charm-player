@@ -40,6 +40,33 @@ struct AppleMusicFavoriteResource: Codable, Equatable, Sendable {
     let id: String
     let type: AppleMusicFavoriteResourceType
 
+    static func fromLocalServicePlayable(_ playable: LocalServiceAppleMusicPlayable?) -> AppleMusicFavoriteResource? {
+        guard let playable else { return nil }
+
+        let type: AppleMusicFavoriteResourceType
+        let catalogID: String?
+
+        switch playable.kind {
+        case .song:
+            type = .songs
+            catalogID = SonosAppleMusicTrackResolver.storeID(fromObjectID: playable.catalogID)
+        case .album:
+            type = .albums
+            catalogID = LocalMusicAppleMusicURL.publicCatalogID(from: playable.catalogID, kind: .album)
+        case .artist:
+            type = .artists
+            catalogID = LocalMusicAppleMusicURL.publicCatalogID(from: playable.catalogID, kind: .artist)
+        case .playlist:
+            type = .playlists
+            catalogID = LocalMusicAppleMusicURL.publicCatalogID(from: playable.catalogID, kind: .playlist)
+        case .station:
+            return nil
+        }
+
+        guard let catalogID, !catalogID.isEmpty else { return nil }
+        return AppleMusicFavoriteResource(id: catalogID, type: type)
+    }
+
     static func fromBrowseItem(_ item: BrowseItem) -> AppleMusicFavoriteResource? {
         guard let type = AppleMusicFavoriteResourceType(cloudType: item.cloudType) else {
             return nil
@@ -162,6 +189,14 @@ struct AppleMusicFavoritesClient: Sendable {
         URL(string: "https://api.music.apple.com/v1/me/favorites")!
     }
 
+    static func addFavoritesRequest(for resource: AppleMusicFavoriteResource) throws -> URLRequest {
+        try favoritesRequest(for: resource, method: "POST")
+    }
+
+    static func removeFavoritesRequest(for resource: AppleMusicFavoriteResource) throws -> URLRequest {
+        try favoritesRequest(for: resource, method: "DELETE")
+    }
+
     func favoriteStatus(for resource: AppleMusicFavoriteResource) async throws -> Bool {
         try await ensureAuthorized()
         let storefront = try await MusicDataRequest.currentCountryCode
@@ -176,10 +211,17 @@ struct AppleMusicFavoritesClient: Sendable {
 
     func addToFavorites(_ resource: AppleMusicFavoriteResource) async throws {
         try await ensureAuthorized()
-        var request = URLRequest(url: Self.favoritesURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try AppleMusicFavoriteRequestBody(resource: resource).jsonData()
+        let request = try Self.addFavoritesRequest(for: resource)
+
+        let response = try await MusicDataRequest(urlRequest: request).response()
+        guard (200...299).contains(response.urlResponse.statusCode) else {
+            throw AppleMusicFavoritesError.invalidResponse
+        }
+    }
+
+    func removeFromFavorites(_ resource: AppleMusicFavoriteResource) async throws {
+        try await ensureAuthorized()
+        let request = try Self.removeFavoritesRequest(for: resource)
 
         let response = try await MusicDataRequest(urlRequest: request).response()
         guard (200...299).contains(response.urlResponse.statusCode) else {
@@ -192,6 +234,17 @@ struct AppleMusicFavoritesClient: Sendable {
         guard status == .authorized else {
             throw AppleMusicFavoritesError.authorizationDenied
         }
+    }
+
+    private static func favoritesRequest(
+        for resource: AppleMusicFavoriteResource,
+        method: String
+    ) throws -> URLRequest {
+        var request = URLRequest(url: favoritesURL)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try AppleMusicFavoriteRequestBody(resource: resource).jsonData()
+        return request
     }
 }
 

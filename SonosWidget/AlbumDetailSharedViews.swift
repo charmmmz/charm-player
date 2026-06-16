@@ -17,7 +17,7 @@ struct AlbumPrimaryActionBar: View {
         GeometryReader { geometry in
             let metrics = AlbumPrimaryActionBarMetrics(width: geometry.size.width)
 
-            HStack(spacing: metrics.spacing) {
+            HStack(alignment: .center, spacing: metrics.spacing) {
                 AlbumCircleActionButton(
                     systemImage: "shuffle",
                     accessibilityTitle: "Shuffle",
@@ -29,18 +29,18 @@ struct AlbumPrimaryActionBar: View {
                 )
 
                 Button(action: play) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         if isPlayActive {
                             ProgressView()
-                                .controlSize(.regular)
+                                .controlSize(.small)
                                 .tint(.black)
                         } else {
                             Image(systemName: "play.fill")
-                                .font(.headline.weight(.bold))
+                                .font(.callout.weight(.bold))
                         }
 
                         Text("Play")
-                            .font(.headline.weight(.bold))
+                            .font(.callout.weight(.bold))
                     }
                     .frame(width: metrics.playWidth, height: metrics.playHeight)
                     .foregroundStyle(.black.opacity(0.86))
@@ -62,7 +62,17 @@ struct AlbumPrimaryActionBar: View {
                     action: toggleFavorite
                 )
             }
-            .padding(.horizontal, metrics.horizontalPadding)
+            .frame(
+                width: metrics.contentWidth,
+                height: AlbumPrimaryActionBarMetrics.maximumHeight,
+                alignment: .center
+            )
+            .frame(
+                maxWidth: .infinity,
+                minHeight: AlbumPrimaryActionBarMetrics.maximumHeight,
+                maxHeight: AlbumPrimaryActionBarMetrics.maximumHeight,
+                alignment: .center
+            )
         }
         .frame(height: AlbumPrimaryActionBarMetrics.maximumHeight)
     }
@@ -230,23 +240,27 @@ private struct AlbumCircleActionButton: View {
 }
 
 struct AlbumPrimaryActionBarMetrics: Equatable {
-    static let maximumHeight: CGFloat = 56
+    static let maximumHeight: CGFloat = 50
 
     let circleDimension: CGFloat
     let horizontalPadding: CGFloat = 16
-    let playHeight: CGFloat = 54
+    let playHeight: CGFloat = 48
     let playWidth: CGFloat
     let spacing: CGFloat
+    let contentWidth: CGFloat
+    let contentLeadingInset: CGFloat
 
     init(width: CGFloat) {
-        circleDimension = width < 360 ? 52 : 56
-        spacing = width < 360 ? 18 : 24
+        circleDimension = width < 360 ? 46 : 50
+        spacing = width < 360 ? 12 : 16
 
         let remainingWidth = width
             - (horizontalPadding * 2)
             - (circleDimension * 2)
             - (spacing * 2)
 
-        playWidth = min(max(remainingWidth, 0), 177)
+        playWidth = min(max(remainingWidth, 0), 160)
+        contentWidth = (circleDimension * 2) + playWidth + (spacing * 2)
+        contentLeadingInset = max((width - contentWidth) / 2, horizontalPadding)
     }
 }

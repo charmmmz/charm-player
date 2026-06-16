@@ -2896,6 +2896,7 @@ final class SearchManager {
             "playNow enqueue title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
             "itemId=\(item.id) serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
             "uri=\(uri) metadataId=\(metadataId) desc=\(metadataDesc)")
+        let playNowStart = Date()
 
         do {
             guard let uuid = activeSpeaker?.id else {
@@ -2908,23 +2909,69 @@ final class SearchManager {
                 || uri.contains("x-sonosapi-hls:")
 
             if isRadio {
+                let setURIStart = Date()
                 try await SonosAPI.setAVTransportURI(ip: ip, uri: uri, metadata: playMeta)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=set-radio-uri " +
+                    "ms=\(Int(Date().timeIntervalSince(setURIStart) * 1000))")
+                let playStart = Date()
                 try await SonosAPI.play(ip: ip)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=radio-play " +
+                    "ms=\(Int(Date().timeIntervalSince(playStart) * 1000))")
                 SonosLog.info(.playback, "playNow radio '\(item.title)'")
             } else {
                 // Both container and single-track paths take the same shape
                 // — only the source URI differs. Fold them to keep the log
                 // story simple ("playNow queue → track N").
+                let removeStart = Date()
                 try? await SonosAPI.removeAllTracksFromQueue(ip: ip)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=remove-queue " +
+                    "ms=\(Int(Date().timeIntervalSince(removeStart) * 1000))")
+                let addStart = Date()
                 let trackNr = try await SonosAPI.addURIToQueue(ip: ip, uri: uri, metadata: playMeta)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=add-uri-to-queue " +
+                    "ms=\(Int(Date().timeIntervalSince(addStart) * 1000))")
+                let setQueueStart = Date()
                 try await SonosAPI.setAVTransportToQueue(ip: ip, speakerUUID: uuid)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=set-transport-queue " +
+                    "ms=\(Int(Date().timeIntervalSince(setQueueStart) * 1000))")
+                let seekStart = Date()
                 try await SonosAPI.seekToTrack(ip: ip, trackNumber: trackNr)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=seek-track " +
+                    "ms=\(Int(Date().timeIntervalSince(seekStart) * 1000))")
+                let playStart = Date()
                 try await SonosAPI.play(ip: ip)
+                SonosLog.info(
+                    .playback,
+                    "playNow timing title='\(item.title)' step=queue-play " +
+                    "ms=\(Int(Date().timeIntervalSince(playStart) * 1000))")
                 SonosLog.info(.playback, "playNow queue '\(item.title)' → track \(trackNr)")
             }
 
+            let settleStart = Date()
             try? await Task.sleep(for: .milliseconds(playbackSettleDelayMs))
+            SonosLog.info(
+                .playback,
+                "playNow timing title='\(item.title)' step=settle-delay " +
+                "ms=\(Int(Date().timeIntervalSince(settleStart) * 1000))")
+            let refreshStart = Date()
             await manager.refreshState()
+            SonosLog.info(
+                .playback,
+                "playNow timing title='\(item.title)' step=refresh-state " +
+                "ms=\(Int(Date().timeIntervalSince(refreshStart) * 1000)) " +
+                "totalMs=\(Int(Date().timeIntervalSince(playNowStart) * 1000))")
             return true
         } catch {
             SonosLog.error(.playback, "playNow failed: \(error)")
@@ -3459,6 +3506,10 @@ final class SearchManager {
 
     func addToAppleMusicFavorites(resource: AppleMusicFavoriteResource) async throws {
         try await AppleMusicFavoritesClient.shared.addToFavorites(resource)
+    }
+
+    func removeFromAppleMusicFavorites(resource: AppleMusicFavoriteResource) async throws {
+        try await AppleMusicFavoritesClient.shared.removeFromFavorites(resource)
     }
 
     private func isAppleMusicItem(_ item: BrowseItem) -> Bool {

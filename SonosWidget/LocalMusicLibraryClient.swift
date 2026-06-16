@@ -198,6 +198,13 @@ struct LocalMusicLibraryClient {
         }
     }
 
+    func artistDetails(for artist: Artist) async throws -> Artist {
+        if let catalogID = LocalMusicAppleMusicURL.publicCatalogID(from: artist.id.rawValue, kind: .artist) {
+            return try await AppleMusicCatalogSearchClient.shared.artist(catalogID: catalogID)
+        }
+        return try await catalogArtistDetails(for: artist)
+    }
+
     func songs(for artist: Artist, limit: Int = 100) async throws -> [Song] {
         try await librarySongs(for: artist, limit: limit)
     }
@@ -370,6 +377,38 @@ struct LocalMusicLibraryClient {
             throw LocalMusicLibraryError.catalogMatchMissing
         }
         return try await catalogPlaylist.with(.tracks)
+    }
+
+    private func catalogArtistDetails(for artist: Artist) async throws -> Artist {
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: .artist,
+            title: artist.name,
+            artist: artist.name,
+            album: nil)
+        var request = MusicCatalogSearchRequest(term: term, types: [Artist.self])
+        request.limit = 12
+        let response = try await request.response()
+        let artists = Array(response.artists)
+        let items = artists.map {
+            AppleMusicCatalogSearchItem(
+                id: $0.id.rawValue,
+                type: .artist,
+                title: $0.name,
+                artist: "",
+                album: "",
+                artworkURLString: $0.artwork?.url(width: 400, height: 400)?.absoluteString,
+                duration: nil)
+        }
+        guard let match = LocalMusicCatalogMatcher.bestItem(
+            in: items,
+            kind: .artist,
+            title: artist.name,
+            artist: artist.name,
+            album: nil),
+              let catalogArtist = artists.first(where: { $0.id.rawValue == match.id }) else {
+            throw LocalMusicLibraryError.catalogMatchMissing
+        }
+        return try await catalogArtist.with(.fullAlbums, .singles, .latestRelease, .topSongs)
     }
 
     private func play(_ songs: [Song], startingAt song: Song) async throws {

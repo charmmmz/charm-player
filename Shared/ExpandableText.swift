@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Apple-Music–style expandable description.
 ///
-/// Renders text clamped to `collapsedLineLimit` with a small uppercase
-/// "MORE" toggle in the trailing-bottom corner. Tapping MORE opens a sheet
+/// Renders text clamped to `collapsedLineLimit` with a small Apple-Music-style
+/// "...more" toggle in the trailing-bottom corner. Tapping more opens a sheet
 /// that shows the full text in a scrollable view, with an X close button
 /// and the surfacing screen's `title` at the top — same pattern Apple Music
 /// uses for album / artist editorial copy.
@@ -19,29 +19,35 @@ struct ExpandableText: View {
     var font: Font = .subheadline
     var textColor: Color = .white.opacity(0.7)
     var toggleColor: Color = .white
+    var multilineTextAlignment: TextAlignment = .leading
 
     @State private var isPresented = false
     @State private var truncationDetected = false
 
+    private var attributedText: AttributedString {
+        ExpandableDescriptionTextFormatter.attributedString(from: text)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ZStack(alignment: .topLeading) {
-                Text(text)
+            ZStack(alignment: .bottomTrailing) {
+                Text(attributedText)
                     .font(font)
                     .foregroundStyle(textColor)
                     .lineLimit(collapsedLineLimit)
-                    .multilineTextAlignment(.leading)
+                    .multilineTextAlignment(multilineTextAlignment)
+                    .frame(maxWidth: .infinity, alignment: frameAlignment)
 
                 // Hidden probe that detects if the text would overflow when
                 // clamped — by comparing the height of an unclamped vs
                 // clamped copy of the same string.
-                Text(text)
+                Text(attributedText)
                     .font(font)
                     .lineLimit(collapsedLineLimit)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(
                         GeometryReader { clamped in
-                            Text(text)
+                            Text(attributedText)
                                 .font(font)
                                 .lineLimit(nil)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -56,26 +62,126 @@ struct ExpandableText: View {
                         }
                     )
                     .hidden()
-            }
 
-            if truncationDetected {
-                HStack {
-                    Spacer()
+                if truncationDetected {
                     Button {
                         isPresented = true
                     } label: {
-                        Text("MORE")
-                            .font(.caption.weight(.heavy))
-                            .foregroundStyle(toggleColor)
-                            .kerning(0.5)
+                        HStack(spacing: 0) {
+                            LinearGradient(
+                                colors: [
+                                    Color.clear,
+                                    Color.black.opacity(0.22)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: 30)
+
+                            Text(ExpandableDescriptionPolicy.moreLabel)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(toggleColor.opacity(0.86))
+                                .padding(.leading, 3)
+                                .background(Color.black.opacity(0.22))
+                        }
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
         .sheet(isPresented: $isPresented) {
-            ExpandedTextSheet(text: text, title: title)
+            ExpandedTextSheet(text: attributedText, title: title)
         }
+        .onChange(of: text) { _, _ in
+            truncationDetected = false
+        }
+    }
+
+    private var frameAlignment: Alignment {
+        switch multilineTextAlignment {
+        case .leading:
+            return .leading
+        case .center:
+            return .center
+        case .trailing:
+            return .trailing
+        }
+    }
+}
+
+enum ExpandableDescriptionPolicy {
+    static let moreLabel = "MORE"
+}
+
+struct ExpandableDescriptionTextSegment: Equatable, Sendable {
+    let text: String
+    let isItalic: Bool
+}
+
+enum ExpandableDescriptionTextFormatter {
+    static func plainText(from rawText: String) -> String {
+        segments(from: rawText).map(\.text).joined()
+    }
+
+    static func attributedString(from rawText: String) -> AttributedString {
+        var result = AttributedString()
+        for segment in segments(from: rawText) where !segment.text.isEmpty {
+            var part = AttributedString(segment.text)
+            if segment.isItalic {
+                part.inlinePresentationIntent = .emphasized
+            }
+            result += part
+        }
+        return result
+    }
+
+    static func segments(from rawText: String) -> [ExpandableDescriptionTextSegment] {
+        var segments: [ExpandableDescriptionTextSegment] = []
+        var buffer = ""
+        var isItalic = false
+        var index = rawText.startIndex
+
+        func flush() {
+            guard !buffer.isEmpty else { return }
+            segments.append(
+                ExpandableDescriptionTextSegment(text: buffer, isItalic: isItalic)
+            )
+            buffer.removeAll(keepingCapacity: true)
+        }
+
+        while index < rawText.endIndex {
+            if rawText[index] == "<",
+               let tagEnd = rawText[index...].firstIndex(of: ">") {
+                let tagBody = rawText[rawText.index(after: index)..<tagEnd]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+
+                switch tagBody {
+                case "i", "em":
+                    flush()
+                    isItalic = true
+                    index = rawText.index(after: tagEnd)
+                    continue
+                case "/i", "/em":
+                    flush()
+                    isItalic = false
+                    index = rawText.index(after: tagEnd)
+                    continue
+                case "br", "br/":
+                    buffer.append("\n")
+                    index = rawText.index(after: tagEnd)
+                    continue
+                default:
+                    break
+                }
+            }
+
+            buffer.append(rawText[index])
+            index = rawText.index(after: index)
+        }
+
+        flush()
+        return segments
     }
 }
 
@@ -83,7 +189,7 @@ struct ExpandableText: View {
 /// taps "MORE". Scrollable body with a top bar carrying an X dismiss button
 /// and (optional) title.
 private struct ExpandedTextSheet: View {
-    let text: String
+    let text: AttributedString
     let title: String
     @Environment(\.dismiss) private var dismiss
 

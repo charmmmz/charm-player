@@ -106,15 +106,6 @@ struct PlaylistDetailView: View {
     private var playlistMenu: some View {
         Menu {
             Button {
-                toggleFavorite()
-            } label: {
-                Label(isFavorited ? "Remove from Sonos Favorites" : "Add to Sonos Favorites",
-                      systemImage: isFavorited ? "heart.fill" : "heart")
-            }
-
-            Divider()
-
-            Button {
                 Task {
                     await searchManager.playNext(item: playlistItem, manager: manager)
                     showToast("Playing next")
@@ -154,19 +145,19 @@ struct PlaylistDetailView: View {
                     // Subtitle doubles as a short tagline for Apple Music
                     // ("Curated by Apple Music") and as a full editorial
                     // paragraph for NetEase Cloud Music. Use ExpandableText
-                    // so long blurbs get a "MORE" toggle that opens a
+                    // so long blurbs get a "...more" toggle that opens a
                     // fullscreen reader sheet (Apple Music pattern) instead
                     // of pushing the track list off-screen.
-                    if subtitleText.count > 80 {
-                        ExpandableText(text: subtitleText,
-                                       title: playlistTitle,
-                                       collapsedLineLimit: 3)
-                            .padding(.top, 4)
-                    } else {
-                        Text(subtitleText)
-                            .font(.subheadline)
-                            .foregroundStyle(themeColor ?? .secondary)
-                    }
+                    ExpandableText(
+                        text: subtitleText,
+                        title: playlistTitle,
+                        collapsedLineLimit: 3,
+                        font: .subheadline,
+                        textColor: themeColor ?? .secondary,
+                        toggleColor: .white.opacity(0.92),
+                        multilineTextAlignment: .center
+                    )
+                    .padding(.top, subtitleText.count > 80 ? 4 : 0)
                 }
 
                 if let total = response?.tracks?.total ?? response?.section?.total {
@@ -261,43 +252,19 @@ struct PlaylistDetailView: View {
     // MARK: - Action Bar (Play / Shuffle)
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            actionButton(icon: "play.fill", label: "Play", id: "play-all") {
-                playPlaylist()
-            }
-
-            actionButton(icon: "shuffle", label: "Shuffle", id: "shuffle") {
-                playPlaylistShuffled()
-            }
-        }
-        .padding(.horizontal)
-    }
-
-    private func actionButton(icon: String, label: String, id: String,
-                              action: @escaping () -> Void) -> some View {
-        let isActive = playingItemId == id
-        let isDisabled = playingItemId != nil && !isActive
-
-        return Button(action: action) {
-            HStack(spacing: 6) {
-                if isActive {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                } else {
-                    Image(systemName: icon)
-                        .font(.subheadline.weight(.semibold))
-                }
-                Text(label)
-                    .font(.subheadline.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(themeColor ?? .white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-            .foregroundStyle(.white)
-        }
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
+        AlbumPrimaryActionBar(
+            favoriteKind: .sonos,
+            tint: themeColor,
+            isPlayActive: playingItemId == "play-all",
+            isShuffleActive: playingItemId == "shuffle",
+            isFavoriteActive: isFavorited,
+            isFavoriteBusy: false,
+            isFavoriteDisabled: false,
+            isPlaybackDisabled: playingItemId != nil,
+            play: playPlaylist,
+            shuffle: playPlaylistShuffled,
+            toggleFavorite: toggleFavorite
+        )
     }
 
     // MARK: - Track List
@@ -788,14 +755,37 @@ struct PlaylistDetailView: View {
         playingItemId = "play-all"
 
         Task {
+            let totalStart = Date()
+            SonosLog.info(
+                .playlistDetail,
+                "Browse playlist play tapped title='\(playlistItem.title)' " +
+                "cloudType=\(playlistItem.cloudType ?? "nil") itemId=\(playlistItem.id) " +
+                "uri=\(playlistItem.uri ?? "nil")")
             if let ip = manager.selectedSpeaker?.playbackIP {
+                let playModeStart = Date()
                 let current = try? await SonosAPI.getPlayMode(ip: ip)
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist play timing title='\(playlistItem.title)' " +
+                    "step=get-play-mode ms=\(Int(Date().timeIntervalSince(playModeStart) * 1000)) " +
+                    "shuffle=\(current?.shuffle.description ?? "nil")")
                 if current?.shuffle == true {
+                    let setModeStart = Date()
                     try? await SonosAPI.setPlayMode(ip: ip, shuffle: false,
                                                     repeat: current?.repeat ?? .off)
+                    SonosLog.info(
+                        .playlistDetail,
+                        "Browse playlist play timing title='\(playlistItem.title)' " +
+                        "step=set-play-mode ms=\(Int(Date().timeIntervalSince(setModeStart) * 1000))")
                 }
             }
+            let playNowStart = Date()
             await searchManager.playNow(item: playlistItem, manager: manager)
+            SonosLog.info(
+                .playlistDetail,
+                "Browse playlist play timing title='\(playlistItem.title)' " +
+                "step=play-now ms=\(Int(Date().timeIntervalSince(playNowStart) * 1000)) " +
+                "totalMs=\(Int(Date().timeIntervalSince(totalStart) * 1000))")
             withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
         }
     }
@@ -805,12 +795,35 @@ struct PlaylistDetailView: View {
         playingItemId = "shuffle"
 
         Task {
+            let totalStart = Date()
+            SonosLog.info(
+                .playlistDetail,
+                "Browse playlist shuffle tapped title='\(playlistItem.title)' " +
+                "cloudType=\(playlistItem.cloudType ?? "nil") itemId=\(playlistItem.id) " +
+                "uri=\(playlistItem.uri ?? "nil")")
             if let ip = manager.selectedSpeaker?.playbackIP {
+                let playModeStart = Date()
                 let current = try? await SonosAPI.getPlayMode(ip: ip)
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist shuffle timing title='\(playlistItem.title)' " +
+                    "step=get-play-mode ms=\(Int(Date().timeIntervalSince(playModeStart) * 1000)) " +
+                    "shuffle=\(current?.shuffle.description ?? "nil")")
+                let setModeStart = Date()
                 try? await SonosAPI.setPlayMode(ip: ip, shuffle: true,
                                                 repeat: current?.repeat ?? .off)
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist shuffle timing title='\(playlistItem.title)' " +
+                    "step=set-play-mode ms=\(Int(Date().timeIntervalSince(setModeStart) * 1000))")
             }
+            let playNowStart = Date()
             await searchManager.playNow(item: playlistItem, manager: manager)
+            SonosLog.info(
+                .playlistDetail,
+                "Browse playlist shuffle timing title='\(playlistItem.title)' " +
+                "step=play-now ms=\(Int(Date().timeIntervalSince(playNowStart) * 1000)) " +
+                "totalMs=\(Int(Date().timeIntervalSince(totalStart) * 1000))")
             withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
         }
     }

@@ -104,6 +104,40 @@ final class AppleMusicFavoritesClientTests: XCTestCase {
         XCTAssertEqual(data.first?["type"] as? String, "songs")
     }
 
+    func testAddFavoritesRequestUsesPostJSONToFavoritesEndpoint() throws {
+        let resource = AppleMusicFavoriteResource(id: "1234567890", type: .songs)
+
+        let request = try AppleMusicFavoritesClient.addFavoritesRequest(for: resource)
+
+        XCTAssertEqual(request.url, AppleMusicFavoritesClient.favoritesURL)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(request.httpBody)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        let data = try XCTUnwrap(object["data"] as? [[String: Any]])
+        XCTAssertEqual(data.first?["id"] as? String, "1234567890")
+        XCTAssertEqual(data.first?["type"] as? String, "songs")
+    }
+
+    func testRemoveFavoritesRequestUsesDeleteJSONToFavoritesEndpoint() throws {
+        let resource = AppleMusicFavoriteResource(id: "pl.u-11zBXe4t8ZL1", type: .playlists)
+
+        let request = try AppleMusicFavoritesClient.removeFavoritesRequest(for: resource)
+
+        XCTAssertEqual(request.url, AppleMusicFavoritesClient.favoritesURL)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(request.httpBody)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        let data = try XCTUnwrap(object["data"] as? [[String: Any]])
+        XCTAssertEqual(data.first?["id"] as? String, "pl.u-11zBXe4t8ZL1")
+        XCTAssertEqual(data.first?["type"] as? String, "playlists")
+    }
+
     func testCatalogURLUsesStorefrontResourceTypeAndID() {
         let resource = AppleMusicFavoriteResource(id: "1234567890", type: .songs)
 
