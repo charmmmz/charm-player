@@ -670,9 +670,12 @@ final class LocalLibraryStore {
 
         logPlaylistArtworkPlan(items: items, plan: plan)
 
-        for (key, urlString) in plan.immediateURLStringsByKey {
-            catalogArtworkURLStrings[key.storageKey] = urlString
-            catalogArtworkCache.storeURLString(urlString, for: key)
+        if !plan.immediateURLStringsByKey.isEmpty {
+            var nextURLStrings = catalogArtworkURLStrings
+            for (key, urlString) in plan.immediateURLStringsByKey {
+                nextURLStrings[key.storageKey] = urlString
+            }
+            catalogArtworkURLStrings = nextURLStrings
         }
 
         let candidates = plan.lookupItems
@@ -770,6 +773,10 @@ final class LocalLibraryStore {
         }
 
         guard !Task.isCancelled else { return }
+        var resolvedURLStringsByKey: [LocalMusicCatalogArtworkKey: String] = [:]
+        var nextURLStrings = catalogArtworkURLStrings
+        var nextMissIDs = catalogArtworkMissIDs
+
         for result in results {
             let key = result.item.key
             if let urlString = result.urlString {
@@ -784,8 +791,8 @@ final class LocalLibraryStore {
                         "LSPlaylistTrackArtwork resolved title='\(result.item.title)' storageKey='\(key.storageKey)' " +
                             "url=\(Self.diagnosticURLStatus(urlString))")
                 }
-                catalogArtworkURLStrings[key.storageKey] = urlString
-                catalogArtworkCache.storeURLString(urlString, for: key)
+                nextURLStrings[key.storageKey] = urlString
+                resolvedURLStringsByKey[key] = urlString
             } else {
                 if result.item.kind == .playlist {
                     SonosLog.debug(
@@ -798,9 +805,17 @@ final class LocalLibraryStore {
                         "LSPlaylistTrackArtwork unresolved title='\(result.item.title)' storageKey='\(key.storageKey)' " +
                             "artist=\(Self.diagnosticValue(result.item.artist)) album=\(Self.diagnosticValue(result.item.album))")
                 }
-                catalogArtworkMissIDs.insert(key.storageKey)
+                nextMissIDs.insert(key.storageKey)
             }
         }
+
+        if catalogArtworkURLStrings != nextURLStrings {
+            catalogArtworkURLStrings = nextURLStrings
+        }
+        if catalogArtworkMissIDs != nextMissIDs {
+            catalogArtworkMissIDs = nextMissIDs
+        }
+        catalogArtworkCache.storeURLStrings(resolvedURLStringsByKey)
     }
 
     private static func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {

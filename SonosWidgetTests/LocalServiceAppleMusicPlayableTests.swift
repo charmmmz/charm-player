@@ -109,6 +109,24 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         XCTAssertEqual(playable?.duration, 312)
     }
 
+    func testPlayableNormalizesMusicKitArtworkURLForBrowseRecentlyPlayed() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .album,
+            rawID: "1440864059",
+            playParameterCandidates: ["album:1440864059"],
+            title: "Blonde",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            artworkURLString: "musicKit://artwork/library/ABC/600x600?aat=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FMusic125%2Fv4%2Fcover%2F600x600bb.jpg&at=item&id=1440864059",
+            duration: nil
+        )
+
+        XCTAssertEqual(
+            playable?.artworkURLString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/cover/400x400bb.jpg"
+        )
+    }
+
     func testStationNormalizesAppleMusicShareURL() {
         let playable = LocalServiceAppleMusicPlayable.make(
             kind: .station,

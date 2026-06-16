@@ -52,6 +52,25 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(browseItem.cloudType, "ALBUM")
     }
 
+    func testSearchItemNormalizesMusicKitArtworkURLForRows() {
+        let item = AppleMusicCatalogSearchItem(
+            id: "pl.u-11zBXe4t8ZL1",
+            type: .playlist,
+            title: "Imagine Dragons Essentials",
+            artist: "Apple Music Alternative",
+            album: "",
+            artworkURLString: "musicKit://artwork/library/ABC/600x600?aat=https%3A%2F%2Fis1-ssl.mzstatic.com%2Fimage%2Fthumb%2FFeatures125%2Fv4%2Fad%2F0e%2F48%2Fcover%2F600x600bb.jpg&at=playlist&id=pl.u-11zBXe4t8ZL1",
+            duration: nil
+        )
+
+        let browseItem = item.browseItem(localServiceId: 204)
+
+        XCTAssertEqual(
+            browseItem.albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/400x400bb.jpg"
+        )
+    }
+
     func testSearchItemKeepsTrackDurationAndAlbum() {
         let item = AppleMusicCatalogSearchItem(
             id: "1234567890",

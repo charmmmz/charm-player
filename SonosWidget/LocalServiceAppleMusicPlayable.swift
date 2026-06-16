@@ -119,6 +119,8 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
             return nil
         }
 
+        let normalizedArtworkURLString = normalizedArtworkURLString(artworkURLString)
+
         if kind == .station {
             let playbackKind = detectedStationPlaybackKind(in: candidates)
             let streamObjectID = playbackKind == .stream
@@ -128,14 +130,14 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
                 .localService,
                 "Station playable title='\(title)' rawID='\(rawID)' candidates=\(candidates) " +
                     "catalogID=\(catalogID) playbackKind=\(playbackKind?.diagnosticName ?? "nil") " +
-                    "streamObjectID=\(streamObjectID ?? "nil") art=\(artworkURLString ?? "nil")")
+                    "streamObjectID=\(streamObjectID ?? "nil") art=\(normalizedArtworkURLString ?? "nil")")
             return LocalServiceAppleMusicPlayable(
                 kind: kind,
                 catalogID: catalogID,
                 title: title,
                 artist: artist,
                 album: album,
-                artworkURLString: artworkURLString,
+                artworkURLString: normalizedArtworkURLString,
                 duration: duration,
                 stationPlaybackKind: playbackKind,
                 stationStreamObjectID: streamObjectID
@@ -148,7 +150,7 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
             title: title,
             artist: artist,
             album: album,
-            artworkURLString: artworkURLString,
+            artworkURLString: normalizedArtworkURLString,
             duration: duration
         )
     }
@@ -515,7 +517,14 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     }
 
     private static func artworkURLString(_ artwork: Artwork?) -> String? {
-        artwork?.url(width: 400, height: 400)?.absoluteString
+        guard let rawURLString = artwork?.url(width: 400, height: 400)?.absoluteString else {
+            return nil
+        }
+        return normalizedArtworkURLString(rawURLString)
+    }
+
+    private static func normalizedArtworkURLString(_ value: String?) -> String? {
+        LocalMusicArtworkURL.loadableURLString(from: value, shortSidePixels: 400)
     }
 }
 

@@ -129,4 +129,48 @@ final class LocalMusicArtworkURLTests: XCTestCase {
             url.absoluteString
         )
     }
+
+    func testArtworkSourcePrefersMusicKitArtworkOverRemoteURL() {
+        let remoteURL = URL(string: "https://example.com/cover.jpg")
+
+        XCTAssertEqual(
+            LocalMusicArtworkSourcePolicy.preferredKind(
+                hasMusicKitArtwork: true,
+                remoteURL: remoteURL
+            ),
+            .musicKit
+        )
+    }
+
+    func testArtworkSourceFallsBackToRemoteURL() {
+        let remoteURL = URL(string: "https://example.com/cover.jpg")
+
+        XCTAssertEqual(
+            LocalMusicArtworkSourcePolicy.preferredKind(
+                hasMusicKitArtwork: false,
+                remoteURL: remoteURL
+            ),
+            .remote
+        )
+    }
+
+    func testArtworkSourceUsesPlaceholderWithoutArtworkInputs() {
+        XCTAssertEqual(
+            LocalMusicArtworkSourcePolicy.preferredKind(
+                hasMusicKitArtwork: false,
+                remoteURL: nil
+            ),
+            .placeholder
+        )
+    }
+
+    func testDetailArtworkUsesFillForWidePlaylistCovers() {
+        XCTAssertEqual(
+            LocalMusicDetailArtworkPresentation.contentMode(
+                maximumWidth: 4320,
+                maximumHeight: 1080
+            ),
+            .fill
+        )
+    }
 }

@@ -99,9 +99,18 @@ nonisolated struct LocalMusicCatalogArtworkCache {
     }
 
     func storeURLString(_ urlString: String, for key: LocalMusicCatalogArtworkKey) {
-        guard isValidURLString(urlString) else { return }
+        storeURLStrings([key: urlString])
+    }
+
+    func storeURLStrings(_ urlStringsByKey: [LocalMusicCatalogArtworkKey: String]) {
+        let validEntries = urlStringsByKey.filter { isValidURLString($0.value) }
+        guard !validEntries.isEmpty else { return }
+
         var current = entries(for: urlStoreKey)
-        current[key.storageKey] = Entry(value: urlString, storedAt: now().timeIntervalSince1970)
+        let storedAt = now().timeIntervalSince1970
+        for (key, urlString) in validEntries {
+            current[key.storageKey] = Entry(value: urlString, storedAt: storedAt)
+        }
         store(current, for: urlStoreKey)
     }
 

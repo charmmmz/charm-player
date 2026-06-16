@@ -69,9 +69,13 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
         self.title = title
         self.artist = artist
         self.album = album
-        self.artworkURLString = artworkURLString
+        self.artworkURLString = Self.normalizedArtworkURLString(artworkURLString)
         self.duration = duration
         self.urlString = urlString
+    }
+
+    private static func normalizedArtworkURLString(_ value: String?) -> String? {
+        LocalMusicArtworkURL.loadableURLString(from: value, shortSidePixels: 400)
     }
 
     var sonosPlayableObjectID: String {
@@ -560,14 +564,9 @@ struct AppleMusicCatalogSearchClient {
     }
 
     private static func artworkURLString(_ artwork: Artwork?) -> String? {
-        validArtworkURLString(artwork?.url(width: 400, height: 400)?.absoluteString)
-    }
-
-    private static func validArtworkURLString(_ value: String?) -> String? {
-        guard let value,
-              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(value) else {
-            return nil
-        }
-        return value
+        LocalMusicArtworkURL.loadableURLString(
+            from: artwork?.url(width: 400, height: 400)?.absoluteString,
+            shortSidePixels: 400
+        )
     }
 }

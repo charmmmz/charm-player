@@ -14,6 +14,24 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
             "https://example.com/album.jpg")
     }
 
+    func testCachePersistsBatchURLStringsByArtworkKey() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let albumKey = LocalMusicCatalogArtworkKey(kind: .album, id: "album-1")
+        let playlistKey = LocalMusicCatalogArtworkKey(kind: .playlist, id: "playlist-1")
+        let invalidKey = LocalMusicCatalogArtworkKey(kind: .artist, id: "artist-1")
+
+        cache.storeURLStrings([
+            albumKey: "https://example.com/album.jpg",
+            playlistKey: "https://example.com/playlist.jpg",
+            invalidKey: "musickit://artwork/artist-1"
+        ])
+
+        XCTAssertEqual(cache.urlString(for: albumKey), "https://example.com/album.jpg")
+        XCTAssertEqual(cache.urlString(for: playlistKey), "https://example.com/playlist.jpg")
+        XCTAssertNil(cache.urlString(for: invalidKey))
+    }
+
     func testExpiredURLStringsAreIgnored() {
         var now = Date(timeIntervalSince1970: 1_000)
         let (cache, defaults, suiteName) = makeCache(now: { now }, ttl: 60)
