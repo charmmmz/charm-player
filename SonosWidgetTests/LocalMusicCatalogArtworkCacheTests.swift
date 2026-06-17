@@ -192,6 +192,69 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         XCTAssertEqual(plan.lookupItems.map(\.id), ["artist-1"])
     }
 
+    func testPlannerDeduplicatesLookupItemsByStorageKey() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let first = LocalMusicCatalogArtworkLookupItem(
+            id: "song-1",
+            kind: .song,
+            title: "First Song",
+            artist: "Artist",
+            album: "Album",
+            directArtworkURLString: nil)
+        let duplicate = LocalMusicCatalogArtworkLookupItem(
+            id: "song-1",
+            kind: .song,
+            title: "Duplicate Song",
+            artist: "Artist",
+            album: "Album",
+            directArtworkURLString: nil)
+        let other = LocalMusicCatalogArtworkLookupItem(
+            id: "song-2",
+            kind: .song,
+            title: "Other Song",
+            artist: "Artist",
+            album: "Album",
+            directArtworkURLString: nil)
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [first, duplicate, other],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            cache: cache)
+
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["song-1", "song-2"])
+        XCTAssertEqual(plan.lookupItems.map(\.title), ["First Song", "Other Song"])
+    }
+
+    func testPlannerSkipsInFlightLookupItems() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let inFlight = LocalMusicCatalogArtworkLookupItem(
+            id: "album-1",
+            kind: .album,
+            title: "In Flight",
+            artist: "Artist",
+            album: "In Flight",
+            directArtworkURLString: nil)
+        let other = LocalMusicCatalogArtworkLookupItem(
+            id: "album-2",
+            kind: .album,
+            title: "Other Album",
+            artist: "Artist",
+            album: "Other Album",
+            directArtworkURLString: nil)
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [inFlight, other],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            inFlightStorageKeys: [inFlight.key.storageKey],
+            cache: cache)
+
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["album-2"])
+    }
+
     func testResolverLimitsConcurrentLookups() async {
         let items = (0..<10).map {
             LocalMusicCatalogArtworkLookupItem(

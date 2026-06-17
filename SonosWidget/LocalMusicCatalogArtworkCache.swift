@@ -172,10 +172,12 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
         items: [LocalMusicCatalogArtworkLookupItem],
         inMemoryURLStrings: [String: String],
         inMemoryMissIDs: Set<String>,
+        inFlightStorageKeys: Set<String> = [],
         cache: LocalMusicCatalogArtworkCache
     ) -> LocalMusicCatalogArtworkPlan {
         var immediate: [LocalMusicCatalogArtworkKey: String] = [:]
         var lookupItems: [LocalMusicCatalogArtworkLookupItem] = []
+        var scheduledLookupStorageKeys: Set<String> = []
         let cacheSnapshot = cache.snapshot()
 
         for item in items {
@@ -190,6 +192,12 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
                 continue
             }
             if inMemoryMissIDs.contains(storageKey) {
+                continue
+            }
+            if inFlightStorageKeys.contains(storageKey) {
+                continue
+            }
+            guard scheduledLookupStorageKeys.insert(storageKey).inserted else {
                 continue
             }
             lookupItems.append(item)

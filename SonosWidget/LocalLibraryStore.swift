@@ -70,8 +70,9 @@ final class LocalLibraryStore {
     var hasLoaded = false
     var catalogArtworkURLStrings: [String: String] = [:]
 
-    @ObservationIgnored private var artworkLookupTask: Task<Void, Never>?
+    @ObservationIgnored private var artworkLookupTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var catalogArtworkMissIDs: Set<String> = []
+    @ObservationIgnored private var catalogArtworkInFlightIDs: Set<String> = []
 
     convenience init() {
         self.init(
@@ -128,7 +129,7 @@ final class LocalLibraryStore {
     }
 
     private func performReload(source: LocalLibraryRefreshSource) async {
-        artworkLookupTask?.cancel()
+        cancelCatalogArtworkLookupTasks()
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -165,6 +166,7 @@ final class LocalLibraryStore {
             catalogSearchResults = LocalServiceCatalogSearchResults()
             catalogArtworkURLStrings = [:]
             catalogArtworkMissIDs = []
+            catalogArtworkInFlightIDs = []
             hasLoaded = true
             scheduleCatalogArtworkLookup(for: artworkContent)
             SonosLog.info(
@@ -753,12 +755,6 @@ final class LocalLibraryStore {
             urlString: urlString)
         let directArtworkURLString = Self.directArtworkURLString(playlist.artwork)
 
-        SonosLog.debug(
-            .localService,
-            "Playlist artwork input title='\(playlist.name)' rawID='\(storageID)' " +
-                "catalogID=\(Self.diagnosticValue(catalogID)) curator=\(Self.diagnosticValue(playlist.curatorName)) " +
-                "url=\(Self.diagnosticValue(urlString)) directArtwork=\(Self.diagnosticURLStatus(directArtworkURLString))")
-
         return LocalMusicCatalogArtworkLookupItem(
             id: storageID,
             kind: .playlist,
@@ -777,12 +773,6 @@ final class LocalLibraryStore {
             artistName: track.artistName,
             albumTitle: track.albumTitle,
             directArtworkURLString: directArtworkURLString)
-        SonosLog.debug(
-            .localService,
-            "LSPlaylistTrackArtwork lookup-input title='\(track.title)' artist='\(track.artistName)' " +
-                "album=\(diagnosticValue(track.albumTitle)) storageKey='\(item.key.storageKey)' " +
-                "directArtwork=\(diagnosticURLStatus(directArtworkURLString)) " +
-                "hasMusicKitArtwork=\(item.hasMusicKitArtwork)")
         return item
     }
 
@@ -798,6 +788,7 @@ final class LocalLibraryStore {
             items: items,
             inMemoryURLStrings: catalogArtworkURLStrings,
             inMemoryMissIDs: catalogArtworkMissIDs,
+            inFlightStorageKeys: catalogArtworkInFlightIDs,
             cache: catalogArtworkCache)
 
         logPlaylistArtworkPlan(items: items, plan: plan)
@@ -813,9 +804,14 @@ final class LocalLibraryStore {
         let candidates = plan.lookupItems
         guard !candidates.isEmpty else { return }
 
-        artworkLookupTask?.cancel()
-        artworkLookupTask = Task { [weak self] in
-            await self?.resolveCatalogArtwork(for: candidates)
+        let batchID = UUID()
+        let inFlightStorageKeys = Set(candidates.map { $0.key.storageKey })
+        catalogArtworkInFlightIDs.formUnion(inFlightStorageKeys)
+        artworkLookupTasks[batchID] = Task { [weak self] in
+            await self?.resolveCatalogArtwork(
+                for: candidates,
+                batchID: batchID,
+                inFlightStorageKeys: inFlightStorageKeys)
         }
     }
 
@@ -827,23 +823,12 @@ final class LocalLibraryStore {
         let playlistTrackItems = items.filter(Self.isPlaylistTrackArtworkItem)
         guard !playlistItems.isEmpty || !playlistTrackItems.isEmpty else { return }
 
-        let lookupKeys = Set(plan.lookupItems.map(\.key))
         if !playlistItems.isEmpty {
             SonosLog.debug(
                 .localService,
                 "Playlist artwork plan total=\(playlistItems.count) " +
-                    "immediate=\(plan.immediateURLStringsByKey.count) lookup=\(plan.lookupItems.count)")
-        }
-
-        for item in playlistItems {
-            let key = item.key
-            let status = catalogArtworkPlanStatus(for: item, lookupKeys: lookupKeys, plan: plan)
-
-            SonosLog.debug(
-                .localService,
-                "Playlist artwork plan status=\(status) title='\(item.title)' storageKey='\(key.storageKey)' " +
-                    "catalogID=\(Self.diagnosticValue(item.catalogID)) " +
-                    "directArtwork=\(Self.diagnosticURLStatus(item.directArtworkURLString))")
+                    "immediate=\(plan.immediateURLStringsByKey.count) lookup=\(plan.lookupItems.count) " +
+                    "inflight=\(playlistItems.filter { catalogArtworkInFlightIDs.contains($0.key.storageKey) }.count)")
         }
 
         guard !playlistTrackItems.isEmpty else { return }
@@ -851,50 +836,19 @@ final class LocalLibraryStore {
         SonosLog.debug(
             .localService,
             "LSPlaylistTrackArtwork plan total=\(playlistTrackItems.count) " +
-                "immediate=\(plan.immediateURLStringsByKey.count) lookup=\(plan.lookupItems.count)")
-
-        for item in playlistTrackItems.prefix(40) {
-            let key = item.key
-            let status = catalogArtworkPlanStatus(for: item, lookupKeys: lookupKeys, plan: plan)
-            SonosLog.debug(
-                .localService,
-                "LSPlaylistTrackArtwork plan-item status=\(status) title='\(item.title)' " +
-                    "artist=\(Self.diagnosticValue(item.artist)) album=\(Self.diagnosticValue(item.album)) " +
-                    "storageKey='\(key.storageKey)' directArtwork=\(Self.diagnosticURLStatus(item.directArtworkURLString)) " +
-                    "hasMusicKitArtwork=\(item.hasMusicKitArtwork)")
-        }
-
-        if playlistTrackItems.count > 40 {
-            SonosLog.debug(
-                .localService,
-                "LSPlaylistTrackArtwork plan omitted=\(playlistTrackItems.count - 40)")
-        }
+                "immediate=\(plan.immediateURLStringsByKey.count) lookup=\(plan.lookupItems.count) " +
+                "inflight=\(playlistTrackItems.filter { catalogArtworkInFlightIDs.contains($0.key.storageKey) }.count)")
     }
 
-    private func catalogArtworkPlanStatus(
-        for item: LocalMusicCatalogArtworkLookupItem,
-        lookupKeys: Set<LocalMusicCatalogArtworkKey>,
-        plan: LocalMusicCatalogArtworkPlan
-    ) -> String {
-        let key = item.key
-        if plan.immediateURLStringsByKey[key] != nil {
-            return "immediate"
-        } else if lookupKeys.contains(key) {
-            return "scheduled"
-        } else if catalogArtworkURLStrings[key.storageKey] != nil {
-            return "skip-in-memory"
-        } else if catalogArtworkMissIDs.contains(key.storageKey) {
-            return "skip-miss"
-        } else if catalogArtworkCache.urlString(for: key) != nil {
-            return "skip-cache"
-        } else if item.hasMusicKitArtwork {
-            return "skip-direct-artwork"
-        } else {
-            return "skip-unknown"
+    private func resolveCatalogArtwork(
+        for items: [LocalMusicCatalogArtworkLookupItem],
+        batchID: UUID,
+        inFlightStorageKeys: Set<String>
+    ) async {
+        defer {
+            completeCatalogArtworkLookup(batchID: batchID, inFlightStorageKeys: inFlightStorageKeys)
         }
-    }
 
-    private func resolveCatalogArtwork(for items: [LocalMusicCatalogArtworkLookupItem]) async {
         SonosLog.debug(
             .search,
             "LocalService resolving catalog artwork for \(items.count) library items " +
@@ -948,6 +902,20 @@ final class LocalLibraryStore {
             catalogArtworkMissIDs = nextMissIDs
         }
         catalogArtworkCache.storeURLStrings(resolvedURLStringsByKey)
+    }
+
+    private func cancelCatalogArtworkLookupTasks() {
+        for task in artworkLookupTasks.values {
+            task.cancel()
+        }
+        artworkLookupTasks = [:]
+        catalogArtworkInFlightIDs = []
+    }
+
+    private func completeCatalogArtworkLookup(batchID: UUID, inFlightStorageKeys: Set<String>) {
+        guard artworkLookupTasks[batchID] != nil else { return }
+        artworkLookupTasks[batchID] = nil
+        catalogArtworkInFlightIDs.subtract(inFlightStorageKeys)
     }
 
     private static func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {
