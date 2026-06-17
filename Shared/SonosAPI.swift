@@ -543,14 +543,36 @@ enum SonosAPI {
                                           position: Int = 0, asNext: Bool = false) async throws -> Int {
         let escapedURI = escapeXML(uri)
         let escapedMeta = escapeXML(metadata)
-        let xml = try await soap(ip: ip, endpoint: avTransport, service: "AVTransport",
-                           action: "AddURIToQueue",
-                           body: "<InstanceID>0</InstanceID>" +
-                           "<EnqueuedURI>\(escapedURI)</EnqueuedURI>" +
-                           "<EnqueuedURIMetaData>\(escapedMeta)</EnqueuedURIMetaData>" +
-                           "<DesiredFirstTrackNumberEnqueued>\(position)</DesiredFirstTrackNumberEnqueued>" +
-                           "<EnqueueAsNext>\(asNext ? 1 : 0)</EnqueueAsNext>")
-        return Int(extractTag("FirstTrackNumberEnqueued", from: xml) ?? "1") ?? 1
+        let startedAt = Date()
+        SonosLog.debug(
+            .playbackLink,
+            "SOAP AddURIToQueue request host=\(ip) position=\(position) asNext=\(asNext) " +
+                "uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
+        do {
+            let xml = try await soap(ip: ip, endpoint: avTransport, service: "AVTransport",
+                               action: "AddURIToQueue",
+                               body: "<InstanceID>0</InstanceID>" +
+                               "<EnqueuedURI>\(escapedURI)</EnqueuedURI>" +
+                               "<EnqueuedURIMetaData>\(escapedMeta)</EnqueuedURIMetaData>" +
+                               "<DesiredFirstTrackNumberEnqueued>\(position)</DesiredFirstTrackNumberEnqueued>" +
+                               "<EnqueueAsNext>\(asNext ? 1 : 0)</EnqueueAsNext>")
+            let track = Int(extractTag("FirstTrackNumberEnqueued", from: xml) ?? "1") ?? 1
+            SonosLog.debug(
+                .playbackLink,
+                "SOAP AddURIToQueue success host=\(ip) firstTrack=\(track) " +
+                    "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                    "uri=\(SonosLog.playbackLinkValue(uri))")
+            return track
+        } catch {
+            SonosLog.error(
+                .playbackLink,
+                "SOAP AddURIToQueue failed host=\(ip) position=\(position) asNext=\(asNext) " +
+                    "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                    "error=\(error) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                    "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
+            throw error
+        }
     }
 
     nonisolated static func addMultipleURIsToQueue(ip: String,
@@ -559,19 +581,41 @@ enum SonosAPI {
                                                    containerMetadata: String = "",
                                                    position: Int = 0,
                                                    asNext: Bool = false) async throws {
+        let startedAt = Date()
+        SonosLog.debug(
+            .playbackLink,
+            "SOAP AddMultipleURIsToQueue request host=\(ip) count=\(items.count) " +
+                "position=\(position) asNext=\(asNext) " +
+                "containerURI=\(SonosLog.playbackLinkValue(containerURI)) " +
+                "firstURI=\(SonosLog.playbackLinkValue(items.first?.uri)) " +
+                "lastURI=\(SonosLog.playbackLinkValue(items.last?.uri)) " +
+                "containerMetadata=\(SonosLog.playbackMetadataSummary(containerMetadata))")
         for body in addMultipleURIsToQueueBodies(
             items: items,
             containerURI: containerURI,
             containerMetadata: containerMetadata,
             position: position,
             asNext: asNext) {
-            _ = try await soap(
-                ip: ip,
-                endpoint: avTransport,
-                service: "AVTransport",
-                action: "AddMultipleURIsToQueue",
-                body: body)
+            do {
+                _ = try await soap(
+                    ip: ip,
+                    endpoint: avTransport,
+                    service: "AVTransport",
+                    action: "AddMultipleURIsToQueue",
+                    body: body)
+            } catch {
+                SonosLog.error(
+                    .playbackLink,
+                    "SOAP AddMultipleURIsToQueue failed host=\(ip) count=\(items.count) " +
+                        "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                        "error=\(error) firstURI=\(SonosLog.playbackLinkValue(items.first?.uri))")
+                throw error
+            }
         }
+        SonosLog.debug(
+            .playbackLink,
+            "SOAP AddMultipleURIsToQueue success host=\(ip) count=\(items.count) " +
+                "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000))")
     }
 
     nonisolated static func addMultipleURIsToQueueBodies(items: [SonosQueuedURI],
@@ -640,19 +684,43 @@ enum SonosAPI {
     }
 
     nonisolated static func setAVTransportToQueue(ip: String, speakerUUID: String) async throws {
+        let queueURI = "x-rincon-queue:\(speakerUUID)#0"
+        SonosLog.debug(
+            .playbackLink,
+            "SOAP SetAVTransportURI queue request host=\(ip) uri=\(SonosLog.playbackLinkValue(queueURI))")
         _ = try await soap(ip: ip, endpoint: avTransport, service: "AVTransport",
                            action: "SetAVTransportURI",
                            body: "<InstanceID>0</InstanceID>" +
-                           "<CurrentURI>x-rincon-queue:\(speakerUUID)#0</CurrentURI>" +
+                           "<CurrentURI>\(queueURI)</CurrentURI>" +
                            "<CurrentURIMetaData></CurrentURIMetaData>")
     }
 
     nonisolated static func setAVTransportURI(ip: String, uri: String, metadata: String = "") async throws {
-        _ = try await soap(ip: ip, endpoint: avTransport, service: "AVTransport",
-                           action: "SetAVTransportURI",
-                           body: "<InstanceID>0</InstanceID>" +
-                           "<CurrentURI>\(escapeXML(uri))</CurrentURI>" +
-                           "<CurrentURIMetaData>\(escapeXML(metadata))</CurrentURIMetaData>")
+        let startedAt = Date()
+        SonosLog.debug(
+            .playbackLink,
+            "SOAP SetAVTransportURI request host=\(ip) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
+        do {
+            _ = try await soap(ip: ip, endpoint: avTransport, service: "AVTransport",
+                               action: "SetAVTransportURI",
+                               body: "<InstanceID>0</InstanceID>" +
+                               "<CurrentURI>\(escapeXML(uri))</CurrentURI>" +
+                               "<CurrentURIMetaData>\(escapeXML(metadata))</CurrentURIMetaData>")
+            SonosLog.debug(
+                .playbackLink,
+                "SOAP SetAVTransportURI success host=\(ip) " +
+                    "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                    "uri=\(SonosLog.playbackLinkValue(uri))")
+        } catch {
+            SonosLog.error(
+                .playbackLink,
+                "SOAP SetAVTransportURI failed host=\(ip) " +
+                    "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                    "error=\(error) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                    "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
+            throw error
+        }
     }
 
     // MARK: - Discovery

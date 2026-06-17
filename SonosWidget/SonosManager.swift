@@ -1078,6 +1078,12 @@ final class SonosManager {
             errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
             return false
         }
+        let startedAt = Date()
+        SonosLog.debug(
+            .playbackLink,
+            "manager.playNext start ip=\(ip) isPlayingFromQueue=\(isPlayingFromQueue) " +
+                "uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
         do {
             // Sonos's `EnqueueAsNext=1` flag is unreliable across
             // firmwares — when an album/playlist is playing it often
@@ -1091,16 +1097,30 @@ final class SonosManager {
             // legacy append-at-end behavior.
             if isPlayingFromQueue,
                let current = try await SonosAPI.getCurrentTrackNumber(ip: ip) {
+                SonosLog.debug(
+                    .playbackLink,
+                    "manager.playNext insert ip=\(ip) currentTrack=\(current) " +
+                        "position=\(current + 1) asNext=true")
                 try await SonosAPI.addURIToQueue(
                     ip: ip, uri: uri, metadata: metadata,
                     position: current + 1, asNext: true)
             } else {
+                SonosLog.debug(
+                    .playbackLink,
+                    "manager.playNext insert ip=\(ip) currentTrack=nil position=0 asNext=true")
                 try await SonosAPI.addURIToQueue(
                     ip: ip, uri: uri, metadata: metadata, asNext: true)
             }
             await loadQueue()
+            SonosLog.debug(
+                .playbackLink,
+                "manager.playNext success ip=\(ip) ms=\(Int(Date().timeIntervalSince(startedAt) * 1000))")
             return true
         } catch {
+            SonosLog.error(
+                .playbackLink,
+                "manager.playNext failed ip=\(ip) ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
+                    "error=\(error) uri=\(SonosLog.playbackLinkValue(uri))")
             errorMessage = error.localizedDescription
             return false
         }

@@ -35,6 +35,7 @@ enum SonosLog {
         case navItem        = "NavItem"
         case sonosEvents    = "SonosEvents"
         case networkAudit   = "NetworkAudit"
+        case playbackLink   = "PlaybackLink"
     }
 
     /// Always logged. Use sparingly for unexpected failures worth reporting.
@@ -56,6 +57,26 @@ enum SonosLog {
         #if DEBUG
         emit(category, suffix: nil, message())
         #endif
+    }
+
+    nonisolated static func playbackLinkValue(_ value: String?, maxLength: Int = 2_048) -> String {
+        guard let value, !value.isEmpty else { return "nil" }
+        let singleLine = value
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+        guard singleLine.count > maxLength else { return singleLine }
+        let clipped = singleLine.prefix(maxLength)
+        return "\(clipped)…[truncated \(singleLine.count - maxLength) chars]"
+    }
+
+    nonisolated static func playbackMetadataSummary(_ metadata: String) -> String {
+        let itemId = firstXMLAttribute(named: "id", inTags: ["item", "container"], from: metadata) ?? "nil"
+        let desc = firstXMLTag(named: "desc", from: metadata) ?? "nil"
+        let hasArt = metadata.contains("albumArtURI")
+        let tag = metadata.contains("<container") ? "container" : (metadata.contains("<item") ? "item" : "unknown")
+        return "bytes=\(metadata.utf8.count) tag=\(tag) itemId=\(playbackLinkValue(itemId, maxLength: 240)) " +
+            "desc=\(playbackLinkValue(desc, maxLength: 240)) hasArt=\(hasArt)"
     }
 
     private nonisolated static func emit(_ category: Category, suffix: String?, _ message: String) {
@@ -102,6 +123,7 @@ enum SonosLog {
         .cloudSearch,
         .localService,
         .networkAudit,
+        .playbackLink,
         .playback,
         .station,
         .soap
@@ -118,4 +140,33 @@ enum SonosLog {
         ISO8601DateFormatter().string(from: Date())
     }
     #endif
+
+    private nonisolated static func firstXMLAttribute(
+        named attribute: String,
+        inTags tags: [String],
+        from xml: String
+    ) -> String? {
+        for tag in tags {
+            let pattern = #"<\#(tag)\s+[^>]*\#(attribute)="([^"]+)""#
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(xml.startIndex..., in: xml)
+            guard let match = regex.firstMatch(in: xml, range: range),
+                  let valueRange = Range(match.range(at: 1), in: xml) else {
+                continue
+            }
+            return String(xml[valueRange])
+        }
+        return nil
+    }
+
+    private nonisolated static func firstXMLTag(named tag: String, from xml: String) -> String? {
+        let escaped = NSRegularExpression.escapedPattern(for: tag)
+        let pattern = #"<\#(escaped)(?:\s[^>]*)?>(.*?)</\#(escaped)>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators),
+              let match = regex.firstMatch(in: xml, range: NSRange(xml.startIndex..., in: xml)),
+              let valueRange = Range(match.range(at: 1), in: xml) else {
+            return nil
+        }
+        return String(xml[valueRange])
+    }
 }

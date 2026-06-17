@@ -406,6 +406,16 @@ final class LocalLibraryStore {
             case .favorite:
                 return
             case .playNext, .addToQueue:
+                let playableKind = playable?.kind.cloudType ?? "nil"
+                let playableID = SonosLog.playbackLinkValue(playable?.catalogID, maxLength: 640)
+                let fallbackKindValue = fallbackKind?.cloudType ?? "nil"
+                let fallbackTitleValue = fallbackTitle ?? "nil"
+                let queueActionMessage = "LocalService queue action=\(action.id) displayID=\(displayID) " +
+                    "playableKind=\(playableKind) playableID=\(playableID) " +
+                    "fallbackKind=\(fallbackKindValue) fallbackTitle='\(fallbackTitleValue)'"
+                SonosLog.debug(
+                    .playbackLink,
+                    queueActionMessage)
                 let item = try await resolveQueueBrowseItem(
                     playable: playable,
                     fallbackKind: fallbackKind,
@@ -514,10 +524,23 @@ final class LocalLibraryStore {
         var didAttemptResolution = false
         if let playable {
             didAttemptResolution = true
+            let primaryCatalogID = SonosLog.playbackLinkValue(playable.catalogID, maxLength: 640)
+            let primaryResolveMessage = "LocalService queue resolve primary kind=\(playable.kind.cloudType) " +
+                "title='\(playable.title)' catalogID=\(primaryCatalogID)"
+            SonosLog.debug(
+                .playbackLink,
+                primaryResolveMessage)
             if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
                 playable,
                 manager: manager
             ) {
+                let itemID = SonosLog.playbackLinkValue(item.id, maxLength: 640)
+                let itemURI = SonosLog.playbackLinkValue(item.uri)
+                let primaryResolvedMessage = "LocalService queue resolved primary title='\(item.title)' " +
+                    "itemId=\(itemID) uri=\(itemURI)"
+                SonosLog.debug(
+                    .playbackLink,
+                    primaryResolvedMessage)
                 return item
             }
         }
@@ -532,10 +555,23 @@ final class LocalLibraryStore {
            ),
            catalogPlayable.id != playable?.id {
             didAttemptResolution = true
+            let fallbackCatalogID = SonosLog.playbackLinkValue(catalogPlayable.catalogID, maxLength: 640)
+            let fallbackResolveMessage = "LocalService queue resolve fallback kind=\(catalogPlayable.kind.cloudType) " +
+                "title='\(catalogPlayable.title)' catalogID=\(fallbackCatalogID)"
+            SonosLog.debug(
+                .playbackLink,
+                fallbackResolveMessage)
             if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
                 catalogPlayable,
                 manager: manager
             ) {
+                let itemID = SonosLog.playbackLinkValue(item.id, maxLength: 640)
+                let itemURI = SonosLog.playbackLinkValue(item.uri)
+                let fallbackResolvedMessage = "LocalService queue resolved fallback title='\(item.title)' " +
+                    "itemId=\(itemID) uri=\(itemURI)"
+                SonosLog.debug(
+                    .playbackLink,
+                    fallbackResolvedMessage)
                 return item
             }
         }

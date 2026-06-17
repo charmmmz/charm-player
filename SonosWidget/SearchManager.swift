@@ -1430,6 +1430,14 @@ final class SearchManager {
             "LocalService play kind=\(playable.kind) catalogID=\(playable.catalogID) " +
             "objectID=\(item.id) localSid=\(item.serviceId.map(String.init) ?? "nil") " +
             "cloudServiceId=\(serviceId) accountId=\(accountId) uri=\(item.uri ?? "nil")")
+        SonosLog.debug(
+            .playbackLink,
+            "LocalService resolved kind=\(playable.kind.cloudType) title='\(playable.title)' " +
+                "catalogID=\(SonosLog.playbackLinkValue(playable.catalogID, maxLength: 640)) " +
+                "browseId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+                "cloudType=\(item.cloudType ?? "nil") localSid=\(item.serviceId.map(String.init) ?? "nil") " +
+                "uri=\(SonosLog.playbackLinkValue(item.uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(playbackMetadata(for: item)))")
 
         return item
     }
@@ -2784,6 +2792,12 @@ final class SearchManager {
         let queueItems = playableItems.map {
             SonosQueuedURI(uri: $0.uri ?? "", metadata: playbackMetadata(for: $0))
         }
+        SonosLog.debug(
+            .playbackLink,
+            "playNow displayed-tracks start title='\(displayTitle)' count=\(queueItems.count) " +
+                "speaker=\(ip) firstURI=\(SonosLog.playbackLinkValue(queueItems.first?.uri)) " +
+                "lastURI=\(SonosLog.playbackLinkValue(queueItems.last?.uri)) " +
+                "firstMetadata=\(queueItems.first.map { SonosLog.playbackMetadataSummary($0.metadata) } ?? "nil")")
 
         if let first = playableItems.first {
             pushRecentlyPlayed(first)
@@ -2896,6 +2910,13 @@ final class SearchManager {
             "playNow enqueue title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
             "itemId=\(item.id) serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
             "uri=\(uri) metadataId=\(metadataId) desc=\(metadataDesc)")
+        SonosLog.debug(
+            .playbackLink,
+            "playNow resolved title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
+                "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+                "serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
+                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(playMeta))")
         let playNowStart = Date()
 
         do {
@@ -2995,7 +3016,15 @@ final class SearchManager {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return false
         }
-        return await manager.playNext(uri: uri, metadata: playbackMetadata(for: item))
+        let metadata = playbackMetadata(for: item)
+        SonosLog.debug(
+            .playbackLink,
+            "playNext item title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
+                "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+                "serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
+                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
+        return await manager.playNext(uri: uri, metadata: metadata)
     }
 
     /// Start a personalized radio station from an artist.
@@ -3329,6 +3358,13 @@ final class SearchManager {
             return false
         }
         let meta = playbackMetadata(for: item)
+        SonosLog.debug(
+            .playbackLink,
+            "addToQueue item title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
+                "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+                "serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
+                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(meta))")
         do {
             try await SonosAPI.addURIToQueue(ip: ip, uri: uri, metadata: meta)
             await manager.loadQueue()
