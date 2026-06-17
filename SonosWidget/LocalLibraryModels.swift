@@ -586,9 +586,9 @@ nonisolated enum LocalMusicPlaylistTrackArtworkLookup {
     static func storageID(title: String, artistName: String, albumTitle: String?) -> String {
         [
             "playlist-track",
-            clean(artistName),
-            clean(albumTitle),
-            clean(title)
+            storageComponent(artistName),
+            storageComponent(albumTitle),
+            storageComponent(title)
         ].joined(separator: ":")
     }
 
@@ -611,5 +611,9 @@ nonisolated enum LocalMusicPlaylistTrackArtworkLookup {
         (value ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private static func storageComponent(_ value: String?) -> String {
+        clean(value).lowercased()
     }
 }

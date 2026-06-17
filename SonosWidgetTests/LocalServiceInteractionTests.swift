@@ -405,13 +405,26 @@ final class LocalServiceInteractionTests: XCTestCase {
             albumTitle: "Good Will Hunting",
             directArtworkURLString: nil)
 
-        XCTAssertEqual(item.id, "playlist-track:Elliott Smith:Good Will Hunting:Miss Misery")
+        XCTAssertEqual(item.id, "playlist-track:elliott smith:good will hunting:miss misery")
         XCTAssertEqual(item.kind, .song)
         XCTAssertEqual(item.title, "Miss Misery")
         XCTAssertEqual(item.artist, "Elliott Smith")
         XCTAssertEqual(item.album, "Good Will Hunting")
         XCTAssertEqual(item.hasMusicKitArtwork, false)
         XCTAssertNil(item.directArtworkURLString)
+    }
+
+    func testPlaylistTrackArtworkLookupStorageIDIsCaseInsensitive() {
+        let first = LocalMusicPlaylistTrackArtworkLookup.storageID(
+            title: " Miss   Misery ",
+            artistName: "Elliott Smith",
+            albumTitle: "Good Will Hunting")
+        let second = LocalMusicPlaylistTrackArtworkLookup.storageID(
+            title: "miss misery",
+            artistName: "elliott smith",
+            albumTitle: "good will hunting")
+
+        XCTAssertEqual(first, second)
     }
 
     func testPlaylistTrackArtworkSelectionPrefersCatalogArtworkOverPlaylistCover() {
