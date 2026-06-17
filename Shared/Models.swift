@@ -301,6 +301,31 @@ nonisolated enum CachedArtworkFetchPolicy {
     }
 }
 
+nonisolated enum AlbumArtSharedCacheRecoveryPolicy {
+    static func reusableArtworkData(
+        currentURLString: String?,
+        cachedDataURLString: String?,
+        cachedData: Data?
+    ) -> Data? {
+        guard let cachedData,
+              !cachedData.isEmpty,
+              let currentURLString = normalizedURLString(currentURLString),
+              let cachedDataURLString = normalizedURLString(cachedDataURLString),
+              currentURLString == cachedDataURLString else {
+            return nil
+        }
+        return cachedData
+    }
+
+    private static func normalizedURLString(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
 // MARK: - TV Audio Format
 
 /// Decoded soundbar audio-input format. Sourced from
@@ -1101,24 +1126,34 @@ extension SonosActivityAttributes.ContentState {
     }
 
     var preferredAlbumArtData: Data? {
-        LiveActivityArtworkData.resolve(
+        let cachedArtworkData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+            currentURLString: SharedStorage.cachedAlbumArtURL,
+            cachedDataURLString: SharedStorage.cachedAlbumArtDataURL,
+            cachedData: SharedStorage.albumArtData
+        )
+        return LiveActivityArtworkData.resolve(
             for: self,
             cachedTrackTitle: SharedStorage.cachedTrackTitle,
             cachedArtist: SharedStorage.cachedArtist,
             cachedAlbum: SharedStorage.cachedAlbum,
             cachedPlaybackSourceRaw: SharedStorage.cachedPlaybackSource,
-            cachedArtworkData: SharedStorage.albumArtData
+            cachedArtworkData: cachedArtworkData
         )
     }
 
     var compactAlbumArtData: Data? {
-        LiveActivityArtworkData.resolveCompact(
+        let cachedArtworkData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+            currentURLString: SharedStorage.cachedAlbumArtURL,
+            cachedDataURLString: SharedStorage.cachedAlbumArtDataURL,
+            cachedData: SharedStorage.albumArtData
+        )
+        return LiveActivityArtworkData.resolveCompact(
             for: self,
             cachedTrackTitle: SharedStorage.cachedTrackTitle,
             cachedArtist: SharedStorage.cachedArtist,
             cachedAlbum: SharedStorage.cachedAlbum,
             cachedPlaybackSourceRaw: SharedStorage.cachedPlaybackSource,
-            cachedArtworkData: SharedStorage.albumArtData
+            cachedArtworkData: cachedArtworkData
         )
     }
 

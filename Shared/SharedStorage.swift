@@ -129,6 +129,17 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "albumArtURL") }
     }
 
+    nonisolated static var cachedAlbumArtDataURL: String? {
+        get { defaults.string(forKey: "albumArtDataURL") }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: "albumArtDataURL")
+            } else {
+                defaults.removeObject(forKey: "albumArtDataURL")
+            }
+        }
+    }
+
     nonisolated static var cachedVolume: Int {
         get { defaults.integer(forKey: "volume") }
         set { defaults.set(newValue, forKey: "volume") }

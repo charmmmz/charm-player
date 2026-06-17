@@ -297,8 +297,12 @@ enum IntentHelper {
             return nil
         }
 
-        let previousAlbumArtURL = SharedStorage.cachedAlbumArtURL
-        let hasCachedAlbumArtData = SharedStorage.albumArtData != nil
+        let cachedAlbumArtDataURL = SharedStorage.cachedAlbumArtDataURL
+        let cachedAlbumArtData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+            currentURLString: info.albumArtURL,
+            cachedDataURLString: cachedAlbumArtDataURL,
+            cachedData: SharedStorage.albumArtData
+        )
         SharedStorage.cachedTrackTitle = info.title
         SharedStorage.cachedArtist = info.artist
         SharedStorage.cachedAlbum = info.album
@@ -313,12 +317,13 @@ enum IntentHelper {
 
         if CachedArtworkFetchPolicy.shouldFetch(
             incomingURLString: info.albumArtURL,
-            cachedURLString: previousAlbumArtURL,
-            hasCachedData: hasCachedAlbumArtData
+            cachedURLString: cachedAlbumArtDataURL,
+            hasCachedData: cachedAlbumArtData != nil
         ),
            let urlStr = info.albumArtURL, let url = URL(string: urlStr),
            let (data, _) = try? await noProxySession.data(from: url) {
             SharedStorage.albumArtData = data
+            SharedStorage.cachedAlbumArtDataURL = urlStr
         }
 
         return info

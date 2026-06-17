@@ -127,6 +127,32 @@ final class RelayManagerTests: XCTestCase {
         )
     }
 
+    func testArtworkProxyURLUsesRelayBaseURLAndEncodesSourceArtworkURL() throws {
+        let url = try XCTUnwrap(
+            RelayClient.artworkProxyURL(
+                baseURL: URL(string: "http://192.168.50.2:8787")!,
+                sourceURLString: " http://192.168.50.25:1400/getaa?s=1&u=x y "
+            )
+        )
+
+        XCTAssertEqual(url.scheme, "http")
+        XCTAssertEqual(url.host, "192.168.50.2")
+        XCTAssertEqual(url.port, 8787)
+        XCTAssertEqual(url.path, "/api/artwork")
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(
+            components.queryItems?.first(where: { $0.name == "url" })?.value,
+            "http://192.168.50.25:1400/getaa?s=1&u=x y"
+        )
+    }
+
+    func testArtworkProxyURLRejectsMissingOrUnsupportedSourceArtworkURL() {
+        let baseURL = URL(string: "http://192.168.50.2:8787")!
+
+        XCTAssertNil(RelayClient.artworkProxyURL(baseURL: baseURL, sourceURLString: " "))
+        XCTAssertNil(RelayClient.artworkProxyURL(baseURL: baseURL, sourceURLString: "file:///tmp/cover.jpg"))
+    }
+
     func testHealthResponseDecodesUnknownHueAmbienceRenderModeAsNil() throws {
         let data = Data("""
         {

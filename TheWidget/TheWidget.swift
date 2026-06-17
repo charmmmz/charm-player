@@ -72,13 +72,18 @@ struct SonosProvider: TimelineProvider {
     private func cachedEntry() -> SonosEntry {
         guard SharedStorage.speakerIP != nil else { return .unconfigured }
         let source = SharedStorage.cachedPlaybackSource.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+        let albumArtData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+            currentURLString: SharedStorage.cachedAlbumArtURL,
+            cachedDataURLString: SharedStorage.cachedAlbumArtDataURL,
+            cachedData: SharedStorage.albumArtData
+        )
         return SonosEntry(
             date: .now,
             trackTitle: SharedStorage.cachedTrackTitle ?? "Not Playing",
             artist: SharedStorage.cachedArtist ?? "—",
             album: SharedStorage.cachedAlbum ?? "",
             isPlaying: SharedStorage.isPlaying,
-            albumArtData: SharedStorage.albumArtData,
+            albumArtData: albumArtData,
             isConfigured: true,
             speakerName: SharedStorage.speakerName,
             groupMemberCount: SharedStorage.cachedGroupMemberCount,
@@ -106,7 +111,7 @@ struct SonosProvider: TimelineProvider {
                 SharedStorage.isPlaying = (state == .playing)
             }
             let isPlaying = SharedStorage.isPlaying
-            let previousAlbumArtURL = SharedStorage.cachedAlbumArtURL
+            let cachedAlbumArtDataURL = SharedStorage.cachedAlbumArtDataURL
             SharedStorage.cachedTrackTitle = info.title
             SharedStorage.cachedArtist = info.artist
             SharedStorage.cachedAlbum = info.album
@@ -114,10 +119,14 @@ struct SonosProvider: TimelineProvider {
             SharedStorage.cachedPlaybackSource = info.source.rawValue
 
             // Album art — extract dominant color if track changed.
-            var artData = SharedStorage.albumArtData
+            var artData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+                currentURLString: info.albumArtURL,
+                cachedDataURLString: cachedAlbumArtDataURL,
+                cachedData: SharedStorage.albumArtData
+            )
             if CachedArtworkFetchPolicy.shouldFetch(
                 incomingURLString: info.albumArtURL,
-                cachedURLString: previousAlbumArtURL,
+                cachedURLString: cachedAlbumArtDataURL,
                 hasCachedData: artData != nil
             ),
                let urlStr = info.albumArtURL,
@@ -127,6 +136,7 @@ struct SonosProvider: TimelineProvider {
                 if let (data, _) = try? await noProxySession.data(for: req) {
                     artData = data
                     SharedStorage.albumArtData = data
+                    SharedStorage.cachedAlbumArtDataURL = urlStr
                     if let uiImage = UIImage(data: data) {
                         SharedStorage.cachedDominantColorHex = uiImage.dominantColorHex()
                     }

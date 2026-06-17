@@ -647,6 +647,7 @@ final class SonosManager {
 
         if let data = image.jpegData(compressionQuality: 0.9) {
             SharedStorage.albumArtData = data
+            SharedStorage.cachedAlbumArtDataURL = urlString
         }
         SharedStorage.cachedDominantColorHex = image.dominantColorHex()
     }
@@ -1056,7 +1057,7 @@ final class SonosManager {
             imageData = d
         } else {
             guard let url = URL(string: urlStr),
-                  let (downloaded, _) = try? await Self.albumArtSession.data(from: url) else { return }
+                  let downloaded = try? await Self.fetchAlbumArtData(from: url, originalURLString: urlStr) else { return }
             imageData = downloaded
             diskCache.store(imageData, for: urlStr)
         }
@@ -1636,7 +1637,7 @@ final class SonosManager {
                 continue
             }
             do {
-                let (data, _) = try await Self.albumArtSession.data(from: url)
+                let data = try await Self.fetchAlbumArtData(from: url, originalURLString: urlStr)
                 if let image = UIImage(data: data) {
                     groupAlbumImages[key] = image
                     groupLastArtURL[key] = urlStr
@@ -3585,7 +3586,31 @@ final class SonosManager {
                 }
             }
             SharedStorage.albumArtData = nil
+            SharedStorage.cachedAlbumArtDataURL = nil
             SharedStorage.cachedDominantColorHex = nil
+            return
+        }
+
+        if albumArtImage == nil,
+           let cachedData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+               currentURLString: urlStr,
+               cachedDataURLString: SharedStorage.cachedAlbumArtDataURL,
+               cachedData: SharedStorage.albumArtData
+           ),
+           let cachedImage = UIImage(data: cachedData) {
+            albumArtTask?.cancel()
+            loadingAlbumArtURL = nil
+            let color = dominantColorCache[urlStr] ?? cachedImage.dominantColor()
+            applyLoadedAlbumArt(
+                cachedImage,
+                color: color,
+                bottomEdge: cachedImage.bottomEdgeColor(),
+                urlString: urlStr,
+                trackIdentity: incomingTrackIdentity,
+                preserveDisplayedArtwork: false
+            )
+            SharedStorage.cachedAlbumArtDataURL = urlStr
+            SharedStorage.cachedDominantColorHex = cachedImage.dominantColorHex()
             return
         }
 
@@ -3616,6 +3641,7 @@ final class SonosManager {
                 }
             }
             SharedStorage.albumArtData = nil
+            SharedStorage.cachedAlbumArtDataURL = nil
             SharedStorage.cachedDominantColorHex = nil
             return
         }
@@ -3641,6 +3667,7 @@ final class SonosManager {
                 }
                 if let data = cached.jpegData(compressionQuality: 0.9) {
                     SharedStorage.albumArtData = data
+                    SharedStorage.cachedAlbumArtDataURL = urlStr
                 }
                 SharedStorage.cachedDominantColorHex = cached.dominantColorHex()
                 return
@@ -3665,6 +3692,7 @@ final class SonosManager {
                 }
                 if let data = cached.jpegData(compressionQuality: 0.9) {
                     SharedStorage.albumArtData = data
+                    SharedStorage.cachedAlbumArtDataURL = urlStr
                 }
                 SharedStorage.cachedDominantColorHex = cached.dominantColorHex()
                 return
@@ -3672,7 +3700,7 @@ final class SonosManager {
 
             // Slow path: download from network.
             do {
-                let (data, _) = try await Self.albumArtSession.data(from: url)
+                let data = try await Self.fetchAlbumArtData(from: url, originalURLString: urlStr)
                 guard !Task.isCancelled,
                       self.loadingAlbumArtURL == capturedURL,
                       self.trackInfo?.albumArtURL == capturedURL else { return }
@@ -3691,6 +3719,7 @@ final class SonosManager {
                     )
                 }
                 SharedStorage.albumArtData = data
+                SharedStorage.cachedAlbumArtDataURL = urlStr
                 SharedStorage.cachedDominantColorHex = image?.dominantColorHex()
             } catch {
                 guard !Task.isCancelled else { return }
@@ -3709,6 +3738,27 @@ final class SonosManager {
             }
         }
         await albumArtTask?.value
+    }
+
+    private static func fetchAlbumArtData(from url: URL, originalURLString: String) async throws -> Data {
+        if let relayURL = await MainActor.run(body: {
+            RelayManager.shared.isAvailable ? RelayManager.shared.url : nil
+        }) {
+            do {
+                return try await RelayClient.fetchArtwork(
+                    baseURL: relayURL,
+                    sourceURLString: originalURLString
+                )
+            } catch {
+                SonosLog.debug(
+                    .playback,
+                    "relay artwork fetch failed; falling back direct url='\(originalURLString)' error=\(error)"
+                )
+            }
+        }
+
+        let (data, _) = try await Self.albumArtSession.data(from: url)
+        return data
     }
 
     private func applyLoadedAlbumArt(

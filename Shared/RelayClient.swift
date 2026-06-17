@@ -142,6 +142,40 @@ enum RelayClient {
         return try JSONDecoder().decode(HealthResponse.self, from: data)
     }
 
+    // MARK: - Artwork proxy
+
+    static func artworkProxyURL(baseURL: URL, sourceURLString: String) -> URL? {
+        let source = sourceURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { return nil }
+
+        let lowercasedSource = source.lowercased()
+        guard lowercasedSource.hasPrefix("http://") || lowercasedSource.hasPrefix("https://") else {
+            return nil
+        }
+
+        let endpoint = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("artwork")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "url", value: source)
+        ]
+        return components.url
+    }
+
+    static func fetchArtwork(baseURL: URL, sourceURLString: String) async throws -> Data {
+        guard let url = artworkProxyURL(baseURL: baseURL, sourceURLString: sourceURLString) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "GET"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return data
+    }
+
     // MARK: - Activity registration
 
     /// Sent in the JSON body of `POST /api/register-activity`.

@@ -184,4 +184,34 @@ final class AlbumArtLoadAttemptPolicyTests: XCTestCase {
             8
         )
     }
+
+    func testSharedArtworkRecoveryReusesDataOnlyWhenDataURLMatchesCurrentURL() {
+        let data = Data([1, 2, 3])
+
+        XCTAssertEqual(
+            AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+                currentURLString: " https://example.com/current.jpg ",
+                cachedDataURLString: "https://example.com/current.jpg",
+                cachedData: data
+            ),
+            data
+        )
+        XCTAssertNil(
+            AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+                currentURLString: "https://example.com/current.jpg",
+                cachedDataURLString: "https://example.com/previous.jpg",
+                cachedData: data
+            )
+        )
+    }
+
+    func testSharedArtworkRecoveryDoesNotReuseUnattributedData() {
+        XCTAssertNil(
+            AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+                currentURLString: "https://example.com/current.jpg",
+                cachedDataURLString: nil,
+                cachedData: Data([1, 2, 3])
+            )
+        )
+    }
 }
