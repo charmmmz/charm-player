@@ -99,6 +99,24 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
             "x-sonos-http:song%3a1440857781.mp4?sid=204&flags=8232&sn=2")
     }
 
+    func testCloudItemFactoryNormalizesArtworkURL() {
+        UserDefaults.standard.set(["52231": 204], forKey: sidMappingKey)
+        let manager = SearchManager()
+
+        let item = manager.makePlaylistItem(
+            objectId: "playlist:pl.u-11zBXe4t8ZL1",
+            title: "Imagine Dragons Essentials",
+            artist: "Apple Music Alternative",
+            artURL: "musicKit://artwork/library/ABC/600x600?aat=Features125%2Fv4%2Fad%2F0e%2F48%2Fcover%2Epng&at=playlist&et=collection",
+            cloudServiceId: "52231",
+            accountId: "2")
+
+        XCTAssertEqual(
+            item.albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover.png/400x400bb.jpg"
+        )
+    }
+
     func testTrackMetadataPrefixesNamespacedAppleMusicTrackWithFlags() {
         UserDefaults.standard.set(["52231": 204], forKey: sidMappingKey)
         let manager = SearchManager()

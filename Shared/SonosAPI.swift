@@ -998,7 +998,7 @@ enum SonosAPI {
         }
 
         for item in items {
-            for blob in [item.uri, item.resMD, item.metaXML].compactMap({ $0 }) {
+            for blob in [item.playbackDescriptor.directURI, item.resMD, item.metaXML].compactMap({ $0 }) {
                 let decoded = decodeXMLEntities(blob)
                 if let sid = queryParameter("sid", in: decoded).flatMap(Int.init),
                    let service = servicesByLocalId[sid],
