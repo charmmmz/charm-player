@@ -466,6 +466,15 @@ final class LocalServiceInteractionTests: XCTestCase {
         )
     }
 
+    func testPlaylistTrackRowsExposeVisibleMenuButtonWhenMenuActionsAreAvailable() {
+        XCTAssertTrue(
+            LocalMusicTrackRowMenuPolicy.showsVisibleMenuButton(
+                leadingPolicy: .playlistTrack,
+                isPlaying: false,
+                contextMenuActions: [.playNow, .playNext, .addToQueue])
+        )
+    }
+
     func testMusicResourceActionPolicyExposesQueueActionsForQueueableSongs() {
         XCTAssertEqual(
             MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),

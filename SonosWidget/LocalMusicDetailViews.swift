@@ -3063,15 +3063,7 @@ private struct LocalMusicTrackRow: View {
 
                 Spacer(minLength: 8)
 
-                if isPlaying {
-                    ProgressView()
-                        .frame(width: 36)
-                } else {
-                    Text(durationText(track.duration))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
-                }
+                trailingAccessory
             }
             .padding(.vertical, 10)
             .padding(.horizontal)
@@ -3079,6 +3071,39 @@ private struct LocalMusicTrackRow: View {
         .buttonStyle(.plain)
         .contextMenu {
             MusicResourceContextMenu(actions: contextMenuActions, perform: menuAction)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingAccessory: some View {
+        if isPlaying {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 36, height: 32)
+        } else {
+            HStack(spacing: 8) {
+                Text(durationText(track.duration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+
+                if LocalMusicTrackRowMenuPolicy.showsVisibleMenuButton(
+                    leadingPolicy: leadingPolicy,
+                    isPlaying: isPlaying,
+                    contextMenuActions: contextMenuActions
+                ) {
+                    Menu {
+                        MusicResourceContextMenu(actions: contextMenuActions, perform: menuAction)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                }
+            }
+            .frame(minWidth: 84, alignment: .trailing)
         }
     }
 

@@ -153,3 +153,20 @@ enum MusicResourceTrackLeadingPolicy: Equatable, Sendable {
         }
     }
 }
+
+enum LocalMusicTrackRowMenuPolicy {
+    static func showsVisibleMenuButton(
+        leadingPolicy: MusicResourceTrackLeadingPolicy,
+        isPlaying: Bool,
+        contextMenuActions: [MusicResourceMenuAction]
+    ) -> Bool {
+        guard !isPlaying, !contextMenuActions.isEmpty else { return false }
+
+        switch leadingPolicy {
+        case .playlistTrack:
+            return true
+        case .albumTrack:
+            return false
+        }
+    }
+}
