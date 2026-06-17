@@ -57,7 +57,8 @@ struct LocalMusicAlbumDetailView: View {
         } ?? store.catalogArtworkURL(for: displayAlbum) ?? store.catalogArtworkURL(for: album)
     }
     private var albumPlayable: LocalServiceAppleMusicPlayable? {
-        LocalServiceAppleMusicPlayable.make(album: displayAlbum)
+        LocalServiceAppleMusicPlayable.make(album: displayAlbum)?
+            .withFallbackArtworkURLString(coverURL?.absoluteString)
     }
     private var albumFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(albumPlayable)
@@ -779,7 +780,8 @@ struct LocalMusicPlaylistDetailView: View {
         } ?? store.catalogArtworkURL(for: displayPlaylist) ?? store.catalogArtworkURL(for: playlist)
     }
     private var playlistPlayable: LocalServiceAppleMusicPlayable? {
-        LocalServiceAppleMusicPlayable.make(playlist: displayPlaylist)
+        LocalServiceAppleMusicPlayable.make(playlist: displayPlaylist)?
+            .withFallbackArtworkURLString(coverURL?.absoluteString)
     }
     private var playlistFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(playlistPlayable)
@@ -1399,7 +1401,8 @@ struct LocalMusicArtistDetailView: View {
         } ?? store.catalogArtworkURL(for: displayArtist) ?? store.catalogArtworkURL(for: artist)
     }
     private var artistPlayable: LocalServiceAppleMusicPlayable? {
-        LocalServiceAppleMusicPlayable.make(artist: displayArtist)
+        LocalServiceAppleMusicPlayable.make(artist: displayArtist)?
+            .withFallbackArtworkURLString(coverURL?.absoluteString)
     }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
@@ -2031,7 +2034,8 @@ private struct LocalMusicCatalogArtistDetailView: View {
         } ?? store.catalogArtworkURL(for: artist)
     }
     private var artistPlayable: LocalServiceAppleMusicPlayable? {
-        LocalServiceAppleMusicPlayable.make(artist: artist)
+        LocalServiceAppleMusicPlayable.make(artist: artist)?
+            .withFallbackArtworkURLString(coverURL?.absoluteString)
     }
     private var albums: [Album] {
         LocalMusicCatalogArtistContent.albums(for: artist)

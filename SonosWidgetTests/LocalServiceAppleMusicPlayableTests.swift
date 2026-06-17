@@ -219,4 +219,40 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         XCTAssertEqual(playable?.stationPlaybackKind, .tracks)
         XCTAssertNil(playable?.stationStreamObjectID)
     }
+
+    func testPlayableUsesFallbackArtworkURLWhenOriginalArtworkIsMissing() throws {
+        let playable = try XCTUnwrap(LocalServiceAppleMusicPlayable.make(
+            kind: .playlist,
+            rawID: "library-playlist-id",
+            playParameterCandidates: ["pl.abc123"],
+            title: "Sunday",
+            artist: "Charm",
+            album: "",
+            artworkURLString: nil,
+            duration: nil
+        ))
+
+        let updated = playable.withFallbackArtworkURLString(" https://example.com/playlist.jpg ")
+
+        XCTAssertEqual(updated.artworkURLString, "https://example.com/playlist.jpg")
+        XCTAssertEqual(updated.kind, playable.kind)
+        XCTAssertEqual(updated.catalogID, playable.catalogID)
+    }
+
+    func testPlayableKeepsExistingArtworkURLOverFallbackArtworkURL() throws {
+        let playable = try XCTUnwrap(LocalServiceAppleMusicPlayable.make(
+            kind: .playlist,
+            rawID: "library-playlist-id",
+            playParameterCandidates: ["pl.abc123"],
+            title: "Sunday",
+            artist: "Charm",
+            album: "",
+            artworkURLString: "https://example.com/original.jpg",
+            duration: nil
+        ))
+
+        let updated = playable.withFallbackArtworkURLString("https://example.com/fallback.jpg")
+
+        XCTAssertEqual(updated.artworkURLString, "https://example.com/original.jpg")
+    }
 }

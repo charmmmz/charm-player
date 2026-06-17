@@ -88,6 +88,24 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     var cloudType: String { kind.cloudType }
     var isContainer: Bool { kind.isContainer }
 
+    func withFallbackArtworkURLString(_ fallbackURLString: String?) -> LocalServiceAppleMusicPlayable {
+        guard artworkURLString == nil,
+              let fallbackURLString = Self.normalizedArtworkURLString(fallbackURLString) else {
+            return self
+        }
+        return LocalServiceAppleMusicPlayable(
+            kind: kind,
+            catalogID: catalogID,
+            title: title,
+            artist: artist,
+            album: album,
+            artworkURLString: fallbackURLString,
+            duration: duration,
+            stationPlaybackKind: stationPlaybackKind,
+            stationStreamObjectID: stationStreamObjectID
+        )
+    }
+
     var sonosObjectID: String {
         switch kind {
         case .song, .album, .artist, .playlist, .station:
@@ -514,7 +532,10 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     }
 
     private static func normalizedArtworkURLString(_ value: String?) -> String? {
-        LocalMusicArtworkURL.loadableURLString(from: value, shortSidePixels: 400)
+        LocalMusicArtworkURL.loadableURLString(
+            from: value?.trimmingCharacters(in: .whitespacesAndNewlines),
+            shortSidePixels: 400
+        )
     }
 }
 

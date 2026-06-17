@@ -797,6 +797,9 @@ struct LocalLibraryView: View {
     private func card(_ presentation: LocalServiceCardPresentation) -> some View {
         let item = presentation.item
         let playable = presentation.playable
+        let playbackPlayable = playable?.withFallbackArtworkURLString(
+            item.catalogArtworkURL(using: store)?.absoluteString
+        )
 
         switch item {
         case .album(let album):
@@ -807,16 +810,16 @@ struct LocalLibraryView: View {
                     manager: manager,
                     searchManager: searchManager)
             } label: {
-                cardContent(item, playable: playable)
+                cardContent(item, playable: playbackPlayable)
             }
             .buttonStyle(.plain)
             .contentShape(Rectangle())
             .contextMenu {
                 localResourceContextMenu(
-                    playable: playable,
+                    playable: playbackPlayable,
                     displayID: item.playbackID,
                     kind: item.resourceKind,
-                    fallbackKind: playable?.kind,
+                    fallbackKind: playbackPlayable?.kind,
                     fallbackTitle: item.title,
                     fallbackArtist: item.subtitle,
                     fallbackAlbum: item.title
@@ -830,30 +833,30 @@ struct LocalLibraryView: View {
                     manager: manager,
                     searchManager: searchManager)
             } label: {
-                cardContent(item, playable: playable)
+                cardContent(item, playable: playbackPlayable)
             }
             .buttonStyle(.plain)
             .contentShape(Rectangle())
             .contextMenu {
                 localResourceContextMenu(
-                    playable: playable,
+                    playable: playbackPlayable,
                     displayID: item.playbackID,
                     kind: item.resourceKind,
-                    fallbackKind: playable?.kind,
+                    fallbackKind: playbackPlayable?.kind,
                     fallbackTitle: item.title,
                     fallbackArtist: item.subtitle,
                     fallbackAlbum: item.title
                 )
             }
         case .recentlyPlayed(let recentlyPlayed):
-            recentlyPlayedCard(recentlyPlayed, item: item, playable: playable)
+            recentlyPlayedCard(recentlyPlayed, item: item, playable: playbackPlayable)
         case .recommendation(let recommendation):
-            recommendationCard(recommendation, item: item, playable: playable)
+            recommendationCard(recommendation, item: item, playable: playbackPlayable)
         case .song(let song):
             Button {
                 Task {
                     await store.playOnSonos(
-                        playable: playable,
+                        playable: playbackPlayable,
                         displayID: song.id.rawValue,
                         fallbackKind: .song,
                         fallbackTitle: song.title,
@@ -863,17 +866,17 @@ struct LocalLibraryView: View {
                         searchManager: searchManager)
                 }
             } label: {
-                cardContent(item, playable: playable)
+                cardContent(item, playable: playbackPlayable)
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
             .contentShape(Rectangle())
             .contextMenu {
                 localResourceContextMenu(
-                    playable: playable,
+                    playable: playbackPlayable,
                     displayID: item.playbackID,
                     kind: item.resourceKind,
-                    fallbackKind: playable?.kind,
+                    fallbackKind: playbackPlayable?.kind,
                     fallbackTitle: item.title,
                     fallbackArtist: item.subtitle,
                     fallbackAlbum: item.title
@@ -888,16 +891,16 @@ struct LocalLibraryView: View {
                         manager: manager,
                         searchManager: searchManager)
                 } label: {
-                    cardContent(item, playable: playable)
+                    cardContent(item, playable: playbackPlayable)
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
                 .contextMenu {
                     localResourceContextMenu(
-                        playable: playable,
+                        playable: playbackPlayable,
                         displayID: item.playbackID,
                         kind: item.resourceKind,
-                        fallbackKind: playable?.kind,
+                        fallbackKind: playbackPlayable?.kind,
                         fallbackTitle: item.title,
                         fallbackArtist: item.subtitle,
                         fallbackAlbum: item.title
@@ -907,7 +910,7 @@ struct LocalLibraryView: View {
                 Button {
                     Task {
                         await store.playOnSonos(
-                            playable: playable,
+                            playable: playbackPlayable,
                             displayID: artist.id.rawValue,
                             fallbackKind: .artist,
                             fallbackTitle: artist.name,
@@ -916,17 +919,17 @@ struct LocalLibraryView: View {
                             searchManager: searchManager)
                     }
                 } label: {
-                    cardContent(item, playable: playable)
+                    cardContent(item, playable: playbackPlayable)
                 }
                 .buttonStyle(.plain)
                 .disabled(store.isStartingPlayback)
                 .contentShape(Rectangle())
                 .contextMenu {
                     localResourceContextMenu(
-                        playable: playable,
+                        playable: playbackPlayable,
                         displayID: item.playbackID,
                         kind: item.resourceKind,
-                        fallbackKind: playable?.kind,
+                        fallbackKind: playbackPlayable?.kind,
                         fallbackTitle: item.title,
                         fallbackArtist: item.subtitle,
                         fallbackAlbum: item.title
@@ -937,23 +940,23 @@ struct LocalLibraryView: View {
             Button {
                 Task {
                     await store.playOnSonos(
-                        playable: playable,
+                        playable: playbackPlayable,
                         displayID: station.id.rawValue,
                         manager: manager,
                         searchManager: searchManager)
                 }
             } label: {
-                cardContent(item, playable: playable)
+                cardContent(item, playable: playbackPlayable)
             }
             .buttonStyle(.plain)
             .disabled(store.isStartingPlayback)
             .contentShape(Rectangle())
             .contextMenu {
                 localResourceContextMenu(
-                    playable: playable,
+                    playable: playbackPlayable,
                     displayID: item.playbackID,
                     kind: item.resourceKind,
-                    fallbackKind: playable?.kind,
+                    fallbackKind: playbackPlayable?.kind,
                     fallbackTitle: item.title,
                     fallbackArtist: item.subtitle,
                     fallbackAlbum: item.title
@@ -1509,11 +1512,13 @@ struct LocalLibraryView: View {
             emptyCategoryContent(.songs)
         } else {
             ForEach(songs) { song in
-                let playable = LocalServiceAppleMusicPlayable.make(song: song)
+                let artworkURL = store.catalogArtworkURL(for: song)
+                let playable = LocalServiceAppleMusicPlayable.make(song: song)?
+                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
                 playRow(
                     id: song.id.rawValue,
                     artwork: song.artwork,
-                    artworkURL: store.catalogArtworkURL(for: song),
+                    artworkURL: artworkURL,
                     title: song.title,
                     subtitle: song.artistName,
                     detail: song.albumTitle,
@@ -1550,7 +1555,9 @@ struct LocalLibraryView: View {
             emptyCategoryContent(.albums)
         } else {
             ForEach(albums) { album in
-                let playable = LocalServiceAppleMusicPlayable.make(album: album)
+                let artworkURL = store.catalogArtworkURL(for: album)
+                let playable = LocalServiceAppleMusicPlayable.make(album: album)?
+                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
                 NavigationLink {
                     LocalMusicAlbumDetailView(
                         album: album,
@@ -1560,7 +1567,7 @@ struct LocalLibraryView: View {
                 } label: {
                     rowContent(
                         artwork: album.artwork,
-                        artworkURL: store.catalogArtworkURL(for: album),
+                        artworkURL: artworkURL,
                         title: album.title,
                         subtitle: album.artistName,
                         detail: nil,
@@ -1590,7 +1597,9 @@ struct LocalLibraryView: View {
             emptyCategoryContent(.artists)
         } else {
             ForEach(artists) { artist in
-                let playable = LocalServiceAppleMusicPlayable.make(artist: artist)
+                let artworkURL = store.catalogArtworkURL(for: artist)
+                let playable = LocalServiceAppleMusicPlayable.make(artist: artist)?
+                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
                 if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
                     NavigationLink {
                         LocalMusicArtistDetailView(
@@ -1601,7 +1610,7 @@ struct LocalLibraryView: View {
                     } label: {
                         rowContent(
                             artwork: artist.artwork,
-                            artworkURL: store.catalogArtworkURL(for: artist),
+                            artworkURL: artworkURL,
                             title: artist.name,
                             subtitle: nil,
                             detail: nil,
@@ -1625,7 +1634,7 @@ struct LocalLibraryView: View {
                     playRow(
                         id: artist.id.rawValue,
                         artwork: artist.artwork,
-                        artworkURL: store.catalogArtworkURL(for: artist),
+                        artworkURL: artworkURL,
                         title: artist.name,
                         subtitle: nil,
                         detail: nil,
@@ -1662,7 +1671,9 @@ struct LocalLibraryView: View {
             emptyCategoryContent(.playlists)
         } else {
             ForEach(playlists) { playlist in
-                let playable = LocalServiceAppleMusicPlayable.make(playlist: playlist)
+                let artworkURL = store.catalogArtworkURL(for: playlist)
+                let playable = LocalServiceAppleMusicPlayable.make(playlist: playlist)?
+                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
                 NavigationLink {
                     LocalMusicPlaylistDetailView(
                         playlist: playlist,
@@ -1672,7 +1683,7 @@ struct LocalLibraryView: View {
                 } label: {
                     rowContent(
                         artwork: playlist.artwork,
-                        artworkURL: store.catalogArtworkURL(for: playlist),
+                        artworkURL: artworkURL,
                         title: playlist.name,
                         subtitle: playlist.curatorName,
                         detail: playlist.shortDescription,
