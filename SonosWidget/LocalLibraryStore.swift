@@ -2,6 +2,47 @@ import Foundation
 import MusicKit
 import Observation
 
+enum LocalLibraryRecommendationRefreshPolicy {
+    static func shouldReplace(existingCount: Int, didLoadRecommendations: Bool) -> Bool {
+        didLoadRecommendations || existingCount == 0
+    }
+}
+
+enum LocalLibraryRefreshSource: String {
+    case initial
+    case pullToRefresh = "pull"
+    case button
+    case recovery
+}
+
+enum LocalLibraryRefreshExecutionPolicy {
+    static func shouldDetachFromCallerCancellation(source: LocalLibraryRefreshSource) -> Bool {
+        source == .pullToRefresh
+    }
+}
+
+enum LocalLibraryPullRefreshPolicy {
+    static let triggerDistance = 72.0
+
+    static func shouldTrigger(
+        pullDistance: Double,
+        isRefreshing: Bool,
+        hasLoaded: Bool,
+        hasTriggeredInCurrentPull: Bool = false
+    ) -> Bool {
+        hasLoaded && !isRefreshing && !hasTriggeredInCurrentPull && pullDistance >= triggerDistance
+    }
+
+    static func indicatorOpacity(
+        pullDistance: Double,
+        isRefreshing: Bool
+    ) -> Double {
+        guard !isRefreshing else { return 1 }
+        guard triggerDistance > 0 else { return 0 }
+        return min(max(pullDistance / triggerDistance, 0), 1)
+    }
+}
+
 @MainActor
 @Observable
 final class LocalLibraryStore {
@@ -61,30 +102,78 @@ final class LocalLibraryStore {
 
     func loadIfNeeded() async {
         guard !hasLoaded else { return }
-        await reload()
+        await refresh(source: .initial)
     }
 
     func reload() async {
+        await refresh(source: .button)
+    }
+
+    func refresh(source: LocalLibraryRefreshSource) async {
+        if LocalLibraryRefreshExecutionPolicy.shouldDetachFromCallerCancellation(source: source) {
+            let task = Task { [weak self] in
+                await self?.performReload(source: source)
+            }
+            await task.value
+            return
+        }
+
+        await performReload(source: source)
+    }
+
+    private func performReload(source: LocalLibraryRefreshSource) async {
         artworkLookupTask?.cancel()
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
         do {
+            let previousRecommendationCount = recommendations.count
+            SonosLog.info(
+                .localService,
+                "Local library refresh start source=\(source.rawValue) existingRecommendations=\(previousRecommendationCount)")
+
             authorizationStatus = try await client.authorize()
             let content = try await client.loadHomeContent()
+            let shouldReplaceRecommendations = LocalLibraryRecommendationRefreshPolicy.shouldReplace(
+                existingCount: recommendations.count,
+                didLoadRecommendations: content.recommendationsLoaded)
+            let nextRecommendations = shouldReplaceRecommendations
+                ? content.recommendations
+                : recommendations
+            var artworkContent = content
+            artworkContent.recommendations = nextRecommendations
+
+            if !shouldReplaceRecommendations {
+                SonosLog.info(
+                    .localService,
+                    "Keeping \(recommendations.count) existing recommendation sections after refresh skipped recommendations " +
+                        "source=\(source.rawValue) status=\(content.recommendationsLoadStatus.diagnosticDescription)")
+            }
+
             snapshot = content.snapshot
             recentlyPlayed = content.recentlyPlayed
-            recommendations = content.recommendations
+            recommendations = nextRecommendations
             searchSnapshot = nil
             catalogSearchResults = LocalServiceCatalogSearchResults()
             catalogArtworkURLStrings = [:]
             catalogArtworkMissIDs = []
             hasLoaded = true
-            scheduleCatalogArtworkLookup(for: content)
+            scheduleCatalogArtworkLookup(for: artworkContent)
+            SonosLog.info(
+                .localService,
+                "Local library refresh resolved source=\(source.rawValue) " +
+                    "songs=\(snapshot.songs.count) albums=\(snapshot.albums.count) " +
+                    "artists=\(snapshot.artists.count) playlists=\(snapshot.playlists.count) " +
+                    "recentlyPlayed=\(recentlyPlayed.count) " +
+                    "recommendationsStatus=\(content.recommendationsLoadStatus.diagnosticDescription) " +
+                    "recommendations=\(recommendations.count)")
         } catch {
             authorizationStatus = MusicAuthorization.currentStatus
             errorMessage = displayMessage(for: error)
+            SonosLog.error(
+                .localService,
+                "Local library refresh failed source=\(source.rawValue) error=\(type(of: error)): \(error)")
         }
     }
 

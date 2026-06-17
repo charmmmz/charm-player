@@ -198,6 +198,13 @@ final class LocalServiceInteractionTests: XCTestCase {
                 hasSubmittedSearch: true))
     }
 
+    func testLibrarySearchDoesNotShowGenericSearchResultsHeading() {
+        XCTAssertFalse(
+            LocalServiceSearchPresentation.showsGenericSearchResultsHeading(
+                scope: .library,
+                hasSubmittedSearch: true))
+    }
+
     func testAppleMusicSearchCategoryOrderMatchesAppleMusicTabs() {
         XCTAssertEqual(
             LocalServiceSearchPresentation.catalogCategoryOrder,

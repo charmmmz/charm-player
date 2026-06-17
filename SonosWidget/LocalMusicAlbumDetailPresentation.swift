@@ -23,7 +23,26 @@ enum LocalMusicAlbumDetailPresentation {
         currentAlbumID
     }
 
-    static func shouldPlayDisplayedTracks(trackCount: Int) -> Bool {
-        trackCount > 0
+    static func shouldPlayDisplayedTracks(
+        currentAlbumID: String,
+        currentTrackCount: Int,
+        completeAlbumID: String?,
+        completeTrackCount: Int?
+    ) -> Bool {
+        guard currentTrackCount > 0,
+              isLibraryAlbumID(currentAlbumID),
+              shouldShowCompleteAlbumButton(
+                currentAlbumID: currentAlbumID,
+                currentTrackCount: currentTrackCount,
+                completeAlbumID: completeAlbumID,
+                completeTrackCount: completeTrackCount
+              ) else {
+            return false
+        }
+        return true
+    }
+
+    private static func isLibraryAlbumID(_ id: String) -> Bool {
+        id.hasPrefix("l.")
     }
 }

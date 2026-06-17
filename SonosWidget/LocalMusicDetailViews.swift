@@ -712,13 +712,17 @@ struct LocalMusicAlbumDetailView: View {
     private func playAlbum(shuffle: Bool, action: LocalMusicDetailAction) {
         guard actionInFlight == nil, !store.isStartingPlayback else { return }
         actionInFlight = action
-        let displayedTracks = tracks
 
         Task {
             await setSonosShuffleMode(shuffle)
-            if LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(trackCount: displayedTracks.count) {
+            if LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(
+                currentAlbumID: displayAlbum.id.rawValue,
+                currentTrackCount: currentTrackCount,
+                completeAlbumID: completeCatalogAlbum?.id.rawValue,
+                completeTrackCount: completeAlbumTrackCount
+            ) {
                 await store.playDisplayedTracksOnSonos(
-                    tracks: displayedTracks,
+                    tracks: tracks,
                     displayID: displayID(for: action),
                     albumTitle: displayAlbum.title,
                     manager: manager,

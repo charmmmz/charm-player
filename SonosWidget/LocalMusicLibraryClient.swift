@@ -25,10 +25,44 @@ struct LocalMusicHomeContent {
     var snapshot = LocalMusicLibrarySnapshot()
     var recentlyPlayed: [RecentlyPlayedMusicItem] = []
     var recommendations: [MusicPersonalRecommendation] = []
+    var recommendationsLoadStatus = LocalMusicRecommendationsLoadStatus.loaded
+
+    var recommendationsLoaded: Bool {
+        recommendationsLoadStatus.didLoad
+    }
 
     var isEmpty: Bool {
         snapshot.isEmpty && recentlyPlayed.isEmpty && recommendations.isEmpty
     }
+}
+
+enum LocalMusicRecommendationsLoadStatus: Equatable {
+    case loaded
+    case cancelled
+    case failed(String)
+
+    var didLoad: Bool {
+        if case .loaded = self {
+            return true
+        }
+        return false
+    }
+
+    var diagnosticDescription: String {
+        switch self {
+        case .loaded:
+            return "loaded"
+        case .cancelled:
+            return "cancelled"
+        case .failed(let message):
+            return "failed(\(message))"
+        }
+    }
+}
+
+private struct OptionalPersonalRecommendationsResult {
+    let items: [MusicPersonalRecommendation]
+    let status: LocalMusicRecommendationsLoadStatus
 }
 
 enum LocalMusicLibraryError: LocalizedError, Equatable {
@@ -97,12 +131,14 @@ struct LocalMusicLibraryClient {
 
         async let snapshot = librarySnapshot(limit: snapshotLimit)
         async let recentlyPlayed = optionalRecentlyPlayed(limit: recentlyPlayedLimit)
-        async let recommendations = optionalPersonalRecommendations(limit: recommendationLimit)
+        async let recommendationsResult = optionalPersonalRecommendations(limit: recommendationLimit)
+        let recommendations = await recommendationsResult
 
         return try await LocalMusicHomeContent(
             snapshot: snapshot,
             recentlyPlayed: recentlyPlayed,
-            recommendations: recommendations
+            recommendations: recommendations.items,
+            recommendationsLoadStatus: recommendations.status
         )
     }
 
@@ -253,8 +289,20 @@ struct LocalMusicLibraryClient {
         return Array(response.recommendations)
     }
 
-    private func optionalPersonalRecommendations(limit: Int) async -> [MusicPersonalRecommendation] {
-        (try? await personalRecommendations(limit: limit)) ?? []
+    private func optionalPersonalRecommendations(limit: Int) async -> OptionalPersonalRecommendationsResult {
+        do {
+            return OptionalPersonalRecommendationsResult(
+                items: try await personalRecommendations(limit: limit),
+                status: .loaded
+            )
+        } catch is CancellationError {
+            SonosLog.info(.localService, "Personal recommendations cancelled")
+            return OptionalPersonalRecommendationsResult(items: [], status: .cancelled)
+        } catch {
+            let message = "\(type(of: error)): \(error)"
+            SonosLog.info(.localService, "Personal recommendations unavailable: \(message)")
+            return OptionalPersonalRecommendationsResult(items: [], status: .failed(message))
+        }
     }
 
     private func librarySongs(limit: Int?) async throws -> [Song] {

@@ -14,11 +14,14 @@ struct LocalLibraryView: View {
     @State private var librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
     @State private var categoryDetailSearchText = ""
     @State private var categorySortSelections: [LocalLibraryCategory: LocalLibraryCategorySortOption] = [:]
-    @FocusState private var isSearchFieldFocused: Bool
+    @State private var pullRefreshDistance = 0.0
+    @State private var isPullRefreshActive = false
+    @State private var hasTriggeredPullRefresh = false
     @FocusState private var isCategorySearchFieldFocused: Bool
-    @Namespace private var searchScopeSelectionNamespace
     @Namespace private var catalogCategorySelectionNamespace
     @Namespace private var librarySearchCategorySelectionNamespace
+
+    private let scrollCoordinateSpaceName = "local-library-scroll"
 
     private var isSearchingLibrary: Bool {
         !trimmedSearchText.isEmpty
@@ -30,21 +33,6 @@ struct LocalLibraryView: View {
 
     private var trimmedCategoryDetailSearchText: String {
         categoryDetailSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var shouldShowSearchScopeTabs: Bool {
-        isSearchFieldFocused || (isSearchingLibrary && !hasSubmittedSearch)
-    }
-
-    private var shouldShowSubmittedSearchOverlay: Bool {
-        hasSubmittedSearch
-            && !isSearchFieldFocused
-            && trimmedSearchText == submittedSearchText
-            && !submittedSearchText.isEmpty
-    }
-
-    private var shouldUseExpandedSearchFieldStyle: Bool {
-        isSearchFieldFocused || isSearchingLibrary || hasSubmittedSearch
     }
 
     var body: some View {
@@ -69,6 +57,18 @@ struct LocalLibraryView: View {
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .background(backgroundLayer.ignoresSafeArea())
+            .searchable(
+                text: $searchText,
+                prompt: LocalServiceSearchPresentation.prompt(for: searchScope)
+            )
+            .searchScopes($searchScope) {
+                ForEach(LocalServiceSearchScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .onSubmit(of: .search) {
+                submitSearch()
+            }
             .onChange(of: searchText) { _, newValue in
                 handleSearchTextChanged(newValue)
             }
@@ -86,20 +86,6 @@ struct LocalLibraryView: View {
             }
             .task(id: "\(searchScope.rawValue):\(submittedSearchText):\(searchSubmissionID)") {
                 await store.search(term: submittedSearchText, scope: searchScope)
-            }
-            .refreshable {
-                await store.reload()
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await store.reload() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(store.isLoading)
-                    .accessibilityLabel("Refresh Local Service")
-                }
             }
             .preferredColorScheme(.dark)
         }
@@ -119,7 +105,6 @@ struct LocalLibraryView: View {
         submittedSearchText = trimmed
         hasSubmittedSearch = true
         searchSubmissionID += 1
-        isSearchFieldFocused = false
 
         if searchScope == .appleMusic {
             catalogSearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
@@ -150,12 +135,6 @@ struct LocalLibraryView: View {
         if hasSubmittedSearch && !submittedSearchText.isEmpty {
             searchSubmissionID += 1
         }
-    }
-
-    private func clearSearch() {
-        searchText = ""
-        resetSubmittedSearch()
-        isSearchFieldFocused = true
     }
 
     private func resetSubmittedSearch() {
@@ -233,7 +212,7 @@ struct LocalLibraryView: View {
             Text("Allow access to load and play your Apple Music library.")
         } actions: {
             Button("Allow Access") {
-                Task { await store.reload() }
+                Task { await store.refresh(source: .recovery) }
             }
             .buttonStyle(.borderedProminent)
         }
@@ -246,7 +225,7 @@ struct LocalLibraryView: View {
             Text("Add music in Apple Music, then refresh this page.")
         } actions: {
             Button("Refresh") {
-                Task { await store.reload() }
+                Task { await store.refresh(source: .recovery) }
             }
             .buttonStyle(.bordered)
         }
@@ -254,9 +233,14 @@ struct LocalLibraryView: View {
 
     private var content: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
-                localSearchControls
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: LocalLibraryPullDistancePreferenceKey.self,
+                    value: max(0, Double(proxy.frame(in: .named(scrollCoordinateSpaceName)).minY)))
+            }
+            .frame(height: 0)
 
+            LazyVStack(alignment: .leading, spacing: 22) {
                 if let errorMessage = store.errorMessage {
                     statusBanner(errorMessage)
                 }
@@ -269,110 +253,58 @@ struct LocalLibraryView: View {
             }
             .padding(.vertical, 12)
         }
+        .coordinateSpace(name: scrollCoordinateSpaceName)
         .scrollDismissesKeyboard(.immediately)
+        .onPreferenceChange(LocalLibraryPullDistancePreferenceKey.self) { distance in
+            pullRefreshDistance = distance
+            if distance < 12 {
+                hasTriggeredPullRefresh = false
+            }
+            guard LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: distance,
+                isRefreshing: isPullRefreshActive || store.isLoading,
+                hasLoaded: store.hasLoaded,
+                hasTriggeredInCurrentPull: hasTriggeredPullRefresh
+            ) else {
+                return
+            }
+            triggerPullRefresh()
+        }
+        .overlay(alignment: .top) {
+            pullRefreshIndicator
+        }
     }
 
-    private var localSearchControls: some View {
-        VStack(spacing: 10) {
-            localSearchField
+    private var pullRefreshIndicator: some View {
+        let opacity = LocalLibraryPullRefreshPolicy.indicatorOpacity(
+            pullDistance: pullRefreshDistance,
+            isRefreshing: isPullRefreshActive)
 
-            if shouldShowSearchScopeTabs {
-                searchScopePicker
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(.top, 8)
-        .padding(.bottom, shouldShowSearchScopeTabs ? 10 : 6)
-        .animation(
-            .spring(response: 0.32, dampingFraction: 0.86),
-            value: shouldShowSearchScopeTabs
-        )
-    }
-
-    private var localSearchField: some View {
-        let isExpandedStyle = shouldUseExpandedSearchFieldStyle
-
-        return HStack(spacing: isExpandedStyle ? 10 : 8) {
-            Image(systemName: "magnifyingglass")
-                .font(isExpandedStyle ? .title3.weight(.semibold) : .subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: isExpandedStyle ? 24 : 20)
-
-            ZStack(alignment: .leading) {
-                submittedSearchFieldOverlay
-
-                TextField(
-                    "",
-                    text: $searchText,
-                    prompt: Text(LocalServiceSearchPresentation.prompt(for: searchScope))
-                )
-                .focused($isSearchFieldFocused)
-                .submitLabel(.search)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .onSubmit {
-                    submitSearch()
-                }
-                .opacity(shouldShowSubmittedSearchOverlay ? 0.01 : 1)
-            }
-            .font(isExpandedStyle ? .title3 : .subheadline)
-            .frame(minHeight: isExpandedStyle ? 30 : 22)
-
-            if !searchText.isEmpty {
-                Button {
-                    clearSearch()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(isExpandedStyle ? .title3.weight(.semibold) : .subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear Search")
-            }
-        }
-        .padding(.horizontal, isExpandedStyle ? 16 : 12)
-        .padding(.vertical, isExpandedStyle ? 12 : 10)
-        .background(
-            .white.opacity(isSearchFieldFocused ? 0.16 : 0.10),
-            in: RoundedRectangle(
-                cornerRadius: isExpandedStyle ? 999 : 12,
-                style: .continuous
-            )
-        )
-        .overlay {
-            RoundedRectangle(
-                cornerRadius: isExpandedStyle ? 999 : 12,
-                style: .continuous
-            )
-                .stroke(.white.opacity(isSearchFieldFocused ? 0.22 : 0.08), lineWidth: 1)
-        }
-        .contentShape(
-            RoundedRectangle(
-                cornerRadius: isExpandedStyle ? 999 : 12,
-                style: .continuous
-            )
-        )
-        .onTapGesture {
-            isSearchFieldFocused = true
-        }
-        .padding(.horizontal)
-    }
-
-    @ViewBuilder
-    private var submittedSearchFieldOverlay: some View {
-        if shouldShowSubmittedSearchOverlay,
-           let display = LocalServiceSearchPresentation.submittedFieldDisplay(
-            for: submittedSearchText,
-            scope: searchScope
-           ) {
-            HStack(spacing: 0) {
-                Text(display.term)
-                    .foregroundStyle(.primary)
-                Text(display.scopeHint)
-                    .foregroundStyle(.secondary)
-            }
-            .lineLimit(1)
+        return ProgressView()
+            .progressViewStyle(.circular)
+            .controlSize(.regular)
+            .tint(.white.opacity(0.74))
+            .padding(10)
+            .background(.black.opacity(0.18), in: Circle())
+            .opacity(opacity)
+            .scaleEffect(0.86 + (0.14 * opacity))
             .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.16), value: opacity)
+            .padding(.top, 8)
+    }
+
+    private func triggerPullRefresh() {
+        guard !isPullRefreshActive else { return }
+        isPullRefreshActive = true
+        hasTriggeredPullRefresh = true
+        Task {
+            await store.refresh(source: .pullToRefresh)
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    isPullRefreshActive = false
+                    pullRefreshDistance = 0
+                }
+            }
         }
     }
 
@@ -425,7 +357,12 @@ struct LocalLibraryView: View {
             if hasSubmittedSearch {
                 switch searchScope {
                 case .library:
-                    searchResultsHeader
+                    if LocalServiceSearchPresentation.showsGenericSearchResultsHeading(
+                        scope: searchScope,
+                        hasSubmittedSearch: hasSubmittedSearch
+                    ) {
+                        searchResultsHeader
+                    }
                     librarySearchResultsContent
                 case .appleMusic:
                     catalogSearchResultsContent
@@ -443,38 +380,6 @@ struct LocalLibraryView: View {
                 ProgressView()
             }
         }
-        .padding(.horizontal)
-    }
-
-    private var searchScopePicker: some View {
-        HStack(spacing: 0) {
-            ForEach(LocalServiceSearchScope.allCases) { scope in
-                Button {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
-                        searchScope = scope
-                    }
-                } label: {
-                    Text(scope.title)
-                        .font(.headline.weight(searchScope == scope ? .semibold : .medium))
-                        .foregroundStyle(searchScope == scope ? .primary : .secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background {
-                            if searchScope == scope {
-                                Capsule()
-                                    .fill(.white.opacity(0.22))
-                                    .matchedGeometryEffect(
-                                        id: "local-service-search-scope",
-                                        in: searchScopeSelectionNamespace
-                                    )
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(.white.opacity(0.09), in: Capsule())
         .padding(.horizontal)
     }
 
@@ -2450,6 +2355,14 @@ private extension LocalMusicArtworkURL.ContentMode {
         case .fit: return .fit
         case .fill: return .fill
         }
+    }
+}
+
+private struct LocalLibraryPullDistancePreferenceKey: PreferenceKey {
+    static var defaultValue = 0.0
+
+    static func reduce(value: inout Double, nextValue: () -> Double) {
+        value = max(value, nextValue())
     }
 }
 

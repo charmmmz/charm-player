@@ -91,6 +91,97 @@ final class LocalLibraryModelsTests: XCTestCase {
         XCTAssertNil(LocalServiceSectionKind.library.headerSystemImage)
     }
 
+    func testRecommendationRefreshPolicyPreservesExistingSectionsWhenReloadSkipsRecommendations() {
+        XCTAssertFalse(
+            LocalLibraryRecommendationRefreshPolicy.shouldReplace(
+                existingCount: 3,
+                didLoadRecommendations: false))
+    }
+
+    func testRecommendationRefreshPolicyReplacesWhenRecommendationsLoadSuccessfully() {
+        XCTAssertTrue(
+            LocalLibraryRecommendationRefreshPolicy.shouldReplace(
+                existingCount: 3,
+                didLoadRecommendations: true))
+    }
+
+    func testRecommendationRefreshPolicyAllowsInitialEmptyStateWhenRecommendationsFail() {
+        XCTAssertTrue(
+            LocalLibraryRecommendationRefreshPolicy.shouldReplace(
+                existingCount: 0,
+                didLoadRecommendations: false))
+    }
+
+    func testPullToRefreshDetachesFromCallerCancellation() {
+        XCTAssertTrue(
+            LocalLibraryRefreshExecutionPolicy.shouldDetachFromCallerCancellation(
+                source: .pullToRefresh))
+    }
+
+    func testButtonRefreshUsesNormalTaskEntryPoint() {
+        XCTAssertFalse(
+            LocalLibraryRefreshExecutionPolicy.shouldDetachFromCallerCancellation(
+                source: .button))
+    }
+
+    func testPullRefreshPolicyTriggersOnlyPastThresholdWhenLoadedAndIdle() {
+        XCTAssertTrue(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance + 1,
+                isRefreshing: false,
+                hasLoaded: true))
+
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance - 1,
+                isRefreshing: false,
+                hasLoaded: true))
+
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance + 1,
+                isRefreshing: true,
+                hasLoaded: true))
+
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance + 1,
+                isRefreshing: false,
+                hasLoaded: false))
+    }
+
+    func testPullRefreshPolicyDoesNotRetriggerDuringSamePullGesture() {
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance + 1,
+                isRefreshing: false,
+                hasLoaded: true,
+                hasTriggeredInCurrentPull: true))
+    }
+
+    func testPullRefreshIndicatorOpacityTracksPullDistance() {
+        XCTAssertEqual(
+            LocalLibraryPullRefreshPolicy.indicatorOpacity(
+                pullDistance: 0,
+                isRefreshing: false),
+            0,
+            accuracy: 0.001)
+
+        XCTAssertEqual(
+            LocalLibraryPullRefreshPolicy.indicatorOpacity(
+                pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance / 2,
+                isRefreshing: false),
+            0.5,
+            accuracy: 0.001)
+
+        XCTAssertEqual(
+            LocalLibraryPullRefreshPolicy.indicatorOpacity(
+                pullDistance: 0,
+                isRefreshing: true),
+            1,
+            accuracy: 0.001)
+    }
+
     func testMusicResourcePresentationUsesOneTapIdentityForCardRegions() {
         let resource = MusicResourcePresentation(
             id: "recommendation-playlist-pl.heavy",

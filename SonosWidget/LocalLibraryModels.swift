@@ -160,6 +160,13 @@ enum LocalServiceSearchPresentation {
         scope == .appleMusic && hasSubmittedSearch
     }
 
+    static func showsGenericSearchResultsHeading(
+        scope: LocalServiceSearchScope,
+        hasSubmittedSearch: Bool
+    ) -> Bool {
+        false
+    }
+
     static func catalogRowText(for item: AppleMusicCatalogSearchItem) -> LocalServiceCatalogRowText {
         switch item.type {
         case .song:

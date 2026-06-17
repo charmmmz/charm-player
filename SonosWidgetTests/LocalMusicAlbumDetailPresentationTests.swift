@@ -41,15 +41,33 @@ final class LocalMusicAlbumDetailPresentationTests: XCTestCase {
         )
     }
 
-    func testAlbumActionUsesDisplayedTracksWhenTracksAreLoaded() {
+    func testLibraryPartialAlbumActionUsesDisplayedTracks() {
         XCTAssertTrue(
-            LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(trackCount: 2)
+            LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(
+                currentAlbumID: "l.partial-album",
+                currentTrackCount: 2,
+                completeAlbumID: "1440864059",
+                completeTrackCount: 17)
         )
     }
 
-    func testAlbumActionFallsBackToAlbumContainerWhenNoTracksAreLoaded() {
+    func testCatalogAlbumActionUsesAlbumContainerWhenTracksAreLoaded() {
         XCTAssertFalse(
-            LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(trackCount: 0)
+            LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(
+                currentAlbumID: "1839352404",
+                currentTrackCount: 12,
+                completeAlbumID: "1839352404",
+                completeTrackCount: 12)
+        )
+    }
+
+    func testLibraryCompleteAlbumActionUsesAlbumContainer() {
+        XCTAssertFalse(
+            LocalMusicAlbumDetailPresentation.shouldPlayDisplayedTracks(
+                currentAlbumID: "l.complete-album",
+                currentTrackCount: 10,
+                completeAlbumID: "1440864059",
+                completeTrackCount: 10)
         )
     }
 }
