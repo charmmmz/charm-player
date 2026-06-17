@@ -46,18 +46,7 @@ struct FavoriteControlSheet: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
-                if let image = phase.image {
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle()
-                        .fill(.quaternary)
-                        .overlay {
-                            Image(systemName: item.isContainer ? "music.note.list" : "music.note")
-                                .foregroundStyle(.tertiary)
-                        }
-                }
-            }
+            artwork
             .frame(width: 64, height: 64)
             .clipShape(RoundedRectangle(cornerRadius: item.isArtist ? 32 : 8))
 
@@ -75,6 +64,27 @@ struct FavoriteControlSheet: View {
 
             Spacer()
         }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        if let urlString = item.albumArtURL,
+           let url = URL(string: urlString) {
+            RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+                artworkPlaceholder
+            }
+        } else {
+            artworkPlaceholder
+        }
+    }
+
+    private var artworkPlaceholder: some View {
+        Rectangle()
+            .fill(.quaternary)
+            .overlay {
+                Image(systemName: item.isContainer ? "music.note.list" : "music.note")
+                    .foregroundStyle(.tertiary)
+            }
     }
 
     private var sonosRow: some View {

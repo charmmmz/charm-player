@@ -464,17 +464,7 @@ struct SearchView: View {
         let cornerRadius: CGFloat = cat == .artist ? 70 : 10
 
         return VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
-                if let img = phase.image {
-                    img.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle().fill(.quaternary)
-                        .overlay {
-                            Image(systemName: placeholderIcon(for: item, category: category))
-                                .foregroundStyle(.tertiary)
-                        }
-                }
-            }
+            browseCardArtwork(item, category: category)
             .frame(width: 140, height: 140)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
 
@@ -490,6 +480,32 @@ struct SearchView: View {
             categoryLabel(for: item, category: category)
         }
         .frame(width: 140)
+    }
+
+    @ViewBuilder
+    private func browseCardArtwork(
+        _ item: BrowseItem,
+        category: BrowseItem.FavoriteCategory?
+    ) -> some View {
+        if let urlString = item.albumArtURL,
+           let url = URL(string: urlString) {
+            RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+                browseCardArtworkPlaceholder(item, category: category)
+            }
+        } else {
+            browseCardArtworkPlaceholder(item, category: category)
+        }
+    }
+
+    private func browseCardArtworkPlaceholder(
+        _ item: BrowseItem,
+        category: BrowseItem.FavoriteCategory?
+    ) -> some View {
+        Rectangle().fill(.quaternary)
+            .overlay {
+                Image(systemName: placeholderIcon(for: item, category: category))
+                    .foregroundStyle(.tertiary)
+            }
     }
 
     /// Build a BrowseItem suitable for AlbumDetailView from a Favorite.

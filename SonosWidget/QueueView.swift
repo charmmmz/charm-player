@@ -150,7 +150,7 @@ struct QueueView: View {
     }
 }
 
-// MARK: - Queue Art View (cache-first with AsyncImage fallback)
+// MARK: - Queue Art View (cache-first with shared remote loader fallback)
 
 private struct QueueArtView: View {
     let urlStr: String?
@@ -163,12 +163,8 @@ private struct QueueArtView: View {
             Image(uiImage: cached)
                 .resizable().aspectRatio(contentMode: .fill)
         } else if let urlStr, let url = URL(string: urlStr) {
-            AsyncImage(url: url) { phase in
-                if let img = phase.image {
-                    img.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    placeholder
-                }
+            RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+                placeholder
             }
         } else {
             placeholder
