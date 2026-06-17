@@ -70,15 +70,34 @@ enum SonosLocalControlAPI {
     }
 
     private nonisolated static func data(for request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard (200 ... 299).contains(status) else {
-            let endpoint = request.url?.path ?? "unknown"
-            let body = String(data: data, encoding: .utf8) ?? ""
-            SonosLog.error(.sonosCloud, "local control \(endpoint) -> HTTP \(status): \(body.prefix(300))")
-            throw SonosLocalControlError.httpStatus(status)
+        let auditStartedAt = Date()
+        let endpoint = request.url?.path ?? "unknown"
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard (200 ... 299).contains(status) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                SonosLog.error(.sonosCloud, "local control \(endpoint) -> HTTP \(status): \(body.prefix(300))")
+                throw SonosLocalControlError.httpStatus(status)
+            }
+            await SonosNetworkAudit.record(
+                kind: .local1443,
+                host: request.url?.host,
+                target: endpoint,
+                action: request.httpMethod ?? "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .http(status))
+            return data
+        } catch {
+            await SonosNetworkAudit.record(
+                kind: .local1443,
+                host: request.url?.host,
+                target: endpoint,
+                action: request.httpMethod ?? "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .failure(error))
+            throw error
         }
-        return data
     }
 
     private nonisolated static func hostLiteral(_ ip: String) -> String {

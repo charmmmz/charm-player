@@ -673,9 +673,28 @@ enum SonosAPI {
         }
         var request = URLRequest(url: url, timeoutInterval: 5)
         request.httpMethod = "GET"
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let xml = String(data: data, encoding: .utf8) ?? ""
-        return extractTag("roomName", from: xml) ?? ip
+        let auditStartedAt = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            await SonosNetworkAudit.record(
+                kind: .http1400,
+                host: ip,
+                target: "/xml/device_description.xml",
+                action: "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .http((response as? HTTPURLResponse)?.statusCode))
+            let xml = String(data: data, encoding: .utf8) ?? ""
+            return extractTag("roomName", from: xml) ?? ip
+        } catch {
+            await SonosNetworkAudit.record(
+                kind: .http1400,
+                host: ip,
+                target: "/xml/device_description.xml",
+                action: "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .failure(error))
+            throw error
+        }
     }
 
     // MARK: - Speaker Grouping
@@ -833,9 +852,28 @@ enum SonosAPI {
         guard let url = URL(string: "http://\(cleanIP):\(port)/status/accounts") else {
             throw URLError(.badURL)
         }
-        let (data, _) = try await URLSession.shared.data(from: url)
-        let xml = String(data: data, encoding: .utf8) ?? ""
-        return parseLocalMusicServiceAccounts(xml)
+        let auditStartedAt = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            await SonosNetworkAudit.record(
+                kind: .http1400,
+                host: ip,
+                target: "/status/accounts",
+                action: "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .http((response as? HTTPURLResponse)?.statusCode))
+            let xml = String(data: data, encoding: .utf8) ?? ""
+            return parseLocalMusicServiceAccounts(xml)
+        } catch {
+            await SonosNetworkAudit.record(
+                kind: .http1400,
+                host: ip,
+                target: "/status/accounts",
+                action: "GET",
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .failure(error))
+            throw error
+        }
     }
 
     nonisolated static func parseLocalMusicServiceAccounts(_ xml: String) -> [LocalMusicServiceAccount] {
@@ -1034,20 +1072,39 @@ enum SonosAPI {
                          forHTTPHeaderField: "SOAPACTION")
         request.httpBody = envelope(service: service, action: action, body: body).data(using: .utf8)
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = String(data: data, encoding: .utf8) ?? ""
-        if response.contains("<s:Fault>") || response.contains("UPnPError") {
-            let code = extractTag("errorCode", from: response) ?? "?"
-            let desc = extractTag("errorDescription", from: response) ?? "SOAP Fault"
-            SonosLog.error(.soap, "Fault in \(action): code=\(code) desc=\(desc)")
-            // Dump the raw fault body in Debug builds — Sonos sometimes embeds
-            // extra context (e.g. which field failed validation) outside the
-            // standard errorCode/errorDescription tags.
-            SonosLog.debug(.soap, "Fault body: \(response)")
-            throw NSError(domain: "SonosSOAP", code: Int(code) ?? -1,
-                          userInfo: [NSLocalizedDescriptionKey: "\(action) failed: \(desc) (code \(code))"])
+        let auditStartedAt = Date()
+        do {
+            let (data, urlResponse) = try await URLSession.shared.data(for: request)
+            let response = String(data: data, encoding: .utf8) ?? ""
+            if response.contains("<s:Fault>") || response.contains("UPnPError") {
+                let code = extractTag("errorCode", from: response) ?? "?"
+                let desc = extractTag("errorDescription", from: response) ?? "SOAP Fault"
+                SonosLog.error(.soap, "Fault in \(action): code=\(code) desc=\(desc)")
+                // Dump the raw fault body in Debug builds — Sonos sometimes embeds
+                // extra context (e.g. which field failed validation) outside the
+                // standard errorCode/errorDescription tags.
+                SonosLog.debug(.soap, "Fault body: \(response)")
+                throw NSError(domain: "SonosSOAP", code: Int(code) ?? -1,
+                              userInfo: [NSLocalizedDescriptionKey: "\(action) failed: \(desc) (code \(code))"])
+            }
+            await SonosNetworkAudit.record(
+                kind: .soap1400,
+                host: ip,
+                target: service,
+                action: action,
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .http((urlResponse as? HTTPURLResponse)?.statusCode))
+            return response
+        } catch {
+            await SonosNetworkAudit.record(
+                kind: .soap1400,
+                host: ip,
+                target: service,
+                action: action,
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .failure(error))
+            throw error
         }
-        return response
     }
 
     private nonisolated static func envelope(service: String, action: String, body: String) -> String {

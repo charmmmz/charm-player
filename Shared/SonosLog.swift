@@ -34,36 +34,37 @@ enum SonosLog {
         case parseCloudIds  = "parseCloudIds"
         case navItem        = "NavItem"
         case sonosEvents    = "SonosEvents"
+        case networkAudit   = "NetworkAudit"
     }
 
     /// Always logged. Use sparingly for unexpected failures worth reporting.
     @inline(__always)
-    static func error(_ category: Category, _ message: @autoclosure () -> String) {
+    nonisolated static func error(_ category: Category, _ message: @autoclosure () -> String) {
         emit(category, suffix: " ERROR:", message())
     }
 
     /// Always logged. Use for operational signal (success, counts, state).
     @inline(__always)
-    static func info(_ category: Category, _ message: @autoclosure () -> String) {
+    nonisolated static func info(_ category: Category, _ message: @autoclosure () -> String) {
         emit(category, suffix: nil, message())
     }
 
     /// Compiled out of Release builds. Use for high-volume traces and
     /// internal details that would otherwise drown the console.
     @inline(__always)
-    static func debug(_ category: Category, _ message: @autoclosure () -> String) {
+    nonisolated static func debug(_ category: Category, _ message: @autoclosure () -> String) {
         #if DEBUG
         emit(category, suffix: nil, message())
         #endif
     }
 
-    private static func emit(_ category: Category, suffix: String?, _ message: String) {
+    private nonisolated static func emit(_ category: Category, suffix: String?, _ message: String) {
         let line = "[\(category.rawValue)]\(suffix ?? "") \(message)"
         print(line)
         writeDiagnosticLine(line, category: category)
     }
 
-    private static func writeDiagnosticLine(_ line: String, category: Category) {
+    private nonisolated static func writeDiagnosticLine(_ line: String, category: Category) {
         #if DEBUG
         guard diagnosticCategories.contains(category),
               let fileURL = diagnosticFileURL(),
@@ -95,24 +96,25 @@ enum SonosLog {
     }
 
     #if DEBUG
-    private static let diagnosticCategories: Set<Category> = [
+    private nonisolated static let diagnosticCategories: Set<Category> = [
         .albumDetail,
         .cloudAPI,
         .cloudSearch,
         .localService,
+        .networkAudit,
         .playback,
         .station,
         .soap
     ]
-    private static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
+    private nonisolated static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
 
-    private static func diagnosticFileURL() -> URL? {
+    private nonisolated static func diagnosticFileURL() -> URL? {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
             .first?
             .appendingPathComponent("sonos-diagnostics.log")
     }
 
-    private static func diagnosticTimestamp() -> String {
+    private nonisolated static func diagnosticTimestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
     }
     #endif

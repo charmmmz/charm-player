@@ -128,7 +128,6 @@
 				SonosAuth.swift,
 				SonosCloudAPI.swift,
 				SonosControl.swift,
-				SonosLog.swift,
 				SourceBadgeView.swift,
 				StreamingServiceBranding.swift,
 				ToastModifier.swift,

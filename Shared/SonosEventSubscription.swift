@@ -6,7 +6,7 @@ enum SonosEventService: Equatable, Sendable {
     case zoneGroupTopology
     case contentDirectory
 
-    var eventPath: String {
+    nonisolated var eventPath: String {
         switch self {
         case .avTransport:
             return "/MediaRenderer/AVTransport/Event"
@@ -213,7 +213,7 @@ enum SonosEventSubscriptionClient {
             service: service,
             callbackURL: callbackURL,
             timeoutSeconds: timeoutSeconds)
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let response = try await send(request, ip: ip, service: service, action: "SUBSCRIBE")
         return try subscription(from: response, service: service)
     }
 
@@ -225,7 +225,7 @@ enum SonosEventSubscriptionClient {
             service: existingSubscription.service,
             sid: existingSubscription.sid,
             timeoutSeconds: timeoutSeconds)
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let response = try await send(request, ip: ip, service: existingSubscription.service, action: "RENEW")
         return try subscription(from: response, service: existingSubscription.service)
     }
 
@@ -235,8 +235,35 @@ enum SonosEventSubscriptionClient {
             ip: ip,
             service: subscription.service,
             sid: subscription.sid)
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let response = try await send(request, ip: ip, service: subscription.service, action: "UNSUBSCRIBE")
         try validate(response)
+    }
+
+    private nonisolated static func send(_ request: URLRequest,
+                                         ip: String,
+                                         service: SonosEventService,
+                                         action: String) async throws -> URLResponse {
+        let auditStartedAt = Date()
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            await SonosNetworkAudit.record(
+                kind: .event1400,
+                host: ip,
+                target: service.eventPath,
+                action: action,
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .http((response as? HTTPURLResponse)?.statusCode))
+            return response
+        } catch {
+            await SonosNetworkAudit.record(
+                kind: .event1400,
+                host: ip,
+                target: service.eventPath,
+                action: action,
+                durationMs: SonosNetworkAudit.elapsedMilliseconds(since: auditStartedAt),
+                status: .failure(error))
+            throw error
+        }
     }
 
     nonisolated static func subscription(from response: URLResponse,
