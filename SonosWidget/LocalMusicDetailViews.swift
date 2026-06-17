@@ -8,6 +8,30 @@ private func openLocalMusicAppleMusicURL(_ url: URL, context: String) {
     AppleMusicExternalLinkOpener.open(url, context: context)
 }
 
+@ViewBuilder
+private func editorialDescriptionSection(text: String?, title: String) -> some View {
+    if let text {
+        VStack(alignment: .leading, spacing: 14) {
+            ExpandableText(
+                text: text,
+                title: title,
+                collapsedLineLimit: ExpandableDescriptionPolicy.appleMusicCollapsedLineLimit,
+                font: .subheadline,
+                uiTextStyle: .subheadline,
+                textColor: .white.opacity(0.68),
+                toggleColor: .white.opacity(0.94),
+                multilineTextAlignment: .leading
+            )
+
+            Divider()
+                .overlay(.white.opacity(0.16))
+        }
+        .padding(.horizontal)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+}
+
 struct LocalMusicAlbumDetailView: View {
     let album: Album
     let store: LocalLibraryStore
@@ -95,6 +119,10 @@ struct LocalMusicAlbumDetailView: View {
                 actionBar
                     .padding(.top, 16)
                     .padding(.bottom, 8)
+                editorialDescriptionSection(
+                    text: albumDescription,
+                    title: displayAlbum.title
+                )
                 trackList
                 completeAlbumFooter
             }
@@ -164,18 +192,6 @@ struct LocalMusicAlbumDetailView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
 
-                if let description = albumDescription {
-                    ExpandableText(
-                        text: description,
-                        title: displayAlbum.title,
-                        collapsedLineLimit: 3,
-                        font: .caption,
-                        textColor: Color.secondary.opacity(0.72),
-                        toggleColor: .white.opacity(0.92),
-                        multilineTextAlignment: .center
-                    )
-                    .padding(.top, 2)
-                }
             }
             .padding(.horizontal)
         }
@@ -782,6 +798,10 @@ struct LocalMusicPlaylistDetailView: View {
                 actionBar
                     .padding(.top, 16)
                     .padding(.bottom, 8)
+                editorialDescriptionSection(
+                    text: playlistDescription,
+                    title: displayPlaylist.name
+                )
                 trackList
             }
             .padding(.bottom, 24)
@@ -836,18 +856,6 @@ struct LocalMusicPlaylistDetailView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
 
-                if let description = playlistDescription {
-                    ExpandableText(
-                        text: description,
-                        title: displayPlaylist.name,
-                        collapsedLineLimit: 3,
-                        font: .caption,
-                        textColor: Color.secondary.opacity(0.72),
-                        toggleColor: .white.opacity(0.92),
-                        multilineTextAlignment: .center
-                    )
-                    .padding(.top, 2)
-                }
             }
             .padding(.horizontal)
         }
@@ -1492,6 +1500,7 @@ struct LocalMusicArtistDetailView: View {
                         title: displayArtist.name,
                         collapsedLineLimit: 3,
                         font: .caption,
+                        uiTextStyle: .caption1,
                         textColor: Color.secondary.opacity(0.72),
                         toggleColor: .white.opacity(0.92),
                         multilineTextAlignment: .center
@@ -2091,6 +2100,7 @@ private struct LocalMusicCatalogArtistDetailView: View {
                         title: artist.name,
                         collapsedLineLimit: 3,
                         font: .caption,
+                        uiTextStyle: .caption1,
                         textColor: Color.secondary.opacity(0.72),
                         toggleColor: .white.opacity(0.92),
                         multilineTextAlignment: .center

@@ -153,6 +153,7 @@ struct PlaylistDetailView: View {
                         title: playlistTitle,
                         collapsedLineLimit: 3,
                         font: .subheadline,
+                        uiTextStyle: .subheadline,
                         textColor: themeColor ?? .secondary,
                         toggleColor: .white.opacity(0.92),
                         multilineTextAlignment: .center

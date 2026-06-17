@@ -152,6 +152,105 @@ final class AlbumDetailPresentationTests: XCTestCase {
         XCTAssertEqual(ExpandableDescriptionPolicy.moreLabel, "MORE")
     }
 
+    func testExpandableDescriptionMoreOverlayReservesTrailingLastLineSpace() {
+        XCTAssertEqual(
+            ExpandableDescriptionPolicy.moreOverlayReservedWidth(labelWidth: 38),
+            84
+        )
+        XCTAssertEqual(
+            ExpandableDescriptionPolicy.inlineMoreReservedWidth(labelWidth: 38),
+            84
+        )
+    }
+
+    func testExpandableDescriptionMoreOverlayDoesNotMaskCollapsedTextLayer() {
+        XCTAssertFalse(ExpandableDescriptionPolicy.usesCollapsedTextLayerMask)
+    }
+
+    func testExpandableDescriptionUsesTwoCollapsedLinesForAppleMusicStyle() {
+        XCTAssertEqual(ExpandableDescriptionPolicy.appleMusicCollapsedLineLimit, 2)
+    }
+
+    func testExpandableDescriptionTruncatorAppendsInlineMoreForLongText() {
+        let text = """
+        For those who grew up during the streaming era, it may be impossible to grasp just how monumental the announcement of this album seemed at the time.
+        """
+        let result = ExpandableDescriptionTruncator.collapsedText(
+            from: text,
+            font: .systemFont(ofSize: 15),
+            textColor: .secondaryLabel,
+            moreColor: .label,
+            width: 230,
+            lineLimit: 2
+        )
+
+        XCTAssertTrue(result.isTruncated)
+        XCTAssertTrue(result.attributedText.string.hasSuffix(" MORE"))
+        XCTAssertLessThan(result.attributedText.string.count, text.count)
+    }
+
+    func testExpandableDescriptionTruncatorLeavesShortTextUnchanged() {
+        let text = "A concise editorial note."
+        let result = ExpandableDescriptionTruncator.collapsedText(
+            from: text,
+            font: .systemFont(ofSize: 15),
+            textColor: .secondaryLabel,
+            moreColor: .label,
+            width: 230,
+            lineLimit: 2
+        )
+
+        XCTAssertFalse(result.isTruncated)
+        XCTAssertEqual(result.attributedText.string, text)
+    }
+
+    func testExpandableDescriptionTruncatorFadesTextBeforeInlineMore() {
+        let text = """
+        For those who grew up during the streaming era, it may be impossible to grasp just how monumental the announcement of this album seemed at the time.
+        """
+        let result = ExpandableDescriptionTruncator.collapsedText(
+            from: text,
+            font: .systemFont(ofSize: 15),
+            textColor: UIColor(white: 1, alpha: 0.68),
+            moreColor: UIColor(white: 1, alpha: 1),
+            width: 230,
+            lineLimit: 2
+        )
+        let moreRange = (result.attributedText.string as NSString)
+            .range(of: " \(ExpandableDescriptionPolicy.moreLabel)")
+
+        XCTAssertTrue(result.isTruncated)
+        XCTAssertNotEqual(moreRange.location, NSNotFound)
+
+        let firstFadedCharacter = max(0, moreRange.location - 5)
+        let lastFadedCharacter = moreRange.location - 1
+        let firstAlpha = foregroundAlpha(in: result.attributedText, at: firstFadedCharacter)
+        let lastAlpha = foregroundAlpha(in: result.attributedText, at: lastFadedCharacter)
+
+        XCTAssertGreaterThan(firstAlpha, lastAlpha)
+        XCTAssertLessThan(lastAlpha, 0.34)
+    }
+
+    func testExpandableDescriptionTruncatorKeepsInlineMoreOpaque() {
+        let text = """
+        For those who grew up during the streaming era, it may be impossible to grasp just how monumental the announcement of this album seemed at the time.
+        """
+        let result = ExpandableDescriptionTruncator.collapsedText(
+            from: text,
+            font: .systemFont(ofSize: 15),
+            textColor: UIColor(white: 1, alpha: 0.68),
+            moreColor: UIColor(white: 1, alpha: 1),
+            width: 230,
+            lineLimit: 2
+        )
+        let moreRange = (result.attributedText.string as NSString)
+            .range(of: " \(ExpandableDescriptionPolicy.moreLabel)")
+
+        XCTAssertTrue(result.isTruncated)
+        XCTAssertNotEqual(moreRange.location, NSNotFound)
+        XCTAssertEqual(foregroundAlpha(in: result.attributedText, at: moreRange.location + 1), 1, accuracy: 0.001)
+    }
+
     func testExpandableDescriptionStripsSimpleItalicMarkupForPlainText() {
         XCTAssertEqual(
             ExpandableDescriptionTextFormatter.plainText(
@@ -184,5 +283,13 @@ final class AlbumDetailPresentationTests: XCTestCase {
     func testArtistTopSongsOnlyShowsFullListLinkWhenThereAreMoreThanFiveSongs() {
         XCTAssertFalse(LocalMusicArtistTopSongsPolicy.shouldShowFullListLink(totalCount: 5))
         XCTAssertTrue(LocalMusicArtistTopSongsPolicy.shouldShowFullListLink(totalCount: 6))
+    }
+
+    private func foregroundAlpha(in attributedText: NSAttributedString, at location: Int) -> CGFloat {
+        guard location >= 0, location < attributedText.length,
+              let color = attributedText.attribute(.foregroundColor, at: location, effectiveRange: nil) as? UIColor else {
+            return -1
+        }
+        return color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).cgColor.alpha
     }
 }
