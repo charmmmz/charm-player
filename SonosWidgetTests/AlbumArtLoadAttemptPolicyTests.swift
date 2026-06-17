@@ -130,4 +130,58 @@ final class AlbumArtLoadAttemptPolicyTests: XCTestCase {
             "https://example.com/song-1.jpg"
         )
     }
+
+    func testQueueArtPrefetchLimitsLocalSonosArtworkButKeepsRemoteArtwork() {
+        let urls = [
+            "http://192.168.50.25:1400/getaa?s=1",
+            "http://192.168.50.25:1400/getaa?s=2",
+            "http://192.168.50.25:1400/getaa?s=3",
+            "https://is1-ssl.mzstatic.com/image/thumb/example.jpg"
+        ]
+
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.urlsToPrefetch(
+                from: urls,
+                cachedURLs: [],
+                localSonosArtworkLimit: 2
+            ),
+            [
+                "http://192.168.50.25:1400/getaa?s=1",
+                "http://192.168.50.25:1400/getaa?s=2",
+                "https://is1-ssl.mzstatic.com/image/thumb/example.jpg"
+            ]
+        )
+    }
+
+    func testQueueArtPrefetchSkipsCachedAndDuplicateURLs() {
+        let urls = [
+            "http://192.168.50.25:1400/getaa?s=1",
+            "http://192.168.50.25:1400/getaa?s=1",
+            "https://example.com/remote.jpg"
+        ]
+
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.urlsToPrefetch(
+                from: urls,
+                cachedURLs: ["http://192.168.50.25:1400/getaa?s=1"],
+                localSonosArtworkLimit: 2
+            ),
+            ["https://example.com/remote.jpg"]
+        )
+    }
+
+    func testQueueArtPrefetchUsesLowerConcurrencyWhenLocalSonosArtworkIsPresent() {
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.maxConcurrentFetches(
+                for: ["http://192.168.50.25:1400/getaa?s=1"]
+            ),
+            2
+        )
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.maxConcurrentFetches(
+                for: ["https://is1-ssl.mzstatic.com/image/thumb/example.jpg"]
+            ),
+            8
+        )
+    }
 }

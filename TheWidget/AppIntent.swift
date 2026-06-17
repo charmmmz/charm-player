@@ -49,24 +49,27 @@ struct NextTrackIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
         let previousTrack = IntentHelper.cachedTrackIdentity()
-        let relayState: RelayClient.RelayPlaybackState?
+
+        if let relayState = await IntentHelper.sendRelayPlaybackCommand("next", fallbackGroupId: ip) {
+            SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
+            await IntentHelper.applyRelayPlaybackState(relayState)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+            return .result()
+        }
+
         do {
             try await SonosAPI.next(ip: ip)
-            relayState = nil
         } catch {
-            relayState = await IntentHelper.sendRelayPlaybackCommand("next", fallbackGroupId: ip)
+            return .result()
         }
+
         // Lock the current play state during track transition so the widget doesn't
         // flicker while the device is in TRANSITIONING state.
         SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
-        if let relayState {
-            await IntentHelper.applyRelayPlaybackState(relayState)
-        } else {
-            let info = await IntentHelper.refreshCacheAfterTrackCommand(
-                playbackIP: ip,
-                previousTrack: previousTrack)
-            await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
-        }
+        let info = await IntentHelper.refreshCacheAfterTrackCommand(
+            playbackIP: ip,
+            previousTrack: previousTrack)
+        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         return .result()
     }
@@ -79,22 +82,25 @@ struct PreviousTrackIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
         let previousTrack = IntentHelper.cachedTrackIdentity()
-        let relayState: RelayClient.RelayPlaybackState?
+
+        if let relayState = await IntentHelper.sendRelayPlaybackCommand("previous", fallbackGroupId: ip) {
+            SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
+            await IntentHelper.applyRelayPlaybackState(relayState)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+            return .result()
+        }
+
         do {
             try await SonosAPI.previous(ip: ip)
-            relayState = nil
         } catch {
-            relayState = await IntentHelper.sendRelayPlaybackCommand("previous", fallbackGroupId: ip)
+            return .result()
         }
+
         SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
-        if let relayState {
-            await IntentHelper.applyRelayPlaybackState(relayState)
-        } else {
-            let info = await IntentHelper.refreshCacheAfterTrackCommand(
-                playbackIP: ip,
-                previousTrack: previousTrack)
-            await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
-        }
+        let info = await IntentHelper.refreshCacheAfterTrackCommand(
+            playbackIP: ip,
+            previousTrack: previousTrack)
+        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         return .result()
     }
@@ -291,6 +297,8 @@ enum IntentHelper {
             return nil
         }
 
+        let previousAlbumArtURL = SharedStorage.cachedAlbumArtURL
+        let hasCachedAlbumArtData = SharedStorage.albumArtData != nil
         SharedStorage.cachedTrackTitle = info.title
         SharedStorage.cachedArtist = info.artist
         SharedStorage.cachedAlbum = info.album
@@ -303,7 +311,12 @@ enum IntentHelper {
             await refreshSoundbarEQ(playbackIP: ip)
         }
 
-        if let urlStr = info.albumArtURL, let url = URL(string: urlStr),
+        if CachedArtworkFetchPolicy.shouldFetch(
+            incomingURLString: info.albumArtURL,
+            cachedURLString: previousAlbumArtURL,
+            hasCachedData: hasCachedAlbumArtData
+        ),
+           let urlStr = info.albumArtURL, let url = URL(string: urlStr),
            let (data, _) = try? await noProxySession.data(from: url) {
             SharedStorage.albumArtData = data
         }
@@ -317,8 +330,7 @@ enum IntentHelper {
     ) async -> TrackInfo? {
         let delays: [Duration] = [
             .milliseconds(800),
-            .milliseconds(600),
-            .milliseconds(800),
+            .milliseconds(900),
             .milliseconds(1_200)
         ]
         var latestInfo: TrackInfo?

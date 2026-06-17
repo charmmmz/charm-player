@@ -57,3 +57,50 @@ enum AlbumArtURLCarryoverPolicy {
         return trimmed
     }
 }
+
+nonisolated enum QueueArtPrefetchPolicy {
+    static let defaultLocalSonosArtworkLimit = 3
+    static let localSonosArtworkConcurrency = 2
+    static let remoteArtworkConcurrency = 8
+
+    static func urlsToPrefetch(
+        from urls: [String],
+        cachedURLs: Set<String>,
+        localSonosArtworkLimit: Int = defaultLocalSonosArtworkLimit
+    ) -> [String] {
+        var seen = Set<String>()
+        var localSonosArtworkCount = 0
+        let localLimit = max(0, localSonosArtworkLimit)
+
+        return urls.compactMap { urlString in
+            guard !cachedURLs.contains(urlString),
+                  seen.insert(urlString).inserted else {
+                return nil
+            }
+
+            if isLocalSonosArtworkURL(urlString) {
+                guard localSonosArtworkCount < localLimit else {
+                    return nil
+                }
+                localSonosArtworkCount += 1
+            }
+
+            return urlString
+        }
+    }
+
+    static func maxConcurrentFetches(for urls: [String]) -> Int {
+        urls.contains(where: isLocalSonosArtworkURL)
+            ? localSonosArtworkConcurrency
+            : remoteArtworkConcurrency
+    }
+
+    static func isLocalSonosArtworkURL(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              url.scheme?.lowercased() == "http",
+              url.port == 1400 else {
+            return false
+        }
+        return url.path.lowercased().contains("getaa")
+    }
+}

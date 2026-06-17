@@ -53,28 +53,20 @@ struct SonosProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<SonosEntry>) -> Void) {
         Task {
-            let entry = await fetchLiveEntry()
-
-            // If a song is playing, schedule a refresh right when it should end.
-            // This gives WidgetKit a concrete deadline to honor rather than a vague "2 minutes".
-            // Fall back to 2 minutes if no duration info is available.
-            let fallback = Date().addingTimeInterval(2 * 60)
-            var nextRefresh = fallback
-
-            if SharedStorage.isPlaying,
-               let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP,
-               let info = try? await SonosAPI.getPositionInfo(ip: ip) {
-                let remaining = info.durationSeconds - info.positionSeconds
-                if remaining > 5 && remaining < 20 * 60 {
-                    // Refresh 2s after the song ends so the next song has started.
-                    nextRefresh = Date().addingTimeInterval(remaining + 2)
-                }
-            }
-
-            // Always cap at 2 minutes so we don't wait too long for short/unknown tracks.
-            nextRefresh = min(nextRefresh, fallback)
+            let result = await fetchLiveEntry()
+            let entry = result.entry
+            let nextRefresh = WidgetTimelineRefreshPolicy.nextRefreshDate(
+                isPlaying: entry.isPlaying,
+                positionSeconds: result.trackInfo?.positionSeconds,
+                durationSeconds: result.trackInfo?.durationSeconds
+            )
             completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
         }
+    }
+
+    private struct LiveEntryResult {
+        let entry: SonosEntry
+        let trackInfo: TrackInfo?
     }
 
     private func cachedEntry() -> SonosEntry {
@@ -97,9 +89,11 @@ struct SonosProvider: TimelineProvider {
         )
     }
 
-    private func fetchLiveEntry() async -> SonosEntry {
+    private func fetchLiveEntry() async -> LiveEntryResult {
         let playIP = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP
-        guard let ip = playIP else { return .unconfigured }
+        guard let ip = playIP else {
+            return LiveEntryResult(entry: .unconfigured, trackInfo: nil)
+        }
 
         do {
             async let stateTask = SonosAPI.getTransportInfo(ip: ip)
@@ -112,6 +106,7 @@ struct SonosProvider: TimelineProvider {
                 SharedStorage.isPlaying = (state == .playing)
             }
             let isPlaying = SharedStorage.isPlaying
+            let previousAlbumArtURL = SharedStorage.cachedAlbumArtURL
             SharedStorage.cachedTrackTitle = info.title
             SharedStorage.cachedArtist = info.artist
             SharedStorage.cachedAlbum = info.album
@@ -120,7 +115,13 @@ struct SonosProvider: TimelineProvider {
 
             // Album art — extract dominant color if track changed.
             var artData = SharedStorage.albumArtData
-            if let urlStr = info.albumArtURL, let url = URL(string: urlStr) {
+            if CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: info.albumArtURL,
+                cachedURLString: previousAlbumArtURL,
+                hasCachedData: artData != nil
+            ),
+               let urlStr = info.albumArtURL,
+               let url = URL(string: urlStr) {
                 var req = URLRequest(url: url, timeoutInterval: 5)
                 req.httpMethod = "GET"
                 if let (data, _) = try? await noProxySession.data(for: req) {
@@ -154,17 +155,19 @@ struct SonosProvider: TimelineProvider {
 
             let isLiveStream = info.isLiveStream
             SharedStorage.cachedIsLiveStream = isLiveStream
-            return SonosEntry(date: .now, trackTitle: info.title, artist: info.artist,
-                              album: info.album, isPlaying: isPlaying,
-                              albumArtData: artData, isConfigured: true,
-                              speakerName: SharedStorage.speakerName,
-                              groupMemberCount: SharedStorage.cachedGroupMemberCount,
-                              playbackSource: info.source,
-                              dominantColorHex: SharedStorage.cachedDominantColorHex,
-                              audioQualityLabel: audioQualityLabel,
-                              isLiveStream: isLiveStream)
+            return LiveEntryResult(
+                entry: SonosEntry(date: .now, trackTitle: info.title, artist: info.artist,
+                                  album: info.album, isPlaying: isPlaying,
+                                  albumArtData: artData, isConfigured: true,
+                                  speakerName: SharedStorage.speakerName,
+                                  groupMemberCount: SharedStorage.cachedGroupMemberCount,
+                                  playbackSource: info.source,
+                                  dominantColorHex: SharedStorage.cachedDominantColorHex,
+                                  audioQualityLabel: audioQualityLabel,
+                                  isLiveStream: isLiveStream),
+                trackInfo: info)
         } catch {
-            return cachedEntry()
+            return LiveEntryResult(entry: cachedEntry(), trackInfo: nil)
         }
     }
 }

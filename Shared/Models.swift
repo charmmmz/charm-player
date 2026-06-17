@@ -261,6 +261,46 @@ struct TrackInfo: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated enum WidgetTimelineRefreshPolicy {
+    static func nextRefreshDate(
+        now: Date = Date(),
+        isPlaying: Bool,
+        positionSeconds: TimeInterval?,
+        durationSeconds: TimeInterval?,
+        fallbackInterval: TimeInterval = 2 * 60
+    ) -> Date {
+        let fallback = now.addingTimeInterval(fallbackInterval)
+        guard isPlaying,
+              let positionSeconds,
+              let durationSeconds,
+              durationSeconds > 0 else {
+            return fallback
+        }
+
+        let remaining = durationSeconds - positionSeconds
+        guard remaining > 5, remaining < 20 * 60 else {
+            return fallback
+        }
+
+        return min(now.addingTimeInterval(remaining + 2), fallback)
+    }
+}
+
+nonisolated enum CachedArtworkFetchPolicy {
+    static func shouldFetch(
+        incomingURLString: String?,
+        cachedURLString: String?,
+        hasCachedData: Bool
+    ) -> Bool {
+        guard let incomingURLString,
+              !incomingURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        return !hasCachedData || incomingURLString != cachedURLString
+    }
+}
+
 // MARK: - TV Audio Format
 
 /// Decoded soundbar audio-input format. Sourced from

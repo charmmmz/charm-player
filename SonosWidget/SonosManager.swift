@@ -33,6 +33,31 @@ enum LiveActivityArtworkThumbnail {
     }
 }
 
+@MainActor
+final class RefreshRequestGate {
+    private var generation = 0
+    private var inFlight: (generation: Int, task: Task<Void, Never>)?
+
+    func run(_ operation: @escaping @MainActor () async -> Void) async {
+        if let current = inFlight {
+            await current.task.value
+            return
+        }
+
+        generation += 1
+        let currentGeneration = generation
+        let task = Task { @MainActor in
+            await operation()
+        }
+        inFlight = (currentGeneration, task)
+        await task.value
+
+        if inFlight?.generation == currentGeneration {
+            inFlight = nil
+        }
+    }
+}
+
 @Observable
 final class SonosManager {
     struct SpeakerSelectionCachedArtwork {
@@ -96,6 +121,7 @@ final class SonosManager {
     private var positionTask: Task<Void, Never>?
     private var eventSubscriptionTask: Task<Void, Never>?
     private var eventDrivenRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private let lanRefreshGate = RefreshRequestGate()
     private var eventListener: SonosEventListener?
     private var eventSubscriptions = SonosEventSubscriptionRegistry()
     private var eventSubscriptionIP: String?
@@ -991,16 +1017,17 @@ final class SonosManager {
         }) ?? 0
         let reordered = Array(queue[nowIndex...]) + Array(queue[..<nowIndex])
 
-        var seen = Set<String>()
-        let ordered = reordered.compactMap { $0.albumArtURL }
-            .filter { !cachedArtURLs.contains($0) && seen.insert($0).inserted }
+        let ordered = QueueArtPrefetchPolicy.urlsToPrefetch(
+            from: reordered.compactMap { $0.albumArtURL },
+            cachedURLs: cachedArtURLs
+        )
         guard !ordered.isEmpty else { return }
 
         let diskCache = QueueArtDiskCache.shared
         prefetchTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await withTaskGroup(of: Void.self) { group in
-                let maxConcurrent = 8
+                let maxConcurrent = QueueArtPrefetchPolicy.maxConcurrentFetches(for: ordered)
                 var index = 0
 
                 func addNext() {
@@ -1855,6 +1882,12 @@ final class SonosManager {
     }
 
     private func refreshStateLAN() async {
+        await lanRefreshGate.run { [weak self] in
+            await self?.performRefreshStateLAN()
+        }
+    }
+
+    private func performRefreshStateLAN() async {
         guard let pIP = playbackIP else { return }
         do {
             async let t = SonosAPI.getTransportInfo(ip: pIP)

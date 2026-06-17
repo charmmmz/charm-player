@@ -3,6 +3,100 @@ import UIKit
 @testable import SonosWidget
 
 final class LiveActivityUpdatePolicyTests: XCTestCase {
+    @MainActor
+    func testRefreshRequestGateCoalescesConcurrentRuns() async {
+        let gate = RefreshRequestGate()
+        let release = AsyncTestLatch()
+        var runCount = 0
+
+        async let first: Void = gate.run {
+            runCount += 1
+            await release.wait()
+        }
+
+        while runCount == 0 {
+            await Task.yield()
+        }
+
+        async let second: Void = gate.run {
+            runCount += 1
+        }
+
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(runCount, 1)
+        await release.open()
+        await first
+        await second
+        XCTAssertEqual(runCount, 1)
+    }
+
+    func testWidgetTimelineRefreshPolicyUsesTrackEndWhenSoonerThanFallback() {
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        let nextRefresh = WidgetTimelineRefreshPolicy.nextRefreshDate(
+            now: now,
+            isPlaying: true,
+            positionSeconds: 170,
+            durationSeconds: 180,
+            fallbackInterval: 120
+        )
+
+        XCTAssertEqual(nextRefresh, now.addingTimeInterval(12))
+    }
+
+    func testWidgetTimelineRefreshPolicyFallsBackForPausedOrUnknownDuration() {
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertEqual(
+            WidgetTimelineRefreshPolicy.nextRefreshDate(
+                now: now,
+                isPlaying: false,
+                positionSeconds: 170,
+                durationSeconds: 180,
+                fallbackInterval: 120),
+            now.addingTimeInterval(120)
+        )
+        XCTAssertEqual(
+            WidgetTimelineRefreshPolicy.nextRefreshDate(
+                now: now,
+                isPlaying: true,
+                positionSeconds: 0,
+                durationSeconds: 0,
+                fallbackInterval: 120),
+            now.addingTimeInterval(120)
+        )
+    }
+
+    func testCachedArtworkFetchPolicySkipsSameURLWhenDataExists() {
+        XCTAssertFalse(
+            CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: "http://speaker/getaa?s=1",
+                cachedURLString: "http://speaker/getaa?s=1",
+                hasCachedData: true)
+        )
+        XCTAssertTrue(
+            CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: "http://speaker/getaa?s=1",
+                cachedURLString: "http://speaker/getaa?s=1",
+                hasCachedData: false)
+        )
+        XCTAssertTrue(
+            CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: "http://speaker/getaa?s=2",
+                cachedURLString: "http://speaker/getaa?s=1",
+                hasCachedData: true)
+        )
+        XCTAssertFalse(
+            CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: nil,
+                cachedURLString: "http://speaker/getaa?s=1",
+                hasCachedData: true)
+        )
+    }
+
     func testAutoRefreshUsesWatchdogCadenceWhenLANEventsAreSubscribed() {
         let plan = SonosManager.autoRefreshPlan(
             transportBackend: .lan,
@@ -563,6 +657,27 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
                     context.fill(CGRect(x: x, y: y, width: 4, height: 4))
                 }
             }
+        }
+    }
+}
+
+private actor AsyncTestLatch {
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = continuations
+        continuations.removeAll()
+        for continuation in pending {
+            continuation.resume()
         }
     }
 }
