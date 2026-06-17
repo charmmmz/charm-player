@@ -144,23 +144,6 @@ struct AppleMusicFavoriteResource: Codable, Equatable, Sendable {
     }
 }
 
-struct AppleMusicFavoriteRequestBody: Encodable, Sendable {
-    struct Resource: Encodable, Sendable {
-        let id: String
-        let type: AppleMusicFavoriteResourceType
-    }
-
-    let data: [Resource]
-
-    init(resource: AppleMusicFavoriteResource) {
-        data = [Resource(id: resource.id, type: resource.type)]
-    }
-
-    func jsonData() throws -> Data {
-        try JSONEncoder().encode(self)
-    }
-}
-
 enum AppleMusicFavoritesError: LocalizedError, Equatable {
     case authorizationDenied
     case invalidResponse
@@ -240,10 +223,18 @@ struct AppleMusicFavoritesClient: Sendable {
         for resource: AppleMusicFavoriteResource,
         method: String
     ) throws -> URLRequest {
-        var request = URLRequest(url: favoritesURL)
+        guard var components = URLComponents(url: favoritesURL, resolvingAgainstBaseURL: false) else {
+            throw AppleMusicFavoritesError.invalidResponse
+        }
+        components.queryItems = [
+            URLQueryItem(name: "ids[\(resource.type.rawValue)]", value: resource.id)
+        ]
+        guard let url = components.url else {
+            throw AppleMusicFavoritesError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try AppleMusicFavoriteRequestBody(resource: resource).jsonData()
         return request
     }
 }
