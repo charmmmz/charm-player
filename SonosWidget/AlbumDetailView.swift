@@ -342,7 +342,7 @@ struct AlbumDetailView: View {
             actions: AlbumTrackMenuActionPolicy.actions(
                 favoriteKind: .sonos,
                 isFavoriteActive: trackFavorited,
-                isQueueable: item.uri != nil
+                isQueueable: item.playbackDescriptor.isQueueable
             )
         ) { action in
             performTrackMenuAction(action, track: track, item: item)
@@ -402,25 +402,12 @@ struct AlbumDetailView: View {
     }
 
     private func browseItemFromTrack(_ track: SonosCloudAPI.AlbumTrackItem) -> BrowseItem {
-        let objectId = track.resource?.id?.objectId ?? ""
-        let title = track.title ?? ""
-        let trackArtist = track.artists?.first?.name ?? artistName
-        let mimeType = track.resource?.defaults.flatMap { defaults -> String? in
-            guard let data = Data(base64Encoded: defaults),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            return json["mimeType"] as? String
-        }
-
-        guard let serviceId = track.resource?.id?.serviceId,
-              let accountId = track.resource?.id?.accountId else {
-            return BrowseItem(id: objectId, title: title, artist: trackArtist,
-                              album: albumTitle, albumArtURL: coverURL,
-                              isContainer: false)
-        }
-        return searchManager.makeTrackItem(
-            objectId: objectId, title: title, artist: trackArtist,
-            album: albumTitle, artURL: coverURL, mimeType: mimeType,
-            cloudServiceId: serviceId, accountId: accountId)
+        searchManager.makeAlbumTrackItem(
+            from: track,
+            fallbackAlbumTitle: albumTitle,
+            fallbackArtist: artistName,
+            fallbackArtURL: coverURL
+        )
     }
 
     // MARK: - Data Loading
