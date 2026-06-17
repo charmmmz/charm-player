@@ -758,12 +758,33 @@ final class SonosManager {
     }
 
     func toggleNightMode() async {
-        guard let ip = selectedSpeaker?.ipAddress else { return }
+        guard let speaker = selectedSpeaker else { return }
+        let ip = speaker.ipAddress
         let prev = nightMode
         nightMode = !prev
         SharedStorage.cachedSoundbarNightMode = nightMode
         soundbarEQLockUntil = Date().addingTimeInterval(2)
         manageLiveActivity()
+
+        if Self.shouldSendSoundbarCommandThroughRelay(
+            usesRelay: currentActivityUsesRelay,
+            relayWriterReady: liveActivityRelayWriterReady
+        ) {
+            if let relayState = await sendRelaySoundbarNightModeCommand(
+                nightMode,
+                fallbackGroupId: speaker.playbackIP
+            ) {
+                applyRelaySoundbarState(relayState)
+            } else {
+                nightMode = prev
+                SharedStorage.cachedSoundbarNightMode = prev
+                soundbarEQLockUntil = .distantPast
+                manageLiveActivity()
+                errorMessage = "NAS Relay command failed"
+            }
+            return
+        }
+
         do {
             try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nightMode)
         } catch {
@@ -776,13 +797,33 @@ final class SonosManager {
     }
 
     func setSpeechEnhancement(_ level: SpeechEnhancementLevel) async {
-        guard let ip = selectedSpeaker?.ipAddress else { return }
+        guard let speaker = selectedSpeaker else { return }
+        let ip = speaker.ipAddress
         let prev = speechEnhancement
         guard level != prev else { return }
         speechEnhancement = level
         SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = level.rawValue
         soundbarEQLockUntil = Date().addingTimeInterval(2)
         manageLiveActivity()
+        if Self.shouldSendSoundbarCommandThroughRelay(
+            usesRelay: currentActivityUsesRelay,
+            relayWriterReady: liveActivityRelayWriterReady
+        ) {
+            if let relayState = await sendRelaySoundbarSpeechEnhancementCommand(
+                level,
+                fallbackGroupId: speaker.playbackIP
+            ) {
+                applyRelaySoundbarState(relayState)
+            } else {
+                speechEnhancement = prev
+                SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = prev.rawValue
+                soundbarEQLockUntil = .distantPast
+                manageLiveActivity()
+                errorMessage = "NAS Relay command failed"
+            }
+            return
+        }
+
         // Arc Ultra requires writing both fields. `SpeechEnhanceEnabled` is
         // the master switch; `DialogLevel` carries the 1–4 intensity. The
         // device persists DialogLevel even when disabled (per Sonos UPnP
@@ -2974,6 +3015,13 @@ final class SonosManager {
         !usesRelay || !relayWriterReady
     }
 
+    nonisolated static func shouldSendSoundbarCommandThroughRelay(
+        usesRelay: Bool,
+        relayWriterReady: Bool
+    ) -> Bool {
+        usesRelay && relayWriterReady
+    }
+
     nonisolated static func shouldKeepLiveActivity(
         isPlaying: Bool,
         transportState: TransportState,
@@ -3185,6 +3233,69 @@ final class SonosManager {
     /// the relay can find the right token list when an event lands.
     private func liveActivityGroupId() -> String? {
         selectedSpeaker?.playbackIP
+    }
+
+    private func sendRelaySoundbarNightModeCommand(
+        _ enabled: Bool,
+        fallbackGroupId: String
+    ) async -> RelayClient.RelayPlaybackState? {
+        await sendRelayLiveActivityCommand(
+            "setSoundbarNightMode",
+            fallbackGroupId: fallbackGroupId,
+            nightMode: enabled
+        )
+    }
+
+    private func sendRelaySoundbarSpeechEnhancementCommand(
+        _ level: SpeechEnhancementLevel,
+        fallbackGroupId: String
+    ) async -> RelayClient.RelayPlaybackState? {
+        await sendRelayLiveActivityCommand(
+            "setSoundbarSpeechEnhancement",
+            fallbackGroupId: fallbackGroupId,
+            speechEnhancementRawLevel: level.rawValue
+        )
+    }
+
+    private func sendRelayLiveActivityCommand(
+        _ command: String,
+        fallbackGroupId: String,
+        nightMode: Bool? = nil,
+        speechEnhancementRawLevel: Int? = nil
+    ) async -> RelayClient.RelayPlaybackState? {
+        guard let route = RelayClient.liveActivityCommandRoute(
+            relayURLString: SharedStorage.relayURLString,
+            relayPushToken: SharedStorage.liveActivityRelayPushToken,
+            coordinatorIP: liveActivityGroupId(),
+            fallbackGroupId: fallbackGroupId
+        ) else {
+            return nil
+        }
+
+        return try? await RelayClient.sendLiveActivityCommand(
+            baseURL: route.baseURL,
+            groupId: route.groupId,
+            token: route.token,
+            command: command,
+            nightMode: nightMode,
+            speechEnhancementRawLevel: speechEnhancementRawLevel
+        )
+    }
+
+    private func applyRelaySoundbarState(_ state: RelayClient.RelayPlaybackState) {
+        if let night = state.soundbarNightMode {
+            nightMode = night
+            SharedStorage.cachedSoundbarNightMode = night
+        }
+        if let rawLevel = state.soundbarSpeechEnhancementRawLevel {
+            let level = SpeechEnhancementLevel.from(rawLevel: rawLevel)
+            speechEnhancement = level
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = level.rawValue
+        }
+        if let label = state.audioQualityLabel {
+            SharedStorage.cachedAudioQualityLabel = label
+        }
+        soundbarEQLockUntil = .distantPast
     }
 
     private func pushLiveActivityRelayPreferencesIfNeeded(force: Bool = false) {

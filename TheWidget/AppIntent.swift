@@ -114,9 +114,7 @@ struct ToggleNightModeIntent: LiveActivityIntent {
         await IntentHelper.updateLiveActivitySoundbarState(nightMode: nextValue)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
 
-        do {
-            try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nextValue)
-        } catch {
+        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip) {
             if let relayState = await IntentHelper.sendRelaySoundbarNightModeCommand(
                 nextValue,
                 fallbackGroupId: ip
@@ -127,6 +125,15 @@ struct ToggleNightModeIntent: LiveActivityIntent {
                 await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue)
                 WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
             }
+            return .result()
+        }
+
+        do {
+            try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nextValue)
+        } catch {
+            SharedStorage.cachedSoundbarNightMode = previousValue
+            await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
 
         return .result()
@@ -145,6 +152,20 @@ struct ToggleSpeechEnhancementIntent: LiveActivityIntent {
         SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = nextLevel.rawValue
         await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: nextLevel)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+
+        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip) {
+            if let relayState = await IntentHelper.sendRelaySoundbarSpeechEnhancementCommand(
+                nextLevel,
+                fallbackGroupId: ip
+            ) {
+                await IntentHelper.applyRelayPlaybackState(relayState)
+            } else {
+                SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = currentLevel.rawValue
+                await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel)
+                WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
+            }
+            return .result()
+        }
 
         do {
             switch nextLevel {
@@ -165,16 +186,9 @@ struct ToggleSpeechEnhancementIntent: LiveActivityIntent {
                     enabled: true)
             }
         } catch {
-            if let relayState = await IntentHelper.sendRelaySoundbarSpeechEnhancementCommand(
-                nextLevel,
-                fallbackGroupId: ip
-            ) {
-                await IntentHelper.applyRelayPlaybackState(relayState)
-            } else {
-                SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = currentLevel.rawValue
-                await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel)
-                WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
-            }
+            SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = currentLevel.rawValue
+            await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel)
+            WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
 
         return .result()
@@ -346,20 +360,30 @@ enum IntentHelper {
         nightMode: Bool? = nil,
         speechEnhancementRawLevel: Int? = nil
     ) async -> RelayClient.RelayPlaybackState? {
-        guard let urlString = SharedStorage.relayURLString,
-              let url = URL(string: urlString),
-              let token = SharedStorage.liveActivityRelayPushToken else {
+        guard let route = relayCommandRoute(fallbackGroupId: fallbackGroupId) else {
             return nil
         }
-        let groupId = SharedStorage.coordinatorIP ?? fallbackGroupId
         return try? await RelayClient.sendLiveActivityCommand(
-            baseURL: url,
-            groupId: groupId,
-            token: token,
+            baseURL: route.baseURL,
+            groupId: route.groupId,
+            token: route.token,
             command: command,
             volume: volume,
             nightMode: nightMode,
             speechEnhancementRawLevel: speechEnhancementRawLevel
+        )
+    }
+
+    static func hasRelayCommandRoute(fallbackGroupId: String) -> Bool {
+        relayCommandRoute(fallbackGroupId: fallbackGroupId) != nil
+    }
+
+    private static func relayCommandRoute(fallbackGroupId: String) -> RelayClient.LiveActivityCommandRoute? {
+        RelayClient.liveActivityCommandRoute(
+            relayURLString: SharedStorage.relayURLString,
+            relayPushToken: SharedStorage.liveActivityRelayPushToken,
+            coordinatorIP: SharedStorage.coordinatorIP,
+            fallbackGroupId: fallbackGroupId
         )
     }
 

@@ -10,6 +10,12 @@ import Foundation
 /// or just be logged.
 enum RelayClient {
 
+    struct LiveActivityCommandRoute: Equatable, Sendable {
+        let baseURL: URL
+        let groupId: String
+        let token: String
+    }
+
     // MARK: - Health probe
 
     struct HealthResponse: Decodable, Sendable {
@@ -269,6 +275,35 @@ enum RelayClient {
         let (data, response) = try await noProxySession.data(for: request)
         try validate(response)
         return try JSONDecoder().decode(LiveActivityCommandResponse.self, from: data).state
+    }
+
+    static func liveActivityCommandRoute(
+        relayURLString: String?,
+        relayPushToken: String?,
+        coordinatorIP: String?,
+        fallbackGroupId: String
+    ) -> LiveActivityCommandRoute? {
+        let urlString = relayURLString?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = relayPushToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let coordinator = coordinatorIP?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallback = fallbackGroupId
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let groupId = coordinator.isEmpty ? fallback : coordinator
+
+        guard let url = URL(string: urlString),
+              !token.isEmpty,
+              !groupId.isEmpty else {
+            return nil
+        }
+
+        return LiveActivityCommandRoute(
+            baseURL: url,
+            groupId: groupId,
+            token: token
+        )
     }
 
     static func unregisterActivity(baseURL: URL, token: String) async throws {

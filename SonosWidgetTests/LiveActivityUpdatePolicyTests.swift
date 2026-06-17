@@ -241,6 +241,29 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
+    func testTVSoundbarCommandsUseRelayWhenRelayIsPrimaryWriter() {
+        XCTAssertTrue(
+            SonosManager.shouldSendSoundbarCommandThroughRelay(
+                usesRelay: true,
+                relayWriterReady: true
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.shouldSendSoundbarCommandThroughRelay(
+                usesRelay: true,
+                relayWriterReady: false
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.shouldSendSoundbarCommandThroughRelay(
+                usesRelay: false,
+                relayWriterReady: true
+            )
+        )
+    }
+
     func testLiveActivityPlaybackStateCanBeReplacedFromFreshTrackInfo() throws {
         let oldState = SonosActivityAttributes.ContentState(
             trackTitle: "15 Step",

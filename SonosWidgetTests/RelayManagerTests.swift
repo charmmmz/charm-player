@@ -93,6 +93,40 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(state.soundbarSpeechEnhancementRawLevel, 3)
     }
 
+    func testLiveActivityCommandRouteUsesRegisteredRelayTokenAndCoordinatorGroup() throws {
+        let route = try XCTUnwrap(
+            RelayClient.liveActivityCommandRoute(
+                relayURLString: " http://192.168.50.2:8787 ",
+                relayPushToken: " push-token ",
+                coordinatorIP: "192.168.50.25",
+                fallbackGroupId: "192.168.50.26"
+            )
+        )
+
+        XCTAssertEqual(route.baseURL.absoluteString, "http://192.168.50.2:8787")
+        XCTAssertEqual(route.groupId, "192.168.50.25")
+        XCTAssertEqual(route.token, "push-token")
+    }
+
+    func testLiveActivityCommandRouteRequiresURLAndToken() {
+        XCTAssertNil(
+            RelayClient.liveActivityCommandRoute(
+                relayURLString: nil,
+                relayPushToken: "push-token",
+                coordinatorIP: "192.168.50.25",
+                fallbackGroupId: "192.168.50.26"
+            )
+        )
+        XCTAssertNil(
+            RelayClient.liveActivityCommandRoute(
+                relayURLString: "http://192.168.50.2:8787",
+                relayPushToken: " ",
+                coordinatorIP: "192.168.50.25",
+                fallbackGroupId: "192.168.50.26"
+            )
+        )
+    }
+
     func testHealthResponseDecodesUnknownHueAmbienceRenderModeAsNil() throws {
         let data = Data("""
         {
