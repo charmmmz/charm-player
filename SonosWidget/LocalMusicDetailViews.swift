@@ -2759,14 +2759,8 @@ private struct LocalMusicArtistLibraryAlbumCard: View {
                 if let artwork = album.artwork {
                     LocalMusicArtworkView(artwork: artwork, contentMode: .fill)
                 } else if let artworkURL {
-                    AsyncImage(url: artworkURL) { phase in
-                        if let image = phase.image {
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else {
-                            fallbackArtwork
-                        }
+                    RemoteArtworkImageView(url: artworkURL, contentMode: .fill) { _ in
+                        fallbackArtwork
                     }
                 } else {
                     fallbackArtwork
@@ -2819,23 +2813,25 @@ private struct LocalMusicArtistAlbumCard: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                AsyncImage(url: artworkURL) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        Rectangle()
-                            .fill(.white.opacity(0.08))
-                            .overlay {
-                                Image(systemName: "opticaldisc")
-                                    .font(.title)
-                                    .foregroundStyle(.tertiary)
-                            }
+                if let artworkURL {
+                    RemoteArtworkImageView(url: artworkURL, contentMode: .fill) { _ in
+                        fallbackArtwork
                     }
+                } else {
+                    fallbackArtwork
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var fallbackArtwork: some View {
+        Rectangle()
+            .fill(.white.opacity(0.08))
+            .overlay {
+                Image(systemName: "opticaldisc")
+                    .font(.title)
+                    .foregroundStyle(.tertiary)
+            }
     }
 }
 
@@ -2920,55 +2916,14 @@ private struct LocalMusicDetailRemoteArtworkView: View {
         self.contentMode = contentMode
     }
 
-    @State private var didLogSuccess = false
-    @State private var didLogFailure = false
-
     var body: some View {
-        AsyncImage(url: url) { phase in
-            if let image = phase.image {
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode.swiftUIContentMode)
-                    .onAppear { logSuccessIfNeeded() }
-            } else if case .failure(let error) = phase {
-                Color.clear
-                    .onAppear { logFailureIfNeeded(error) }
-            } else {
-                Color.clear
-            }
-        }
-    }
-
-    private func logSuccessIfNeeded() {
-        guard !didLogSuccess,
-              let diagnosticLabel else {
-            return
-        }
-        didLogSuccess = true
-        SonosLog.debug(
-            .localService,
-            "Detail remote artwork image loaded \(diagnosticLabel) url='\(url.absoluteString)'")
-    }
-
-    private func logFailureIfNeeded(_ error: Error) {
-        guard !didLogFailure,
-              let diagnosticLabel else {
-            return
-        }
-        didLogFailure = true
-        SonosLog.error(
-            .localService,
-            "Detail remote artwork image failed \(diagnosticLabel) url='\(url.absoluteString)' error=\(error)")
-    }
-}
-
-private extension LocalMusicArtworkURL.ContentMode {
-    var swiftUIContentMode: ContentMode {
-        switch self {
-        case .fit:
-            return .fit
-        case .fill:
-            return .fill
+        RemoteArtworkImageView(
+            url: url,
+            contentMode: contentMode,
+            diagnosticLabel: diagnosticLabel,
+            failureLogPrefix: "Detail remote artwork image failed"
+        ) { _ in
+            Color.clear
         }
     }
 }
@@ -3018,14 +2973,8 @@ struct LocalMusicArtistArtwork: View {
     }
 
     private func remoteArtwork(url: URL) -> some View {
-        AsyncImage(url: url) { phase in
-            if let image = phase.image {
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Color.clear
-            }
+        RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+            Color.clear
         }
     }
 }

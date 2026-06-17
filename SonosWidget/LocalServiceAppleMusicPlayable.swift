@@ -111,16 +111,6 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     ) -> LocalServiceAppleMusicPlayable? {
         let candidates = playParameterCandidates + [rawID]
         guard let catalogID = firstCatalogID(in: candidates, kind: kind) else {
-            SonosLog.debug(
-                .playbackLink,
-                "LocalService playable unresolved kind=\(kind.cloudType) title='\(title)' " +
-                    "rawID=\(SonosLog.playbackLinkValue(rawID, maxLength: 480)) " +
-                    "candidates=\(candidates.map { SonosLog.playbackLinkValue($0, maxLength: 480) })")
-            if kind == .station {
-                SonosLog.info(
-                    .localService,
-                    "Station playable failed title='\(title)' rawID='\(rawID)' candidates=\(candidates)")
-            }
             return nil
         }
 
@@ -131,17 +121,6 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
             let streamObjectID = playbackKind == .stream
                 ? stationStreamObjectID(in: candidates)
                 : nil
-            SonosLog.debug(
-                .playbackLink,
-                "LocalService playable kind=\(kind.cloudType) title='\(title)' " +
-                    "rawID=\(SonosLog.playbackLinkValue(rawID, maxLength: 480)) " +
-                    "catalogID=\(SonosLog.playbackLinkValue(catalogID, maxLength: 480)) " +
-                    "candidates=\(candidates.map { SonosLog.playbackLinkValue($0, maxLength: 480) })")
-            SonosLog.info(
-                .localService,
-                "Station playable title='\(title)' rawID='\(rawID)' candidates=\(candidates) " +
-                    "catalogID=\(catalogID) playbackKind=\(playbackKind?.diagnosticName ?? "nil") " +
-                    "streamObjectID=\(streamObjectID ?? "nil") art=\(normalizedArtworkURLString ?? "nil")")
             return LocalServiceAppleMusicPlayable(
                 kind: kind,
                 catalogID: catalogID,
@@ -154,13 +133,6 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
                 stationStreamObjectID: streamObjectID
             )
         }
-
-        SonosLog.debug(
-            .playbackLink,
-            "LocalService playable kind=\(kind.cloudType) title='\(title)' " +
-                "rawID=\(SonosLog.playbackLinkValue(rawID, maxLength: 480)) " +
-                "catalogID=\(SonosLog.playbackLinkValue(catalogID, maxLength: 480)) " +
-                "candidates=\(candidates.map { SonosLog.playbackLinkValue($0, maxLength: 480) })")
 
         return LocalServiceAppleMusicPlayable(
             kind: kind,

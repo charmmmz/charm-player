@@ -1218,85 +1218,46 @@ struct SearchView: View {
     }
 }
 
-// MARK: - Favorite grid cover (URLSession)
-
-/// Replaces `AsyncImage`, which could fail to repaint in `LazyVGrid` + `NavigationLink`
-/// labels. `URLSession` + `UIImage` state is reliable; the grid layout itself is
-/// unchanged (two flexible columns, same as before the workaround).
-private enum FavoriteCoverArtCache {
-    static let memory = NSCache<NSString, UIImage>()
-}
+// MARK: - Favorite grid cover
 
 private struct FavoriteCoverImageView: View {
     let itemId: String
     let imageURLString: String?
     let placeholderIcon: String
 
-    @State private var image: UIImage?
-    @State private var didFail = false
-
     private var resolvedURL: URL? {
-        guard var s = imageURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        guard let s = imageURLString?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
         if let u = URL(string: s) { return u }
         return URL(string: s, encodingInvalidCharacters: true)
     }
 
-    private var taskIdentity: String { "\(itemId)|\(imageURLString ?? "")" }
-
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if didFail || resolvedURL == nil {
-                Rectangle()
-                    .fill(.quaternary)
-                    .overlay {
-                        Image(systemName: placeholderIcon)
-                            .foregroundStyle(.tertiary)
-                    }
-            } else {
-                Rectangle()
-                    .fill(.quaternary)
-                    .overlay { ProgressView().tint(.secondary) }
+        if let resolvedURL {
+            RemoteArtworkImageView(
+                url: resolvedURL,
+                contentMode: .fill,
+                diagnosticLabel: "favorite-cover itemID='\(itemId)'",
+                failureLogPrefix: "Favorite cover artwork failed"
+            ) { state in
+                placeholder(for: state)
             }
+        } else {
+            placeholder(for: .failure)
         }
-        .task(id: taskIdentity) { await loadImage() }
     }
 
-    private func loadImage() async {
-        await MainActor.run {
-            image = nil
-            didFail = false
-        }
-        guard let url = resolvedURL else {
-            await MainActor.run { didFail = true }
-            return
-        }
-        let key = url.absoluteString as NSString
-        if let cached = FavoriteCoverArtCache.memory.object(forKey: key) {
-            await MainActor.run { image = cached }
-            return
-        }
-        do {
-            var req = URLRequest(url: url, timeoutInterval: 25)
-            req.httpMethod = "GET"
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard !Task.isCancelled else { return }
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                await MainActor.run { didFail = true }
-                return
+    private func placeholder(for state: RemoteArtworkImagePlaceholderState) -> some View {
+        Rectangle()
+            .fill(.quaternary)
+            .overlay {
+                switch state {
+                case .loading:
+                    ProgressView().tint(.secondary)
+                case .failure:
+                    Image(systemName: placeholderIcon)
+                        .foregroundStyle(.tertiary)
+                }
             }
-            if let ui = UIImage(data: data) {
-                FavoriteCoverArtCache.memory.setObject(ui, forKey: key, cost: data.count)
-                await MainActor.run { image = ui }
-            } else {
-                await MainActor.run { didFail = true }
-            }
-        } catch {
-            await MainActor.run { didFail = true }
-        }
     }
 }
 
@@ -1332,8 +1293,8 @@ struct FavoriteCategoryDetailView: View {
                     ContentUnavailableView.search(text: filterText)
                         .padding(.top, 20)
                 } else {
-                    // `URLSession` cover loading no longer needs the `HStack` workaround
-                    // that replaced `AsyncImage` + `LazyVGrid` — bring the grid back so
+                    // Shared cover loading no longer needs the `HStack` workaround
+                    // that replaced the old LazyVGrid workaround; bring the grid back so
                     // columns space evenly (the manual row + leading `HStack` hugged the
                     // left edge and broke margins).
                     let columns = [
