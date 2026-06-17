@@ -257,7 +257,7 @@ struct LocalLibraryView: View {
         .scrollDismissesKeyboard(.immediately)
         .onPreferenceChange(LocalLibraryPullDistancePreferenceKey.self) { distance in
             pullRefreshDistance = distance
-            if distance < 12 {
+            if LocalLibraryPullRefreshPolicy.shouldResetGesture(pullDistance: distance) {
                 hasTriggeredPullRefresh = false
             }
             guard LocalLibraryPullRefreshPolicy.shouldTrigger(

@@ -22,7 +22,8 @@ enum LocalLibraryRefreshExecutionPolicy {
 }
 
 enum LocalLibraryPullRefreshPolicy {
-    static let triggerDistance = 72.0
+    static let triggerDistance = 128.0
+    static let resetDistance = 18.0
 
     static func shouldTrigger(
         pullDistance: Double,
@@ -31,6 +32,10 @@ enum LocalLibraryPullRefreshPolicy {
         hasTriggeredInCurrentPull: Bool = false
     ) -> Bool {
         hasLoaded && !isRefreshing && !hasTriggeredInCurrentPull && pullDistance >= triggerDistance
+    }
+
+    static func shouldResetGesture(pullDistance: Double) -> Bool {
+        pullDistance < resetDistance
     }
 
     static func indicatorOpacity(

@@ -125,6 +125,14 @@ final class LocalLibraryModelsTests: XCTestCase {
     }
 
     func testPullRefreshPolicyTriggersOnlyPastThresholdWhenLoadedAndIdle() {
+        XCTAssertEqual(LocalLibraryPullRefreshPolicy.triggerDistance, 128)
+
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldTrigger(
+                pullDistance: 96,
+                isRefreshing: false,
+                hasLoaded: true))
+
         XCTAssertTrue(
             LocalLibraryPullRefreshPolicy.shouldTrigger(
                 pullDistance: LocalLibraryPullRefreshPolicy.triggerDistance + 1,
@@ -157,6 +165,20 @@ final class LocalLibraryModelsTests: XCTestCase {
                 isRefreshing: false,
                 hasLoaded: true,
                 hasTriggeredInCurrentPull: true))
+    }
+
+    func testPullRefreshPolicyResetsOnlyAfterReturningNearTop() {
+        XCTAssertLessThan(
+            LocalLibraryPullRefreshPolicy.resetDistance,
+            LocalLibraryPullRefreshPolicy.triggerDistance)
+
+        XCTAssertFalse(
+            LocalLibraryPullRefreshPolicy.shouldResetGesture(
+                pullDistance: LocalLibraryPullRefreshPolicy.resetDistance + 1))
+
+        XCTAssertTrue(
+            LocalLibraryPullRefreshPolicy.shouldResetGesture(
+                pullDistance: LocalLibraryPullRefreshPolicy.resetDistance - 1))
     }
 
     func testPullRefreshIndicatorOpacityTracksPullDistance() {
