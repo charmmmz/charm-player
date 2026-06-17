@@ -320,13 +320,31 @@ enum IntentHelper {
             cachedURLString: cachedAlbumArtDataURL,
             hasCachedData: cachedAlbumArtData != nil
         ),
-           let urlStr = info.albumArtURL, let url = URL(string: urlStr),
-           let (data, _) = try? await noProxySession.data(from: url) {
+           let urlStr = info.albumArtURL,
+           let data = await fetchArtworkData(urlString: urlStr) {
             SharedStorage.albumArtData = data
             SharedStorage.cachedAlbumArtDataURL = urlStr
         }
 
         return info
+    }
+
+    private static func fetchArtworkData(urlString: String) async -> Data? {
+        let trimmedRelayURL = SharedStorage.relayURLString?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let relayBaseURL = URL(string: trimmedRelayURL),
+           let data = try? await RelayClient.fetchArtwork(
+            baseURL: relayBaseURL,
+            sourceURLString: urlString
+           ) {
+            return data
+        }
+
+        guard let url = URL(string: urlString),
+              let (data, _) = try? await noProxySession.data(from: url) else {
+            return nil
+        }
+        return data
     }
 
     static func refreshCacheAfterTrackCommand(
