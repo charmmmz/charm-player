@@ -21,6 +21,81 @@ struct LocalMusicLibrarySnapshot {
     }
 }
 
+struct LocalMusicRecentlyAddedCandidate<Item> {
+    let date: Date?
+    let title: String
+    let item: Item
+}
+
+enum LocalMusicRecentlyAddedSelection {
+    static let displayLimit = 16
+
+    static func select<Item>(
+        _ candidates: [LocalMusicRecentlyAddedCandidate<Item>],
+        limit: Int = displayLimit
+    ) -> [Item] {
+        Array(
+            candidates
+                .sorted { lhs, rhs in
+                    switch (lhs.date, rhs.date) {
+                    case let (left?, right?):
+                        return left > right
+                    case (_?, nil):
+                        return true
+                    case (nil, _?):
+                        return false
+                    case (nil, nil):
+                        return lhs.title < rhs.title
+                    }
+                }
+                .prefix(limit)
+                .map(\.item)
+        )
+    }
+}
+
+enum LocalMusicRecentlyAddedItem {
+    case album(Album)
+    case playlist(Playlist)
+    case song(Song)
+
+    var title: String {
+        switch self {
+        case .album(let album): return album.title
+        case .playlist(let playlist): return playlist.name
+        case .song(let song): return song.title
+        }
+    }
+
+    var libraryAddedDate: Date? {
+        switch self {
+        case .album(let album): return album.libraryAddedDate
+        case .playlist(let playlist): return playlist.libraryAddedDate
+        case .song(let song): return song.libraryAddedDate
+        }
+    }
+}
+
+struct LocalMusicRecentlyAddedContent {
+    var items: [LocalMusicRecentlyAddedItem] = []
+
+    init() {}
+
+    init(snapshot: LocalMusicLibrarySnapshot) {
+        let candidates = snapshot.albums.map { LocalMusicRecentlyAddedItem.album($0) }
+            + snapshot.playlists.map { LocalMusicRecentlyAddedItem.playlist($0) }
+            + snapshot.songs.map { LocalMusicRecentlyAddedItem.song($0) }
+
+        items = LocalMusicRecentlyAddedSelection.select(
+            candidates.map {
+                LocalMusicRecentlyAddedCandidate(
+                    date: $0.libraryAddedDate,
+                    title: $0.title,
+                    item: $0)
+            })
+    }
+}
+
 struct LocalMusicHomeContent {
     var snapshot = LocalMusicLibrarySnapshot()
     var recentlyPlayed: [RecentlyPlayedMusicItem] = []

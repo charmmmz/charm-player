@@ -57,6 +57,7 @@ final class LocalLibraryStore {
 
     var authorizationStatus = MusicAuthorization.currentStatus
     var snapshot = LocalMusicLibrarySnapshot()
+    var recentlyAddedContent = LocalMusicRecentlyAddedContent()
     var recentlyPlayed: [RecentlyPlayedMusicItem] = []
     var recommendations: [MusicPersonalRecommendation] = []
     var searchSnapshot: LocalMusicLibrarySnapshot?
@@ -157,6 +158,7 @@ final class LocalLibraryStore {
             }
 
             snapshot = content.snapshot
+            recentlyAddedContent = LocalMusicRecentlyAddedContent(snapshot: content.snapshot)
             recentlyPlayed = content.recentlyPlayed
             recommendations = nextRecommendations
             searchSnapshot = nil

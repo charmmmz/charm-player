@@ -91,6 +91,47 @@ final class LocalLibraryModelsTests: XCTestCase {
         XCTAssertNil(LocalServiceSectionKind.library.headerSystemImage)
     }
 
+    func testRecentlyAddedSelectionSortsNewestDatedItemsBeforeUndatedItems() {
+        let baseDate = Date(timeIntervalSince1970: 1_000)
+        let candidates = [
+            LocalMusicRecentlyAddedCandidate(
+                date: nil,
+                title: "Alpha",
+                item: "undated-alpha"),
+            LocalMusicRecentlyAddedCandidate(
+                date: baseDate.addingTimeInterval(20),
+                title: "Newest",
+                item: "newest"),
+            LocalMusicRecentlyAddedCandidate(
+                date: baseDate,
+                title: "Oldest",
+                item: "oldest"),
+            LocalMusicRecentlyAddedCandidate(
+                date: nil,
+                title: "Beta",
+                item: "undated-beta")
+        ]
+
+        XCTAssertEqual(
+            LocalMusicRecentlyAddedSelection.select(candidates),
+            ["newest", "oldest", "undated-alpha", "undated-beta"])
+    }
+
+    func testRecentlyAddedSelectionLimitsItemsBeforeRendering() {
+        let candidates = (0..<24).map { index in
+            LocalMusicRecentlyAddedCandidate(
+                date: Date(timeIntervalSince1970: TimeInterval(index)),
+                title: "Item \(index)",
+                item: index)
+        }
+
+        let selected = LocalMusicRecentlyAddedSelection.select(candidates)
+
+        XCTAssertEqual(selected.count, LocalMusicRecentlyAddedSelection.displayLimit)
+        XCTAssertEqual(selected.first, 23)
+        XCTAssertEqual(selected.last, 8)
+    }
+
     func testRecommendationRefreshPolicyPreservesExistingSectionsWhenReloadSkipsRecommendations() {
         XCTAssertFalse(
             LocalLibraryRecommendationRefreshPolicy.shouldReplace(

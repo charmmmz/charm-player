@@ -681,28 +681,13 @@ struct LocalLibraryView: View {
     }
 
     private var recentlyAddedCards: [LocalServiceCardItem] {
-        var datedItems: [(Date?, LocalServiceCardItem)] = []
-        datedItems.append(contentsOf: store.snapshot.albums.map { ($0.libraryAddedDate, .album($0)) })
-        datedItems.append(contentsOf: store.snapshot.playlists.map { ($0.libraryAddedDate, .playlist($0)) })
-        datedItems.append(contentsOf: store.snapshot.songs.map { ($0.libraryAddedDate, .song($0)) })
-
-        return Array(
-            datedItems
-                .sorted { lhs, rhs in
-                    switch (lhs.0, rhs.0) {
-                    case let (left?, right?):
-                        return left > right
-                    case (_?, nil):
-                        return true
-                    case (nil, _?):
-                        return false
-                    case (nil, nil):
-                        return lhs.1.title < rhs.1.title
-                    }
-                }
-                .map(\.1)
-                .prefix(16)
-        )
+        store.recentlyAddedContent.items.map { item in
+            switch item {
+            case .album(let album): return .album(album)
+            case .playlist(let playlist): return .playlist(playlist)
+            case .song(let song): return .song(song)
+            }
+        }
     }
 
     private func recommendationCards(for recommendation: MusicPersonalRecommendation) -> [LocalServiceCardItem] {
