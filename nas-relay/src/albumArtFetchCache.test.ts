@@ -43,6 +43,25 @@ test('album art fetch cache reuses completed requests by normalized URI', async 
   assert.equal(fetchCalls, 1);
 });
 
+test('album art fetch cache shares equivalent URL cache keys', async () => {
+  const cache = new AlbumArtFetchCache();
+  let fetchCalls = 0;
+
+  const first = await cache.fetch(' HTTPS://Example.COM/cover.jpg#first ', async uri => {
+    fetchCalls += 1;
+    assert.equal(uri, 'https://example.com/cover.jpg');
+    return Buffer.from('normalized-cover');
+  });
+  const second = await cache.fetch('https://example.com/cover.jpg#second', async () => {
+    fetchCalls += 1;
+    return Buffer.from('unexpected-second-fetch');
+  });
+
+  assert.deepEqual(first, Buffer.from('normalized-cover'));
+  assert.deepEqual(second, Buffer.from('normalized-cover'));
+  assert.equal(fetchCalls, 1);
+});
+
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(innerResolve => {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 
+import { normalizedAlbumArtUri } from './albumArtFetchCache.js';
 import { fetchAlbumArt as defaultFetchAlbumArt } from './hueAlbumArtPalette.js';
 import type { LiveActivityContentState, SonosGroupSnapshot } from './types.js';
 
@@ -89,19 +90,20 @@ async function albumArtPresentation(
 ): Promise<AlbumArtPresentation> {
   if (!albumArtUri) return { thumbnailBase64: null, dominantColorHex: null };
 
+  const cacheKey = normalizedAlbumArtUri(albumArtUri);
   const useCache = dependencies.fetchAlbumArt === undefined;
-  if (useCache && albumArtCache.has(albumArtUri)) {
-    return albumArtCache.get(albumArtUri)!;
+  if (useCache && albumArtCache.has(cacheKey)) {
+    return albumArtCache.get(cacheKey)!;
   }
 
   try {
-    const imageData = await (dependencies.fetchAlbumArt ?? defaultFetchAlbumArt)(albumArtUri);
+    const imageData = await (dependencies.fetchAlbumArt ?? defaultFetchAlbumArt)(cacheKey);
     const image = decodeImage(imageData);
     const presentation = {
       thumbnailBase64: makeJpegThumbnailBase64(image),
       dominantColorHex: dominantColorHex(image),
     };
-    if (useCache) rememberAlbumArt(albumArtUri, presentation);
+    if (useCache) rememberAlbumArt(cacheKey, presentation);
     return presentation;
   } catch {
     return { thumbnailBase64: null, dominantColorHex: null };

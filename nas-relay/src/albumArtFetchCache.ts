@@ -87,6 +87,16 @@ async function networkFetchAlbumArt(uri: string): Promise<Buffer> {
   }
 }
 
-function normalizedAlbumArtUri(uri: string): string {
-  return uri.trim();
+export function normalizedAlbumArtUri(uri: string): string {
+  const trimmed = uri.trim();
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return trimmed;
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
 }
