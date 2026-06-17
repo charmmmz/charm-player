@@ -273,7 +273,7 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(playlistURLString, "https://example.com/playlist.jpg")
     }
 
-    func testArtworkFallbackRejectsNonLoadableArtworkURLString() {
+    func testArtworkFallbackResolvesRelativeMusicKitArtworkURLString() {
         let playlist = AppleMusicCatalogSearchItem(
             id: "playlist",
             type: .playlist,
@@ -290,7 +290,10 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
             artist: "Apple Music",
             album: nil)
 
-        XCTAssertNil(urlString)
+        XCTAssertEqual(
+            urlString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/cover.png/400x400bb.jpg"
+        )
     }
 
     func testWebURLFallbackUsesBestMatchedCatalogURL() {

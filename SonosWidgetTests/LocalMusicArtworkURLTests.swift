@@ -119,15 +119,23 @@ final class LocalMusicArtworkURLTests: XCTestCase {
             .fill)
     }
 
-    func testImageDownloadURLKeepsMusicKitPlaylistArtworkWhenAATIsRelative() {
+    func testImageDownloadURLResolvesRelativeMusicKitPlaylistArtworkToAppleCDN() {
         let url = URL(
             string: "musicKit://artwork/library/ABC/600x600?aat=Features125%2Fv4%2Fad%2F0e%2F48%2Fcover%2Epng&at=playlist&et=collection"
         )!
 
         XCTAssertEqual(
             LocalMusicArtworkURL.imageDownloadURL(from: url, shortSidePixels: 600)?.absoluteString,
-            url.absoluteString
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover.png/600x600bb.jpg"
         )
+    }
+
+    func testLoadableURLRejectsUnstructuredRelativeMusicKitArtworkAAT() {
+        let url = URL(
+            string: "musicKit://artwork/library/ABC/600x600?aat=not-a-real-artwork-path&at=playlist&et=collection"
+        )!
+
+        XCTAssertNil(LocalMusicArtworkURL.loadableURL(from: url, shortSidePixels: 600))
     }
 
     func testArtworkSourcePrefersMusicKitArtworkOverRemoteURL() {

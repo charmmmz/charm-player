@@ -163,12 +163,59 @@ nonisolated enum LocalMusicArtworkURL {
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let artworkURLString = components.queryItems?.first(where: {
                   $0.name.lowercased() == "aat"
-              })?.value,
-              let artworkURL = URL(string: artworkURLString),
+              })?.value else {
+            return nil
+        }
+
+        let trimmed = artworkURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let artworkURL = URL(string: trimmed),
+           LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(artworkURL.absoluteString) {
+            return artworkURL
+        }
+
+        guard let artworkURL = appleArtworkURL(fromRelativeArtworkPath: trimmed),
               LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(artworkURL.absoluteString) else {
             return nil
         }
         return artworkURL
+    }
+
+    private static func appleArtworkURL(fromRelativeArtworkPath value: String) -> URL? {
+        var path = (value.removingPercentEncoding ?? value)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !path.isEmpty,
+              !path.contains(".."),
+              !path.localizedCaseInsensitiveContains("://") else {
+            return nil
+        }
+
+        if path.hasPrefix("image/thumb/") {
+            path.removeFirst("image/thumb/".count)
+        }
+
+        guard path.split(separator: "/").count > 1,
+              path.range(
+                  of: #"(?:\.(?:jpg|jpeg|png|webp)|/\d+x\d+bb(?:\.[a-z0-9]+)?)$"#,
+                  options: [.regularExpression, .caseInsensitive]
+              ) != nil else {
+            return nil
+        }
+
+        if path.range(of: #"/\d+x\d+bb(\.[^/]+)?$"#, options: .regularExpression) == nil {
+            path += "/600x600bb.jpg"
+        }
+
+        let fullPath = "/image/thumb/\(path)"
+        guard let encodedPath = fullPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "is1-ssl.mzstatic.com"
+        components.percentEncodedPath = encodedPath
+        return components.url
     }
 
     private static func resizedAppleArtworkURL(_ url: URL, shortSidePixels: Int?) -> URL {

@@ -127,6 +127,24 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         )
     }
 
+    func testPlaylistPlayableNormalizesRelativeMusicKitArtworkURLForBrowseRecentlyPlayed() {
+        let playable = LocalServiceAppleMusicPlayable.make(
+            kind: .playlist,
+            rawID: "pl.u-11zBXe4t8ZL1",
+            playParameterCandidates: ["playlist:pl.u-11zBXe4t8ZL1"],
+            title: "Imagine Dragons Essentials",
+            artist: "Apple Music Alternative",
+            album: "",
+            artworkURLString: "musicKit://artwork/library/ABC/600x600?aat=Features125%2Fv4%2Fad%2F0e%2F48%2Fcover%2Epng&at=playlist&et=collection",
+            duration: nil
+        )
+
+        XCTAssertEqual(
+            playable?.artworkURLString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover.png/400x400bb.jpg"
+        )
+    }
+
     func testStationNormalizesAppleMusicShareURL() {
         let playable = LocalServiceAppleMusicPlayable.make(
             kind: .station,
