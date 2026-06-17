@@ -105,6 +105,7 @@ requires for Live Activity pushes.
 | Method | Path                                  | Body / Params                                                   | Description                                              |
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
 | GET    | `/api/health`                         | —                                                               | Liveness + current group snapshots                       |
+| GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
 | DELETE | `/api/register-activity/:token`       | path: `:token`                                                  | Called by iOS when the Live Activity ends                |
 | GET    | `/api/hue-ambience/status`            | —                                                               | Hue runtime status without exposing the Hue app key      |
@@ -196,6 +197,7 @@ nas-relay/
 ├── data/                   # mounted volume — tokens.json, apns.p8 live here
 └── src/
     ├── index.ts            # Express + wire-up
+    ├── artworkRoutes.ts    # /api/artwork cached artwork proxy
     ├── cs2GameState.ts     # CS2 GSI state cache and event emitter
     ├── cs2Routes.ts        # /api/cs2/*
     ├── cs2Types.ts         # CS2 GSI payload models

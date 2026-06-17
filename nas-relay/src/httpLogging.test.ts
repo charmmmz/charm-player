@@ -20,3 +20,9 @@ test('ignores frequent Live Activity preference posts from HTTP auto logging', (
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-preferences?source=app' }), true);
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-hints' }), false);
 });
+
+test('ignores frequent artwork proxy requests from HTTP auto logging', () => {
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork?url=https%3A%2F%2Fexample.com%2Fcover.jpg' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork-hints' }), false);
+});
