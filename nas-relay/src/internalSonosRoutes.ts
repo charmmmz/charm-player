@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { Logger } from 'pino';
 
 import type { SonosBridge } from './sonos.js';
+import { snapshotJson } from './relaySnapshotJson.js';
 
 export function internalAuthMiddleware(log: Logger): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -17,34 +18,6 @@ export function internalAuthMiddleware(log: Logger): (req: Request, res: Respons
       return;
     }
     next();
-  };
-}
-
-function snapshotJson(s: {
-  groupId: string;
-  speakerName: string;
-  trackTitle: string;
-  artist: string;
-  album: string;
-  albumArtUri?: string | null;
-  isPlaying: boolean;
-  positionSeconds: number;
-  durationSeconds: number;
-  groupMemberCount: number;
-  sampledAt: Date;
-}) {
-  return {
-    groupId: s.groupId,
-    speakerName: s.speakerName,
-    trackTitle: s.trackTitle,
-    artist: s.artist,
-    album: s.album,
-    albumArtUri: s.albumArtUri,
-    isPlaying: s.isPlaying,
-    positionSeconds: s.positionSeconds,
-    durationSeconds: s.durationSeconds,
-    groupMemberCount: s.groupMemberCount,
-    sampledAt: s.sampledAt.toISOString(),
   };
 }
 

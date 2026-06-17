@@ -30,6 +30,7 @@ import {
   liveActivityPushResultLogLevel,
   shouldForceLiveActivityCalibration,
 } from './liveActivityPushPolicy.js';
+import { snapshotJson } from './relaySnapshotJson.js';
 import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
 
 const log = pino({
@@ -489,24 +490,6 @@ function summarizeSnapshot(snap: SonosGroupSnapshot): Record<string, unknown> {
     durationSeconds: Math.round(snap.durationSeconds),
     hasAlbumArtUri: Boolean(snap.albumArtUri),
     playbackSourceRaw: snap.playbackSourceRaw ?? null,
-    sampledAt: snap.sampledAt.toISOString(),
-  };
-}
-
-function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> {
-  return {
-    groupId: snap.groupId,
-    speakerName: snap.speakerName,
-    trackTitle: snap.trackTitle,
-    artist: snap.artist,
-    album: snap.album,
-    albumArtUri: snap.albumArtUri,
-    isPlaying: snap.isPlaying,
-    playbackSourceRaw: snap.playbackSourceRaw ?? null,
-    audioQualityLabel: snap.audioQualityLabel ?? null,
-    positionSeconds: snap.positionSeconds,
-    durationSeconds: snap.durationSeconds,
-    groupMemberCount: snap.groupMemberCount,
     sampledAt: snap.sampledAt.toISOString(),
   };
 }
