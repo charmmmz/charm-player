@@ -4,13 +4,7 @@ import UIKit
 
 enum RemoteArtworkImageCacheKey {
     static func normalized(_ url: URL) -> String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
-        }
-        components.scheme = components.scheme?.lowercased()
-        components.host = components.host?.lowercased()
-        components.fragment = nil
-        return components.url?.absoluteString ?? url.absoluteString
+        ArtworkURLNormalizer.artworkCacheKey(from: url.absoluteString) ?? url.absoluteString
     }
 }
 

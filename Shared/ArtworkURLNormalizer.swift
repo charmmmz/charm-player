@@ -54,6 +54,21 @@ nonisolated enum ArtworkURLNormalizer {
         return !value.contains("{") && !value.contains("}")
     }
 
+    static func artworkCacheKey(from value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              var components = URLComponents(string: trimmed),
+              let scheme = components.scheme,
+              let host = components.host else {
+            return nil
+        }
+
+        components.scheme = scheme.lowercased()
+        components.host = host.lowercased()
+        components.fragment = nil
+        return components.url?.absoluteString
+    }
+
     private static func sonosArtworkURL(fromRelativePath value: String, speakerIP: String?, port: Int) -> URL? {
         let trimmedSpeakerIP = speakerIP?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedSpeakerIP.isEmpty,

@@ -292,12 +292,15 @@ nonisolated enum CachedArtworkFetchPolicy {
         cachedURLString: String?,
         hasCachedData: Bool
     ) -> Bool {
-        guard let incomingURLString,
-              !incomingURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let incomingKey = ArtworkURLNormalizer.artworkCacheKey(from: incomingURLString) else {
             return false
         }
 
-        return !hasCachedData || incomingURLString != cachedURLString
+        guard hasCachedData,
+              let cachedKey = ArtworkURLNormalizer.artworkCacheKey(from: cachedURLString) else {
+            return true
+        }
+        return incomingKey != cachedKey
     }
 }
 
@@ -309,20 +312,12 @@ nonisolated enum AlbumArtSharedCacheRecoveryPolicy {
     ) -> Data? {
         guard let cachedData,
               !cachedData.isEmpty,
-              let currentURLString = normalizedURLString(currentURLString),
-              let cachedDataURLString = normalizedURLString(cachedDataURLString),
-              currentURLString == cachedDataURLString else {
+              let currentKey = ArtworkURLNormalizer.artworkCacheKey(from: currentURLString),
+              let cachedKey = ArtworkURLNormalizer.artworkCacheKey(from: cachedDataURLString),
+              currentKey == cachedKey else {
             return nil
         }
         return cachedData
-    }
-
-    private static func normalizedURLString(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
     }
 }
 

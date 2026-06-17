@@ -205,6 +205,29 @@ final class AlbumArtLoadAttemptPolicyTests: XCTestCase {
         )
     }
 
+    func testSharedArtworkRecoveryReusesDataForEquivalentArtworkCacheKeys() {
+        let data = Data([1, 2, 3])
+
+        XCTAssertEqual(
+            AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+                currentURLString: "https://example.com/cover.jpg#player",
+                cachedDataURLString: "HTTPS://EXAMPLE.COM/cover.jpg#widget",
+                cachedData: data
+            ),
+            data
+        )
+    }
+
+    func testCachedArtworkFetchPolicySkipsEquivalentArtworkCacheKeysWhenDataExists() {
+        XCTAssertFalse(
+            CachedArtworkFetchPolicy.shouldFetch(
+                incomingURLString: "https://example.com/cover.jpg#player",
+                cachedURLString: "HTTPS://EXAMPLE.COM/cover.jpg#widget",
+                hasCachedData: true
+            )
+        )
+    }
+
     func testSharedArtworkRecoveryDoesNotReuseUnattributedData() {
         XCTAssertNil(
             AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
