@@ -54,13 +54,7 @@ nonisolated struct LocalMusicCatalogArtworkLookupItem: Sendable {
 
 nonisolated enum LocalMusicArtworkURLStringValidator {
     static func isLoadableArtworkURLString(_ value: String) -> Bool {
-        guard let url = URL(string: value),
-              let scheme = url.scheme?.lowercased(),
-              (scheme == "http" || scheme == "https"),
-              url.host != nil else {
-            return false
-        }
-        return !value.contains("{") && !value.contains("}")
+        ArtworkURLNormalizer.isLoadableArtworkURLString(value)
     }
 }
 

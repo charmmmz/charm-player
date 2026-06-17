@@ -66,7 +66,7 @@ enum AppleMusicExternalLinkResolver {
             return true
         }
 
-        if let uri = item.uri,
+        if let uri = item.playbackDescriptor.directURI,
            PlaybackSource.from(trackURI: uri) == .appleMusic {
             return true
         }

@@ -78,7 +78,7 @@ struct AppleMusicFavoriteResource: Codable, Equatable, Sendable {
             catalogID = SonosAppleMusicTrackResolver.storeID(fromBrowseItem: item)
         case .albums, .artists, .playlists:
             catalogID = normalizedCatalogID(
-                candidates: [item.id, objectIDFromURI(item.uri)],
+                candidates: [item.id, objectIDFromURI(item.playbackDescriptor.directURI)],
                 type: type)
         }
 

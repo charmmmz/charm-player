@@ -62,7 +62,7 @@ enum SonosAppleMusicTrackResolver {
     }
 
     static func storeID(fromBrowseItem item: BrowseItem) -> String? {
-        storeID(fromObjectID: item.id) ?? storeID(fromTrackURI: item.uri)
+        storeID(fromObjectID: item.id) ?? storeID(fromTrackURI: item.playbackDescriptor.directURI)
     }
 
     static func storeID(fromObjectID rawObjectID: String?) -> String? {

@@ -127,7 +127,7 @@ struct MusicResourcePresentation: Identifiable, Sendable {
             detail: item.album.isEmpty ? nil : item.album,
             fallbackSystemImage: fallbackSystemImage,
             accessory: accessory,
-            isQueueable: item.uri?.isEmpty == false
+            isQueueable: item.playbackDescriptor.isQueueable
         )
     }
 }

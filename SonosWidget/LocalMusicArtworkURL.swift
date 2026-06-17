@@ -49,19 +49,17 @@ nonisolated enum LocalMusicArtworkURL {
     }
 
     static func loadableURL(from url: URL, shortSidePixels: Int? = nil) -> URL? {
-        if LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(url.absoluteString) {
-            return resizedAppleArtworkURL(url, shortSidePixels: shortSidePixels)
-        }
-
-        guard let appleArtworkURL = appleArtworkURL(fromMusicKitArtworkURL: url) else {
-            return nil
-        }
-        return resizedAppleArtworkURL(appleArtworkURL, shortSidePixels: shortSidePixels)
+        ArtworkURLNormalizer.loadableURL(
+            from: url.absoluteString,
+            shortSidePixels: shortSidePixels
+        )
     }
 
     static func loadableURLString(from value: String?, shortSidePixels: Int? = nil) -> String? {
-        guard let value, let url = URL(string: value) else { return nil }
-        return loadableURL(from: url, shortSidePixels: shortSidePixels)?.absoluteString
+        ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            shortSidePixels: shortSidePixels
+        )
     }
 
     static func fittedRequestSize(
@@ -158,89 +156,4 @@ nonisolated enum LocalMusicArtworkURL {
         }
     }
 
-    private static func appleArtworkURL(fromMusicKitArtworkURL url: URL) -> URL? {
-        guard url.scheme?.lowercased() == "musickit",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let artworkURLString = components.queryItems?.first(where: {
-                  $0.name.lowercased() == "aat"
-              })?.value else {
-            return nil
-        }
-
-        let trimmed = artworkURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let artworkURL = URL(string: trimmed),
-           LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(artworkURL.absoluteString) {
-            return artworkURL
-        }
-
-        guard let artworkURL = appleArtworkURL(fromRelativeArtworkPath: trimmed),
-              LocalMusicArtworkURLStringValidator.isLoadableArtworkURLString(artworkURL.absoluteString) else {
-            return nil
-        }
-        return artworkURL
-    }
-
-    private static func appleArtworkURL(fromRelativeArtworkPath value: String) -> URL? {
-        var path = (value.removingPercentEncoding ?? value)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !path.isEmpty,
-              !path.contains(".."),
-              !path.localizedCaseInsensitiveContains("://") else {
-            return nil
-        }
-
-        if path.hasPrefix("image/thumb/") {
-            path.removeFirst("image/thumb/".count)
-        }
-
-        guard path.split(separator: "/").count > 1,
-              path.range(
-                  of: #"(?:\.(?:jpg|jpeg|png|webp)|/\d+x\d+bb(?:\.[a-z0-9]+)?)$"#,
-                  options: [.regularExpression, .caseInsensitive]
-              ) != nil else {
-            return nil
-        }
-
-        if path.range(of: #"/\d+x\d+bb(\.[^/]+)?$"#, options: .regularExpression) == nil {
-            path += "/600x600bb.jpg"
-        }
-
-        let fullPath = "/image/thumb/\(path)"
-        guard let encodedPath = fullPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            return nil
-        }
-
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "is1-ssl.mzstatic.com"
-        components.percentEncodedPath = encodedPath
-        return components.url
-    }
-
-    private static func resizedAppleArtworkURL(_ url: URL, shortSidePixels: Int?) -> URL {
-        guard let shortSidePixels, shortSidePixels > 0,
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url
-        }
-
-        var path = components.percentEncodedPath
-        guard let range = path.range(
-            of: #"/\d+x\d+bb(\.[^/]+)?$"#,
-            options: .regularExpression
-        ) else {
-            return url
-        }
-
-        let matchedComponent = String(path[range])
-        let suffix: String
-        if let dotIndex = matchedComponent.lastIndex(of: ".") {
-            suffix = String(matchedComponent[dotIndex...])
-        } else {
-            suffix = ""
-        }
-        path.replaceSubrange(range, with: "/\(shortSidePixels)x\(shortSidePixels)bb\(suffix)")
-        components.percentEncodedPath = path
-        return components.url ?? url
-    }
 }

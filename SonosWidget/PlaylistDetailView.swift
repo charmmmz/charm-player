@@ -411,39 +411,7 @@ struct PlaylistDetailView: View {
     }
 
     private func browseItemFromContainer(_ item: SonosCloudAPI.AlbumTrackItem) -> BrowseItem {
-        let objectId = item.resource?.id?.objectId ?? item.id ?? ""
-        let serviceId = item.resource?.id?.serviceId
-        let accountId = item.resource?.id?.accountId
-        let rType = item.resource?.type ?? "CONTAINER"
-
-        let cloudType: String
-        if rType == "ALBUM" {
-            cloudType = "ALBUM"
-        } else if rType == "PLAYLIST" {
-            cloudType = "PLAYLIST"
-        } else {
-            cloudType = "COLLECTION"
-        }
-
-        let uri: String? = if let sid = serviceId, let aid = accountId {
-            searchManager.buildPlayableURIPublic(
-                objectId: objectId, serviceId: sid,
-                accountId: aid, type: rType)
-        } else {
-            nil
-        }
-
-        return BrowseItem(
-            id: objectId,
-            title: item.title ?? "",
-            artist: item.subtitle ?? "",
-            album: "",
-            albumArtURL: item.images?.tile1x1,
-            uri: uri,
-            isContainer: true,
-            serviceId: serviceId.flatMap { searchManager.localSid(forCloudServiceId: $0) },
-            cloudType: cloudType
-        )
+        searchManager.makeAlbumTrackContainerItem(from: item)
     }
 
     private func trackActions(_ track: SonosCloudAPI.AlbumTrackItem) -> some View {
@@ -522,27 +490,12 @@ struct PlaylistDetailView: View {
     }
 
     private func browseItemFromTrack(_ track: SonosCloudAPI.AlbumTrackItem) -> BrowseItem {
-        let objectId = track.resource?.id?.objectId ?? ""
-        let title = track.title ?? ""
-        let trackArtist = track.artists?.first?.name ?? ""
-        let albumName = track.subtitle ?? ""
-        let artURL = track.images?.tile1x1
-        let mimeType = track.resource?.defaults.flatMap { defaults -> String? in
-            guard let data = Data(base64Encoded: defaults),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            return json["mimeType"] as? String
-        }
-
-        guard let serviceId = track.resource?.id?.serviceId,
-              let accountId = track.resource?.id?.accountId else {
-            return BrowseItem(id: objectId, title: title, artist: trackArtist,
-                              album: albumName, albumArtURL: artURL,
-                              isContainer: false)
-        }
-        return searchManager.makeTrackItem(
-            objectId: objectId, title: title, artist: trackArtist,
-            album: albumName, artURL: artURL, mimeType: mimeType,
-            cloudServiceId: serviceId, accountId: accountId)
+        searchManager.makeAlbumTrackItem(
+            from: track,
+            fallbackAlbumTitle: track.subtitle ?? "",
+            fallbackArtist: nil,
+            fallbackArtURL: nil
+        )
     }
 
     // MARK: - Data Loading

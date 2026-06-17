@@ -582,7 +582,7 @@ final class SearchManager {
     /// the query-string form (`?sid=204&…`) and the SMAPI binding form
     /// (`SA_RINCON204_…`) seen in shortcut favorites' `<desc>` tag.
     private func sniffLocalServiceId(from item: BrowseItem) -> Int? {
-        let sources = [item.uri, item.resMD, item.metaXML].compactMap { $0 }
+        let sources = [item.playbackDescriptor.directURI, item.resMD, item.metaXML].compactMap { $0 }
         for src in sources {
             if let range = src.range(of: "[?&]sid=(\\d+)", options: .regularExpression) {
                 let token = src[range]
@@ -630,8 +630,12 @@ final class SearchManager {
     func buildPlayableURIPublic(objectId: String, serviceId: String,
                                 accountId: String, type: String,
                                 mimeType: String? = nil) -> String? {
-        buildPlayableURI(objectId: objectId, serviceId: serviceId,
-                         accountId: accountId, type: type, mimeType: mimeType)
+        cloudItemFactory.playableURI(
+            objectId: objectId,
+            serviceId: serviceId,
+            accountId: accountId,
+            type: type,
+            mimeType: mimeType)
     }
 
     // MARK: - Typed BrowseItem Factories
@@ -642,85 +646,55 @@ final class SearchManager {
     // factories so the four fields can never drift apart (which previously
     // caused artist favorites to be saved with a `x-sonosapi-radio:` URI).
 
-    /// Cloud Music API object kind. Drives URI scheme, metadata prefix, and
-    /// `isContainer` for every BrowseItem we hand to playback / favorites.
-    enum CloudObjectType: String {
-        case artist     = "ARTIST"
-        case album      = "ALBUM"
-        case playlist   = "PLAYLIST"
-        case track      = "TRACK"
-        case program    = "PROGRAM"     // radio station
-        case collection = "COLLECTION"  // library folder
-
-        /// Whether browsing this object should expand into multiple tracks
-        /// when added to the queue.
-        var isContainer: Bool {
-            switch self {
-            case .album, .playlist, .collection: return true
-            case .artist, .track, .program:      return false
-            }
-        }
-
-        /// Value of `<r:type>` Sonos expects in a favorite's outer DIDL.
-        /// Artists (and other pure-container "bookmark" favorites) must use
-        /// `shortcut`; directly-playable items use `instantPlay`. Using the
-        /// wrong value causes SOAP fault 803 — verified by dumping existing
-        /// favorites added via the official Sonos app.
-        var favoriteRType: String {
-            switch self {
-            case .artist, .collection: return "shortcut"
-            case .album, .playlist, .track, .program: return "instantPlay"
-            }
-        }
-
-        /// Whether the outer favorite DIDL should include a `<res>` element
-        /// carrying the real URI. Artist favorites use an empty `<res></res>`
-        /// (Sonos derives navigation from the inner resMD); everything else
-        /// carries the real playable URI.
-        var emitsFavoriteRes: Bool {
-            switch self {
-            case .artist, .collection: return false
-            case .album, .playlist, .track, .program: return true
-            }
-        }
-    }
-
     /// Build an artist BrowseItem suitable for navigation, "Add to Sonos
     /// Favorites", and `isFavorited` matching.
     func makeArtistItem(objectId: String, name: String, artURL: String? = nil,
                         cloudServiceId: String, accountId: String) -> BrowseItem {
-        makeCloudItem(type: .artist, objectId: objectId, title: name,
-                      artist: "", album: "", artURL: artURL,
-                      mimeType: nil,
-                      cloudServiceId: cloudServiceId, accountId: accountId)
+        cloudItemFactory.artistItem(
+            objectId: objectId,
+            name: name,
+            artURL: artURL,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId)
     }
 
     func makeAlbumItem(objectId: String, title: String, artist: String,
                        artURL: String? = nil,
                        cloudServiceId: String, accountId: String) -> BrowseItem {
-        makeCloudItem(type: .album, objectId: objectId, title: title,
-                      artist: artist, album: title, artURL: artURL,
-                      mimeType: nil,
-                      cloudServiceId: cloudServiceId, accountId: accountId)
+        cloudItemFactory.albumItem(
+            objectId: objectId,
+            title: title,
+            artist: artist,
+            artURL: artURL,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId)
     }
 
     func makePlaylistItem(objectId: String, title: String, artist: String = "",
                           artURL: String? = nil,
                           cloudServiceId: String, accountId: String) -> BrowseItem {
-        makeCloudItem(type: .playlist, objectId: objectId, title: title,
-                      artist: artist, album: "", artURL: artURL,
-                      mimeType: nil,
-                      cloudServiceId: cloudServiceId, accountId: accountId)
+        cloudItemFactory.playlistItem(
+            objectId: objectId,
+            title: title,
+            artist: artist,
+            artURL: artURL,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId)
     }
 
     func makeTrackItem(objectId: String, title: String, artist: String,
                        album: String = "", artURL: String? = nil,
                        mimeType: String? = nil,
                        cloudServiceId: String, accountId: String) -> BrowseItem {
-        makeCloudItem(type: .track, objectId: objectId, title: title,
-                      artist: artist, album: album, artURL: artURL,
-                      mimeType: mimeType,
-                      cloudServiceId: cloudServiceId, accountId: accountId)
+        cloudItemFactory.trackItem(
+            objectId: objectId,
+            title: title,
+            artist: artist,
+            album: album,
+            artURL: artURL,
+            mimeType: mimeType,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId)
     }
 
     /// Build a station/radio BrowseItem (e.g. an artist radio program). Use
@@ -728,182 +702,76 @@ final class SearchManager {
     func makeStationItem(objectId: String, title: String, artistName: String = "",
                          artURL: String? = nil,
                          cloudServiceId: String, accountId: String) -> BrowseItem {
-        makeCloudItem(type: .program, objectId: objectId, title: title,
-                      artist: artistName, album: "", artURL: artURL,
-                      mimeType: nil,
-                      cloudServiceId: cloudServiceId, accountId: accountId)
+        cloudItemFactory.stationItem(
+            objectId: objectId,
+            title: title,
+            artistName: artistName,
+            artURL: artURL,
+            cloudServiceId: cloudServiceId,
+            accountId: accountId)
     }
 
-    private func makeCloudItem(type: CloudObjectType, objectId: String,
-                               title: String, artist: String, album: String,
-                               artURL: String?, mimeType: String?,
-                               cloudServiceId: String, accountId: String) -> BrowseItem {
-        let uri = buildPlayableURI(
-            objectId: objectId, serviceId: cloudServiceId,
-            accountId: accountId, type: type.rawValue, mimeType: mimeType)
-        return BrowseItem(
-            id: objectId, title: title, artist: artist, album: album,
-            albumArtURL: artURL, uri: uri,
-            isContainer: type.isContainer,
-            serviceId: cloudToLocalSid[cloudServiceId],
-            cloudType: type.rawValue)
+    func makeAlbumTrackItem(
+        from track: SonosCloudAPI.AlbumTrackItem,
+        fallbackAlbumTitle: String,
+        fallbackArtist: String? = nil,
+        fallbackArtURL: String? = nil,
+        fallbackServiceId: String? = nil,
+        fallbackAccountId: String? = nil
+    ) -> BrowseItem {
+        cloudItemFactory.albumTrackItem(
+            from: track,
+            fallbackAlbumTitle: fallbackAlbumTitle,
+            fallbackArtist: fallbackArtist,
+            fallbackArtURL: fallbackArtURL,
+            fallbackServiceId: fallbackServiceId,
+            fallbackAccountId: fallbackAccountId
+        )
     }
 
-    struct FavoriteCloudIds {
-        let objectId: String
-        let cloudServiceId: String
-        let accountId: String
+    func makeAlbumTrackContainerItem(from item: SonosCloudAPI.AlbumTrackItem) -> BrowseItem {
+        cloudItemFactory.albumTrackContainerItem(from: item)
+    }
+
+    typealias FavoriteCloudIds = BrowseItemPlaybackResolver.CloudIds
+
+    private var cloudItemFactory: CloudBrowseItemFactory {
+        CloudBrowseItemFactory(
+            cloudToLocalSid: cloudToLocalSid,
+            appleMusicCloudServiceIds: appleMusicCloudServiceIds
+        )
+    }
+
+    private var appleMusicCloudServiceIds: Set<String> {
+        var serviceIds: Set<String> = ["52231"]
+        for account in linkedAccounts where isAppleMusicAccount(account) {
+            if let serviceId = account.serviceId {
+                serviceIds.insert(serviceId)
+            }
+        }
+        return serviceIds
+    }
+
+    private var playbackResolver: BrowseItemPlaybackResolver {
+        BrowseItemPlaybackResolver(
+            cloudToLocalSid: cloudToLocalSid,
+            localToCloudSid: localToCloudSid,
+            musicServices: musicServices
+        )
+    }
+
+    private var favoriteMatcher: BrowseItemFavoriteMatcher {
+        BrowseItemFavoriteMatcher(
+            cloudToLocalSid: cloudToLocalSid,
+            musicServices: musicServices
+        )
     }
 
     /// Parse Cloud API identifiers from a Sonos Favorite item's URI or resMD.
     /// URI format: `x-rincon-cpcontainer:1004206c album%3A123?sid=204&flags=8300&sn=2`
     /// or resMD `<item id="1004206c album%3A123" ...>`
     func parseCloudIds(from item: BrowseItem) -> FavoriteCloudIds? {
-        let uriSource = item.uri
-            ?? item.resMD.flatMap { SonosAPI.extractTag("res", from: $0) }
-
-        if let uri = uriSource {
-            if let result = parseCloudIdsFromURI(uri) { return result }
-        }
-
-        // Fallback: extract from desc tag and item/container id attribute in resMD/metaXML
-        return parseCloudIdsFromDIDLMetadata(item)
-    }
-
-    /// Primary extraction: parse sid, sn, and objectId from a URI with query params.
-    private func parseCloudIdsFromURI(_ uri: String) -> FavoriteCloudIds? {
-        var localSid: String?
-        var sn: String?
-        if let queryPart = uri.split(separator: "?").last {
-            for param in queryPart.split(separator: "&") {
-                let kv = param.split(separator: "=", maxSplits: 1)
-                guard kv.count == 2 else { continue }
-                if kv[0] == "sid" { localSid = String(kv[1]) }
-                if kv[0] == "sn" { sn = String(kv[1]) }
-            }
-        }
-
-        guard let sid = localSid, let accountId = sn else { return nil }
-        guard let cloudSid = localToCloudSid[Int(sid) ?? 0] else { return nil }
-
-        let objectId = extractObjectIdFromURI(uri)
-        guard !objectId.isEmpty else { return nil }
-
-        return FavoriteCloudIds(objectId: objectId,
-                                cloudServiceId: cloudSid,
-                                accountId: accountId)
-    }
-
-    /// Extract objectId from a Sonos URI by stripping the scheme and hex prefix.
-    private func extractObjectIdFromURI(_ uri: String) -> String {
-        let pathPart = uri.split(separator: "?").first.map(String.init) ?? uri
-        var objectId: String
-        if let colonRange = pathPart.range(of: ":", options: .backwards) {
-            let afterScheme = String(pathPart[colonRange.upperBound...])
-            if afterScheme.count > 8,
-               afterScheme.prefix(8).allSatisfy({ $0.isHexDigit }) {
-                objectId = String(afterScheme.dropFirst(8))
-                    .trimmingCharacters(in: .whitespaces)
-            } else {
-                objectId = afterScheme
-            }
-        } else {
-            objectId = pathPart
-        }
-
-        if objectId.contains("%25") {
-            objectId = objectId.removingPercentEncoding ?? objectId
-        }
-        return objectId
-    }
-
-    /// Parses `SA_RINCON` + account token from a DIDL fragment (or full
-    /// `<DIDL-Lite>`) and returns local sid, cloud service id, and optional `sn`
-    /// (`#Svc…-sn-` in the same `desc` / blob).
-    private func rinconBindingAndAccountSn(in xml: String) -> (Int, String, String?)? {
-        // Some favorites store a full outer DIDL — prefer `<desc>`, but always
-        // be able to fall back to scanning the whole `r:resMD`.
-        let region: String = {
-            if let d = SonosAPI.extractTag("desc", from: xml), d.contains("SA_RINCON") { return d }
-            return xml
-        }()
-        guard let rRange = region.range(of: "SA_RINCON(\\d+)_", options: .regularExpression) else { return nil }
-        let token = String(region[rRange])
-        let digits: String
-        if token.hasPrefix("SA_RINCON"), token.hasSuffix("_") {
-            digits = String(token.dropFirst("SA_RINCON".count).dropLast(1))
-        } else { return nil }
-        guard let pair = localAndCloudServiceIds(fromRinconDigits: digits) else { return nil }
-        let sn = extractSnFromSvcLine(in: region) ?? extractSnFromSvcLine(in: xml)
-        return (pair.0, pair.1, sn)
-    }
-
-    private func localAndCloudServiceIds(fromRinconDigits digits: String) -> (Int, String)? {
-        if let n = Int(digits), let cloud = localToCloudSid[n] { return (n, cloud) }
-        if let local = cloudToLocalSid[digits] {
-            return (local, localToCloudSid[local] ?? digits)
-        }
-        if let local = canonicalLocalSid(forCloudOrServiceTypeDigits: digits) {
-            if let c = localToCloudSid[local] { return (local, c) }
-        }
-        return nil
-    }
-
-    private func extractSnFromSvcLine(in text: String) -> String? {
-        guard let m = try? NSRegularExpression(pattern: "#Svc\\d+-([^-]+)-").firstMatch(
-            in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range(at: 1), in: text) else { return nil }
-        return String(text[r])
-    }
-
-    /// Fallback: extract Cloud IDs from DIDL desc tag (SA_RINCON{sid}_{user})
-    /// and item/container id attribute (prefix + objectId) when <res> is missing.
-    private func parseCloudIdsFromDIDLMetadata(_ item: BrowseItem) -> FavoriteCloudIds? {
-        let xmlSources = [item.resMD, item.metaXML].compactMap { $0 }
-        guard !xmlSources.isEmpty else { return nil }
-
-        // The number after `SA_RINCON` is often a **cloud** or SMAPI service id
-        // (e.g. 52231 for Apple Music), not the local `sid` used in `?sid=204`.
-        // Old code used `localToCloudSid[52231]` and always failed.
-        var localSid: Int?
-        var cloudServiceId: String?
-        var extractedSn: String?
-        for xml in xmlSources {
-            if let (local, cloud, sn) = rinconBindingAndAccountSn(in: xml) {
-                localSid = local
-                cloudServiceId = cloud
-                extractedSn = sn
-                break
-            }
-        }
-
-        guard localSid != nil, let cloudSid = cloudServiceId else {
-            SonosLog.debug(.parseCloudIds, "Fallback: no RINCON / service binding from desc")
-            return nil
-        }
-
-        // Extract objectId from item/container id attribute in resMD
-        // Format: <item id="{8-hex-prefix}{objectId}" ...>
-        var objectId: String?
-        for xml in xmlSources {
-            if let idVal = extractDIDLItemId(from: xml) {
-                if idVal.count > 8, idVal.prefix(8).allSatisfy({ $0.isHexDigit }) {
-                    var oid = String(idVal.dropFirst(8))
-                    if oid.contains("%25") { oid = oid.removingPercentEncoding ?? oid }
-                    if !oid.isEmpty { objectId = oid; break }
-                }
-            }
-        }
-
-        guard let oid = objectId else {
-            SonosLog.debug(.parseCloudIds, "Fallback: no objectId from item id attribute")
-            return nil
-        }
-
-        let accountId = extractedSn ?? "2"
-        // Intentionally no log on success: `parseCloudIds` runs on every SwiftUI
-        // body refresh for favorites rows — logging here floods the console.
-        return FavoriteCloudIds(objectId: oid, cloudServiceId: cloudSid, accountId: accountId)
+        playbackResolver.parseCloudIds(from: item)
     }
 
     /// Extract the `id` attribute value from the first <item> or <container> in DIDL XML.
@@ -1003,31 +871,7 @@ final class SearchManager {
     private func cloudFavoritesAsBrowseItems(context: CloudContext) async throws -> [BrowseItem] {
         let cloudFavs = try await SonosCloudAPI.listFavorites(
             token: context.token, householdId: context.householdId)
-        return cloudFavs.map { fav in
-            // Best-effort type inference from the resource metadata; the
-            // per-category rendering falls back to sensible defaults when
-            // the Cloud API's shape doesn't map cleanly.
-            let cloudType: String? = {
-                switch fav.resource?.type {
-                case "album":    return "ALBUM"
-                case "playlist": return "PLAYLIST"
-                case "track":    return "TRACK"
-                case "artist":   return "ARTIST"
-                case "station":  return "PROGRAM"
-                default:         return nil
-                }
-            }()
-            let cloudServiceId = fav.service?.id?.serviceId
-            let localSid = cloudServiceId.flatMap { cloudToLocalSid[$0] }
-            var item = BrowseItem(
-                id: fav.id, title: fav.name, artist: fav.description ?? "",
-                album: "", albumArtURL: fav.imageUrl,
-                uri: nil, metaXML: nil, resMD: nil,
-                isContainer: cloudType == "ALBUM" || cloudType == "PLAYLIST",
-                serviceId: localSid, cloudType: cloudType)
-            item.cloudFavoriteId = fav.id
-            return item
-        }
+        return cloudFavs.map { cloudItemFactory.cloudFavoriteItem(from: $0) }
     }
 
     private func tryBrowse(_ block: () async throws -> [BrowseItem]) async -> [BrowseItem] {
@@ -1310,7 +1154,7 @@ final class SearchManager {
             term: term,
             limit: limit)
         let items = catalogItems.map { catalogItem -> BrowseItem in
-            let uri = buildPlayableURI(
+            let uri = cloudItemFactory.playableURI(
                 objectId: catalogItem.sonosPlayableObjectID,
                 serviceId: serviceId,
                 accountId: accountId,
@@ -1420,7 +1264,7 @@ final class SearchManager {
             for: playable,
             cloudServiceId: serviceId,
             accountId: accountId
-        ), item.uri?.isEmpty == false else {
+        ), item.playbackDescriptor.isPlayable else {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return nil
         }
@@ -1499,28 +1343,10 @@ final class SearchManager {
     private func convertToBrowseItem(_ resource: SonosCloudAPI.CloudResource,
                                      serviceId: String?,
                                      accountId: String?) -> BrowseItem? {
-        guard let name = resource.name else { return nil }
-        let type = resource.type ?? ""
-
-        let supportedTypes: Set<String> = ["TRACK", "ARTIST", "ALBUM", "PLAYLIST", "PROGRAM"]
-        guard supportedTypes.contains(type) else { return nil }
-
-        let objectId = resource.id?.objectId ?? UUID().uuidString
-        let artistName = resource.artists?.first?.name ?? resource.summary?.content ?? ""
-        let albumName = resource.container?.name ?? ""
-        let artURL = resource.images?.first?.url ?? resource.container?.images?.first?.url
-        let isContainer = type == "ALBUM" || type == "PLAYLIST"
-
-        let mimeType = resource.defaults.flatMap { decodeMimeType(from: $0) }
-        let uri = buildPlayableURI(objectId: objectId, serviceId: serviceId,
-                                   accountId: accountId, type: type, mimeType: mimeType)
-        let localSid = serviceId.flatMap { cloudToLocalSid[$0] }
-
-        return BrowseItem(
-            id: objectId, title: name, artist: artistName, album: albumName,
-            albumArtURL: artURL, uri: uri, metaXML: nil,
-            duration: TimeInterval(resource.durationMs ?? 0) / 1000,
-            isContainer: isContainer, serviceId: localSid, cloudType: type)
+        cloudItemFactory.browseItem(
+            from: resource,
+            serviceId: serviceId,
+            accountId: accountId)
     }
 
     private func forwardAlbumCandidate(
@@ -1535,109 +1361,22 @@ final class SearchManager {
             resourceType: albumTrack.resource?.type) else {
             return nil
         }
-        let objectId = albumTrack.resource?.id?.objectId ?? albumTrack.id ?? ""
-        let cleanedObjectId = browseTrackId(from: objectId)
-        guard !cleanedObjectId.isEmpty,
-              let title = albumTrack.title?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !title.isEmpty else {
+
+        let item = makeAlbumTrackItem(
+            from: albumTrack,
+            fallbackAlbumTitle: fallbackAlbumTitle,
+            fallbackArtURL: fallbackArtURL,
+            fallbackServiceId: serviceId,
+            fallbackAccountId: accountId
+        )
+        guard !item.id.isEmpty,
+              !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
-
-        let cloudServiceId = albumTrack.resource?.id?.serviceId ?? serviceId
-        let cloudAccountId = albumTrack.resource?.id?.accountId ?? accountId
-        let artist = albumTrack.artists?.first?.name ?? albumTrack.subtitle ?? ""
-        let artURL = albumTrack.images?.tile1x1 ?? fallbackArtURL
-        let mimeType = albumTrack.resource?.defaults.flatMap { decodeMimeType(from: $0) }
-        let duration = albumTrack.duration.flatMap(TimeInterval.init) ?? 0
-
-        var item = makeTrackItem(
-            objectId: cleanedObjectId,
-            title: title,
-            artist: artist,
-            album: fallbackAlbumTitle,
-            artURL: artURL,
-            mimeType: mimeType,
-            cloudServiceId: cloudServiceId,
-            accountId: cloudAccountId)
-        item.duration = duration
 
         return AppleMusicForwardAlbumTrackCandidate(
             item: item,
             ordinal: albumTrack.ordinal)
-    }
-
-    private func decodeMimeType(from defaults: String) -> String? {
-        guard let data = Data(base64Encoded: defaults),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return json["mimeType"] as? String
-    }
-
-    /// Build a URI that Sonos can play from the Cloud API objectId.
-    /// Uses the local Sonos sid (mapped from Cloud serviceId) for the `sid=` parameter.
-    /// URI format is service-specific (Apple Music, Spotify, etc. all need different encoding).
-    private func buildPlayableURI(objectId: String, serviceId: String?,
-                                  accountId: String?, type: String,
-                                  mimeType: String? = nil) -> String? {
-        guard let cloudSid = serviceId, let aid = accountId else { return nil }
-
-        let localSid = cloudToLocalSid[cloudSid]
-        guard let sid = localSid else {
-            SonosLog.debug(.search, "No local sid mapping for Cloud serviceId \(cloudSid)")
-            return nil
-        }
-
-        switch type {
-        case "TRACK":
-            let trackId = trackURIObjectId(objectId: objectId, cloudServiceId: cloudSid)
-            let (scheme, ext, flags) = trackURIComponents(localSid: sid, mimeType: mimeType)
-            return SonosPlayableURIBuilder.serviceURI(
-                scheme: scheme,
-                objectID: trackId,
-                localSid: sid,
-                flags: flags,
-                accountID: aid,
-                fileExtension: ext)
-        case "ALBUM":
-            return SonosPlayableURIBuilder.containerURI(
-                prefix: "1004206c",
-                objectID: objectId,
-                localSid: sid,
-                flags: 8300,
-                accountID: aid)
-        case "PLAYLIST":
-            return SonosPlayableURIBuilder.containerURI(
-                prefix: "1006206c",
-                objectID: objectId,
-                localSid: sid,
-                flags: 8300,
-                accountID: aid)
-        case "PROGRAM":
-            return SonosPlayableURIBuilder.serviceURI(
-                scheme: "x-sonosapi-radio",
-                objectID: objectId,
-                localSid: sid,
-                flags: 8300,
-                accountID: aid)
-        case "ARTIST":
-            // Artist favorites use a cp-container URI with the bare object id
-            // (no `10052064` prefix on the URI side — only the metadata id has it).
-            return SonosPlayableURIBuilder.containerURI(
-                prefix: "",
-                objectID: objectId,
-                localSid: sid,
-                flags: 8300,
-                accountID: aid)
-        default:
-            return nil
-        }
-    }
-
-    private func trackURIObjectId(objectId: String, cloudServiceId: String) -> String {
-        guard isAppleMusicServiceId(cloudServiceId) else { return objectId }
-        if let storeID = SonosAppleMusicTrackResolver.storeID(fromObjectID: objectId) {
-            return "song:\(storeID)"
-        }
-        return objectId
     }
 
     private func appleMusicCatalogTrackId(from objectId: String) -> String {
@@ -1646,38 +1385,6 @@ final class SearchManager {
             return "song%3a\(storeID)"
         }
         return objectId
-    }
-
-    private func isAppleMusicServiceId(_ cloudServiceId: String) -> Bool {
-        if cloudServiceId == "52231" {
-            return true
-        }
-        guard let account = linkedAccounts.first(where: { $0.serviceId == cloudServiceId }) else {
-            return false
-        }
-        return isAppleMusicAccount(account)
-    }
-
-    /// Returns (scheme, fileExtension, flags) for track URIs.
-    /// Matches official Sonos app: uses mimeType from the Cloud `defaults` field
-    /// to pick extension (.mp4 for AAC) and flags; falls back to .unknown + flags=0.
-    private func trackURIComponents(localSid: Int, mimeType: String?) -> (String, String, Int) {
-        switch localSid {
-        case 12: // Spotify
-            return ("x-sonos-spotify", "", 8224)
-        default:
-            let (ext, flags) = extensionAndFlags(for: mimeType)
-            return ("x-sonos-http", ext, flags)
-        }
-    }
-
-    private func extensionAndFlags(for mimeType: String?) -> (String, Int) {
-        switch mimeType {
-        case "audio/aac", "audio/mp4", "audio/x-m4a": return (".mp4", 8232)
-        case "audio/mpeg", "audio/mp3": return (".mp3", 8224)
-        case "audio/flac": return (".flac", 8224)
-        default: return (".unknown", 0)
-        }
     }
 
     // MARK: - Playback Actions
@@ -1750,7 +1457,7 @@ final class SearchManager {
         let cloudType = item.cloudType ?? "TRACK"
 
         let (itemId, upnpClass, xmlTag) = metadataComponents(
-            cloudType: cloudType, objectId: encodedObjId, uri: item.uri)
+            cloudType: cloudType, objectId: encodedObjId, uri: item.playbackDescriptor.directURI)
 
         // Only TRACK/ALBUM/PLAYLIST carry rich metadata in their inner DIDL.
         // ARTIST and PROGRAM use a bare-minimum item (title + class + desc).
@@ -1856,49 +1563,16 @@ final class SearchManager {
         return metadata
     }
 
-    private func extractItemId(from resMD: String) -> String? {
-        let pattern = #"<item\s+id="([^"]+)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: resMD, range: NSRange(resMD.startIndex..., in: resMD)),
-              let range = Range(match.range(at: 1), in: resMD) else { return nil }
-        return String(resMD[range])
-    }
-
-    private func extractServiceParams() -> (sid: String, flags: String, sn: String)? {
-        let allItems = favorites + radio
-        for item in allItems {
-            guard let uri = item.uri, uri.contains("sid="), uri.contains("sn=") else { continue }
-            var sid: String?
-            var sn: String?
-            for part in uri.split(separator: "?").last?.split(separator: "&") ?? [] {
-                let kv = part.split(separator: "=", maxSplits: 1)
-                guard kv.count == 2 else { continue }
-                if kv[0] == "sid" { sid = String(kv[1]) }
-                if kv[0] == "sn" { sn = String(kv[1]) }
-            }
-            if let sid, let sn {
-                return (sid: sid, flags: "8300", sn: sn)
-            }
-        }
-        return nil
+    private func extractServiceParams() -> BrowseItemPlaybackResolver.ServiceParams? {
+        playbackResolver.serviceParams(from: favorites + radio)
     }
 
     private func constructFavoriteURI(resMD: String) -> String? {
-        guard let itemId = extractItemId(from: resMD) else { return nil }
-
-        var flags = SonosRinconRadioFlags
-        if itemId.count >= 8 {
-            let flagsHex = String(itemId[itemId.index(itemId.startIndex, offsetBy: 4)..<itemId.index(itemId.startIndex, offsetBy: 8)])
-            flags = Int(flagsHex, radix: 16) ?? SonosRinconRadioFlags
-        }
-
-        guard let params = extractServiceParams() else {
-            // Fallback: bare cpcontainer URI without sid/sn — works for
-            // some local sources but not third-party services.
-            return "x-rincon-cpcontainer:\(itemId)"
-        }
-
-        return "x-rincon-cpcontainer:\(itemId)?sid=\(params.sid)&flags=\(flags)&sn=\(params.sn)"
+        playbackResolver.favoriteTransportURI(
+            resMD: resMD,
+            seedItems: favorites + radio,
+            defaultFlags: SonosRinconRadioFlags
+        )
     }
 
     private func forwardAlbumQueueAttempt(
@@ -2017,9 +1691,8 @@ final class SearchManager {
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
             try await SonosAPI.removeAllTracksFromQueue(ip: ip)
 
-            let queueItems = plan.items.compactMap { item -> SonosQueuedURI? in
-                guard let uri = item.uri, !uri.isEmpty else { return nil }
-                return SonosQueuedURI(uri: uri, metadata: playbackMetadata(for: item))
+            let queueItems = plan.items.compactMap { item in
+                item.playbackDescriptor.queuePayload(metadata: playbackMetadata(for: item))
             }
 
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
@@ -2090,7 +1763,7 @@ final class SearchManager {
         manager: SonosManager
     ) async throws -> Bool {
         pushRecentlyPlayed(item)
-        guard let uri = item.uri, !uri.isEmpty else {
+        guard let uri = item.playbackDescriptor.directURI else {
             SonosLog.error(.playback, "Cloud forward handoff: no URI for '\(item.title)'")
             errorMessage = "The Apple Music track could not be loaded remotely."
             return false
@@ -2131,7 +1804,8 @@ final class SearchManager {
         guard case .lan(let ip, _, let speakerUUID) = backend else { return false }
 
         pushRecentlyPlayed(item)
-        guard let uri = item.uri, !uri.isEmpty else {
+        let metadata = playbackMetadata(for: item)
+        guard let payload = item.playbackDescriptor.queuePayload(metadata: metadata) else {
             SonosLog.error(.playback, "Forward handoff: no URI for '\(item.title)'")
             return false
         }
@@ -2142,8 +1816,8 @@ final class SearchManager {
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
             let trackNr = try await SonosAPI.addURIToQueue(
                 ip: ip,
-                uri: uri,
-                metadata: playbackMetadata(for: item))
+                uri: payload.uri,
+                metadata: payload.metadata)
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
             try await SonosAPI.setAVTransportToQueue(ip: ip, speakerUUID: speakerUUID)
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
@@ -2768,10 +2442,10 @@ final class SearchManager {
         manager: SonosManager,
         displayTitle: String
     ) async -> Bool {
-        let playableItems = items.filter { item in
-            item.uri?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let queueableItems = items.filter { item in
+            item.playbackDescriptor.isQueueable
         }
-        guard !playableItems.isEmpty else {
+        guard !queueableItems.isEmpty else {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return false
         }
@@ -2789,8 +2463,8 @@ final class SearchManager {
 
         let ip = speaker.playbackIP
         let speakerUUID = speaker.id
-        let queueItems = playableItems.map {
-            SonosQueuedURI(uri: $0.uri ?? "", metadata: playbackMetadata(for: $0))
+        let queueItems = queueableItems.compactMap {
+            $0.playbackDescriptor.queuePayload(metadata: playbackMetadata(for: $0))
         }
         SonosLog.debug(
             .playbackLink,
@@ -2799,7 +2473,7 @@ final class SearchManager {
                 "lastURI=\(SonosLog.playbackLinkValue(queueItems.last?.uri)) " +
                 "firstMetadata=\(queueItems.first.map { SonosLog.playbackMetadataSummary($0.metadata) } ?? "nil")")
 
-        if let first = playableItems.first {
+        if let first = queueableItems.first {
             pushRecentlyPlayed(first)
         }
 
@@ -2885,7 +2559,6 @@ final class SearchManager {
             return false
         }
 
-        var playURI = item.uri
         var playMeta = playbackMetadata(for: item)
 
         // For favorites, the resMD DIDL often lacks albumArtURI — inject it from
@@ -2894,14 +2567,22 @@ final class SearchManager {
             playMeta = enrichMetadataWithArt(playMeta, artURL: item.albumArtURL)
         }
 
-        if (playURI == nil || playURI?.isEmpty == true), let resMD = item.resMD {
-            playURI = constructFavoriteURI(resMD: resMD)
+        let fallbackURI: String?
+        if item.playbackDescriptor.directURI == nil, let resMD = item.resMD {
+            fallbackURI = constructFavoriteURI(resMD: resMD)
+        } else {
+            fallbackURI = nil
         }
 
-        guard let uri = playURI, !uri.isEmpty else {
+        guard let playPayload = item.playbackDescriptor.transportPayload(
+            metadata: playMeta,
+            fallbackURI: fallbackURI
+        ) else {
             SonosLog.error(.playback, "playNow: no URI for '\(item.title)'")
             return false
         }
+        let uri = playPayload.uri
+        playMeta = playPayload.metadata
 
         let metadataId = extractDIDLItemId(from: playMeta) ?? "nil"
         let metadataDesc = SonosAPI.extractTag("desc", from: playMeta) ?? "nil"
@@ -3012,19 +2693,19 @@ final class SearchManager {
                 .localizedDescription
             return false
         }
-        guard let uri = item.uri, !uri.isEmpty else {
+        let metadata = playbackMetadata(for: item)
+        guard let payload = item.playbackDescriptor.queuePayload(metadata: metadata) else {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return false
         }
-        let metadata = playbackMetadata(for: item)
         SonosLog.debug(
             .playbackLink,
             "playNext item title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
                 "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
                 "serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
-                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(uri)) " +
-                "metadata=\(SonosLog.playbackMetadataSummary(metadata))")
-        return await manager.playNext(uri: uri, metadata: metadata)
+                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(payload.uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(payload.metadata))")
+        return await manager.playNext(uri: payload.uri, metadata: payload.metadata)
     }
 
     /// Start a personalized radio station from an artist.
@@ -3353,20 +3034,20 @@ final class SearchManager {
             errorMessage = HandoffTransferError.noSelectedSpeaker.localizedDescription
             return false
         }
-        guard let uri = item.uri, !uri.isEmpty else {
+        let meta = playbackMetadata(for: item)
+        guard let payload = item.playbackDescriptor.queuePayload(metadata: meta) else {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return false
         }
-        let meta = playbackMetadata(for: item)
         SonosLog.debug(
             .playbackLink,
             "addToQueue item title='\(item.title)' cloudType=\(item.cloudType ?? "nil") " +
                 "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
                 "serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
-                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(uri)) " +
-                "metadata=\(SonosLog.playbackMetadataSummary(meta))")
+                "isContainer=\(item.isContainer) uri=\(SonosLog.playbackLinkValue(payload.uri)) " +
+                "metadata=\(SonosLog.playbackMetadataSummary(payload.metadata))")
         do {
-            try await SonosAPI.addURIToQueue(ip: ip, uri: uri, metadata: meta)
+            try await SonosAPI.addURIToQueue(ip: ip, uri: payload.uri, metadata: payload.metadata)
             await manager.loadQueue()
             return true
         } catch {
@@ -3382,7 +3063,7 @@ final class SearchManager {
     /// into detail views need that resolved shape or the heart action fails
     /// (`guard` on `uri`) even though the entry is a valid favorite.
     func browseItemWithResolvedFavoriteURI(_ item: BrowseItem) -> BrowseItem? {
-        if let u = item.uri, !u.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return item }
+        if item.playbackDescriptor.directURI != nil { return item }
         guard let ids = parseCloudIds(from: item) else { return nil }
         let typeString: String? = item.cloudType ?? favoriteCategoryAsCloudType(item)
         guard let ts = typeString, let kind = CloudObjectType(rawValue: ts) else { return nil }
@@ -3443,7 +3124,7 @@ final class SearchManager {
         }
         guard let ip = manager.selectedSpeaker?.playbackIP else { return false }
         guard let resolved = browseItemWithResolvedFavoriteURI(item) else { return false }
-        guard let uri = resolved.uri, !uri.isEmpty else { return false }
+        guard let uri = resolved.playbackDescriptor.directURI else { return false }
         // Fresh inner DIDL from `resolved` avoids reusing a stale `r:resMD`
         // on an in-memory `BrowseItem` after remove → re-add.
         let meta = innerDIDLForFavoriteCreate(resolved: resolved)
@@ -3571,106 +3252,8 @@ final class SearchManager {
         return false
     }
 
-    /// Best-effort canonical service hint for a favorite or browse item,
-    /// always returned in `"sid:<localSid>"` form when we can figure it out.
-    ///
-    /// Factory items (built via `makeArtistItem` / `makeAlbumItem` / …) carry
-    /// the local sid directly. Sonos-parsed favorites lose that field and
-    /// instead have one of:
-    ///   * `sid=<N>` in their URI query — for instantPlay shapes (tracks,
-    ///     albums, playlists). Already a local sid.
-    ///   * `SA_RINCON<N>_<user>` token in `<desc>` — shortcut shape. `N`
-    ///     is either a **cloud service-id** (matches `cloudToLocalSid`) or
-    ///     a **SMAPI service type** (matches `musicServices[*].serviceType`).
-    ///     We look up both and canonicalize to the local sid so both sides
-    ///     of an equality check resolve to the same signature even when
-    ///     the factory item used a cloud id and the stored favorite used
-    ///     the service type.
-    ///   * `id="10052064…"` hex prefix on the inner `<item>` — the middle
-    ///     bytes encode the SMAPI service type (Apple Music = 52064, etc.).
-    ///     Used as a last-resort fallback for shortcut favs whose `<desc>`
-    ///     didn't survive the round-trip.
-    ///
-    /// Returns `nil` when we genuinely can't tell; callers then fall back
-    /// to plain name/URI matching.
-    private func serviceSignature(_ item: BrowseItem) -> String? {
-        if let sid = item.serviceId { return "sid:\(sid)" }
-
-        if let uri = item.uri, let q = uri.split(separator: "?").last {
-            for param in q.split(separator: "&") {
-                let kv = param.split(separator: "=", maxSplits: 1)
-                if kv.count == 2, kv[0] == "sid", let n = Int(kv[1]) {
-                    return "sid:\(n)"
-                }
-            }
-        }
-
-        for blob in [item.resMD, item.metaXML].compactMap({ $0 }) {
-            if let range = blob.range(of: "SA_RINCON") {
-                let digits = String(blob[range.upperBound...].prefix { $0.isNumber })
-                if digits.isEmpty { continue }
-                if let canonical = canonicalLocalSid(forCloudOrServiceTypeDigits: digits) {
-                    return "sid:\(canonical)"
-                }
-                // Unknown service — keep a stable fallback signature so
-                // two favorites from the same unknown service still match.
-                return "rincon:\(digits)"
-            }
-        }
-
-        if let resMD = item.resMD, let idRange = resMD.range(of: "id=\"") {
-            let digits = String(resMD[idRange.upperBound...].prefix { $0.isNumber })
-            if digits.count >= 6 {
-                // Prefix format appears to be `100<hex>` where the trailing
-                // portion matches a SMAPI service-type. Try multiple
-                // reasonable slices to recover a known service.
-                let suffixes = [digits.dropFirst(2), digits.dropFirst(3), digits.dropFirst(4)]
-                for sfx in suffixes {
-                    if let canonical = canonicalLocalSid(forCloudOrServiceTypeDigits: String(sfx)) {
-                        return "sid:\(canonical)"
-                    }
-                }
-                return "prefix:\(digits)"
-            }
-        }
-        return nil
-    }
-
-    /// Accepts a numeric token that might be either a Sonos *cloud service id*
-    /// (key of `cloudToLocalSid`) or a SMAPI *service type* (matches
-    /// `musicServices[*].serviceType`) and returns the corresponding local
-    /// sid when either mapping knows about it.
-    private func canonicalLocalSid(forCloudOrServiceTypeDigits digits: String) -> Int? {
-        if let localSid = cloudToLocalSid[digits] { return localSid }
-        if let match = musicServices.first(where: { $0.serviceType == digits }) {
-            return match.id
-        }
-        return nil
-    }
-
     private func findFavorite(matching item: BrowseItem) -> BrowseItem? {
-        let itemSig = serviceSignature(item)
-        // Service-aware predicate: if we have signatures for both sides,
-        // reject mismatches outright so "Taylor Swift on Apple Music"
-        // doesn't look favorited because "Taylor Swift on Spotify" is.
-        // If either side lacks a signature (legacy UPnP-sourced items,
-        // unknown service), don't veto — name/URI match still applies.
-        let sigOK: (BrowseItem) -> Bool = { [self] fav in
-            guard let a = itemSig, let b = serviceSignature(fav) else { return true }
-            return a == b
-        }
-
-        if let uri = item.uri, !uri.isEmpty {
-            let normalizedURI = uri.split(separator: "?").first.map(String.init) ?? uri
-            if let match = favorites.first(where: { fav in
-                guard sigOK(fav), let favURI = fav.uri, !favURI.isEmpty else { return false }
-                let normalizedFav = favURI.split(separator: "?").first.map(String.init) ?? favURI
-                return normalizedFav == normalizedURI
-            }) { return match }
-        }
-        return favorites.first {
-            sigOK($0) && $0.title == item.title && $0.artist == item.artist
-        }
+        favoriteMatcher.favorite(matching: item, in: favorites)
     }
 
     private func refreshFavorites(ip: String) async {

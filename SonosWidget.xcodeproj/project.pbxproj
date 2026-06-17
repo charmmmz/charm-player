@@ -108,6 +108,7 @@
 				AlbumPaletteExtractor.swift,
 				AppleMusicHandoff.swift,
 				BrandMedia.xcassets,
+				BrowseItemPlaybackDescriptor.swift,
 				DominantColor.swift,
 				ExpandableText.swift,
 				HandoffMatcher.swift,

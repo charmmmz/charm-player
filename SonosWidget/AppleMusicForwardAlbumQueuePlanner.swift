@@ -128,13 +128,11 @@ enum AppleMusicForwardAlbumQueuePlanner {
     }
 
     private static func isPlayable(_ item: BrowseItem) -> Bool {
-        guard let uri = item.uri?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !uri.isEmpty else { return false }
-        return item.cloudType == "TRACK"
+        item.playbackDescriptor.isQueueable && item.cloudType == "TRACK"
     }
 
     private static func storeID(from item: BrowseItem) -> String? {
-        SonosAppleMusicTrackResolver.storeID(fromTrackURI: item.uri)
+        SonosAppleMusicTrackResolver.storeID(fromTrackURI: item.playbackDescriptor.directURI)
             ?? SonosAppleMusicTrackResolver.storeID(fromObjectID: item.id)
     }
 

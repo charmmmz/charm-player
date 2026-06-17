@@ -550,7 +550,7 @@ struct SearchView: View {
                 serviceId: searchManager.localSid(forCloudServiceId: ids.cloudServiceId),
                 cloudType: "COLLECTION")
         }
-        let sources = [item.uri, item.resMD, item.metaXML].compactMap { $0 }
+        let sources = [item.playbackDescriptor.directURI, item.resMD, item.metaXML].compactMap { $0 }
         for src in sources where src.contains("libraryfolder") {
             if let range = src.range(of: "libraryfolder[^\"&<\\s]*", options: .regularExpression) {
                 let objectId = String(src[range])
@@ -1181,11 +1181,11 @@ struct SearchView: View {
                       : "Favorites",
                       systemImage: favorited ? "heart.fill" : "heart")
             }
-        } else if item.uri != nil || item.resMD != nil {
+        } else if item.playbackDescriptor.hasActionSurface {
             MusicResourceContextMenu(
                 actions: MusicResourceActionPolicy.actions(
                     kind: MusicResourceKind(cloudType: item.cloudType),
-                    isQueueable: item.uri != nil
+                    isQueueable: item.playbackDescriptor.isQueueable
                 )
             ) { action in
                 switch action {
@@ -1202,7 +1202,7 @@ struct SearchView: View {
                 }
             }
 
-            if item.uri != nil {
+            if item.playbackDescriptor.isPlayable {
                 Divider()
 
                 Button {
@@ -1509,7 +1509,7 @@ struct FavoriteCategoryDetailView: View {
                 serviceId: searchManager.localSid(forCloudServiceId: ids.cloudServiceId),
                 cloudType: "COLLECTION")
         }
-        let sources = [item.uri, item.resMD, item.metaXML].compactMap { $0 }
+        let sources = [item.playbackDescriptor.directURI, item.resMD, item.metaXML].compactMap { $0 }
         for src in sources where src.contains("libraryfolder") {
             if let range = src.range(of: "libraryfolder[^\"&<\\s]*", options: .regularExpression) {
                 let objectId = String(src[range])
@@ -1623,11 +1623,11 @@ struct FavoriteCategoryDetailView: View {
                       : "Favorites",
                       systemImage: favorited ? "heart.fill" : "heart")
             }
-        } else if item.uri != nil || item.resMD != nil {
+        } else if item.playbackDescriptor.hasActionSurface {
             MusicResourceContextMenu(
                 actions: MusicResourceActionPolicy.actions(
                     kind: MusicResourceKind(cloudType: item.cloudType),
-                    isQueueable: item.uri != nil
+                    isQueueable: item.playbackDescriptor.isQueueable
                 )
             ) { action in
                 switch action {
@@ -1649,7 +1649,7 @@ struct FavoriteCategoryDetailView: View {
                 }
             }
 
-            if item.uri != nil {
+            if item.playbackDescriptor.isPlayable {
                 Divider()
 
                 Button {
