@@ -95,8 +95,11 @@ test('music ambience eligibility still allows music metadata without a known sou
   }), true);
 });
 
-test('bridge refreshes snapshots when the Sonos library emits real event names', () => {
-  const bridge = testBridge();
+test('bridge debounces snapshot refreshes when the Sonos library emits event bursts', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    eventRefreshDebounceMs: 5,
+  });
   const events = new EventEmitter();
   const refreshedDevices: string[] = [];
   const device = { Name: 'Office', Events: events };
@@ -114,15 +117,10 @@ test('bridge refreshes snapshots when the Sonos library emits real event names',
   events.emit(SonosEvents.PlaybackStopped);
   events.emit(SonosEvents.GroupName, 'Office');
 
-  assert.deepEqual(refreshedDevices, [
-    'Office',
-    'Office',
-    'Office',
-    'Office',
-    'Office',
-    'Office',
-    'Office',
-  ]);
+  assert.deepEqual(refreshedDevices, []);
+  await delay(20);
+  assert.deepEqual(refreshedDevices, ['Office']);
+  bridge.stop();
 });
 
 test('bridge ignores stale snapshot refreshes that complete after a newer refresh', async () => {

@@ -30,6 +30,7 @@ export interface SonosLocalControlClient {
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
   transitionSettleRefreshMs?: number;
+  eventRefreshDebounceMs?: number;
 }
 
 interface RefreshSnapshotOptions {
@@ -186,7 +187,9 @@ export class SonosBridge extends EventEmitter {
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
   private readonly transitionSettleRefreshMs: number;
+  private readonly eventRefreshDebounceMs: number;
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
+  private readonly eventRefreshTimers = new Map<string, NodeJS.Timeout>();
   private periodicHandle: NodeJS.Timeout | null = null;
 
   constructor(log: Logger, options: SonosBridgeOptions = {}) {
@@ -196,6 +199,7 @@ export class SonosBridge extends EventEmitter {
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
     this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
+    this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
   }
 
   async start(seedIp: string): Promise<void> {
@@ -234,6 +238,10 @@ export class SonosBridge extends EventEmitter {
       clearTimeout(timer);
     }
     this.transitionSettleRefreshTimers.clear();
+    for (const timer of this.eventRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.eventRefreshTimers.clear();
     this.manager.CancelSubscription();
   }
 
@@ -332,16 +340,41 @@ export class SonosBridge extends EventEmitter {
     // fresh via PositionInfo / TransportInfo to avoid event-payload drift
     // between firmware versions.
     try {
-      device.Events.on(SonosEvents.AVTransport, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.CurrentTrackUri, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.CurrentTrackMetadata, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.CurrentTransportState, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.CurrentTransportStateSimple, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.PlaybackStopped, () => void this.refreshSnapshot(device));
-      device.Events.on(SonosEvents.GroupName, () => void this.refreshSnapshot(device));
+      device.Events.on(SonosEvents.AVTransport, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.CurrentTrackUri, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.CurrentTrackMetadata, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.CurrentTransportState, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.CurrentTransportStateSimple, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.PlaybackStopped, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.GroupName, () => this.scheduleEventRefresh(device));
     } catch (err) {
       this.log.warn({ err, device: device.Name }, 'failed to attach device events');
     }
+  }
+
+  private scheduleEventRefresh(device: any): void {
+    const groupId = this.snapshotGroupId(device)
+      ?? firstNonEmpty(device?.Host, device?.Uuid, device?.Name)
+      ?? 'unknown';
+
+    if (this.eventRefreshDebounceMs <= 0) {
+      void this.refreshSnapshot(device).catch(err => {
+        this.log.debug({ err, groupId }, 'debounced Sonos event refresh failed');
+      });
+      return;
+    }
+
+    const existing = this.eventRefreshTimers.get(groupId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.eventRefreshTimers.delete(groupId);
+      void this.refreshSnapshot(device).catch(err => {
+        this.log.debug({ err, groupId }, 'debounced Sonos event refresh failed');
+      });
+    }, this.eventRefreshDebounceMs);
+    timer.unref?.();
+    this.eventRefreshTimers.set(groupId, timer);
   }
 
   private async refreshSnapshot(
@@ -356,7 +389,7 @@ export class SonosBridge extends EventEmitter {
       // relay agree without an extra mapping step. iOS sends `playbackIP`,
       // which is `coordinatorIP ?? ipAddress`.
       const coordinator = device.Coordinator ?? device;
-      const resolvedGroupId = firstNonEmpty(coordinator.Host, device.Host, device.Uuid);
+      const resolvedGroupId = this.snapshotGroupId(device);
       if (!resolvedGroupId) {
         throw new Error(`missing Sonos group id for ${device.Name ?? 'unknown device'}`);
       }
@@ -515,6 +548,11 @@ export class SonosBridge extends EventEmitter {
       );
       return false;
     }
+  }
+
+  private snapshotGroupId(device: any): string | null {
+    const coordinator = device?.Coordinator ?? device;
+    return firstNonEmpty(coordinator?.Host, device?.Host, device?.Uuid);
   }
 
   private beginRefresh(groupId: string): number {

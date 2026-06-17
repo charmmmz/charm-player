@@ -1,12 +1,13 @@
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 
+import { fetchAlbumArt as defaultFetchAlbumArt } from './albumArtFetchCache.js';
 import { stablePaletteForTrack } from './huePalette.js';
 import type { HueRGBColor, HueSnapshot } from './hueTypes.js';
+export { fetchAlbumArt } from './albumArtFetchCache.js';
 
 const SAMPLE_SIZE = 24;
 const MAX_PALETTE_COLORS = 5;
-const MAX_ALBUM_ART_BYTES = 5 * 1024 * 1024;
 
 export interface HueAlbumArtPaletteDependencies {
   fetchAlbumArt?: (uri: string) => Promise<Buffer>;
@@ -35,36 +36,11 @@ export async function paletteForSnapshot(
   }
 
   try {
-    const imageData = await (dependencies.fetchAlbumArt ?? fetchAlbumArt)(snapshot.albumArtUri);
+    const imageData = await (dependencies.fetchAlbumArt ?? defaultFetchAlbumArt)(snapshot.albumArtUri);
     const palette = await (dependencies.extractPalette ?? paletteFromAlbumArtBuffer)(imageData);
     return palette.length > 0 ? palette : fallback;
   } catch {
     return fallback;
-  }
-}
-
-export async function fetchAlbumArt(uri: string): Promise<Buffer> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-  try {
-    const response = await fetch(uri, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Album art request failed with HTTP ${response.status}`);
-    }
-
-    const contentLength = Number(response.headers.get('content-length') ?? '0');
-    if (contentLength > MAX_ALBUM_ART_BYTES) {
-      throw new Error('Album art response is too large');
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    if (arrayBuffer.byteLength > MAX_ALBUM_ART_BYTES) {
-      throw new Error('Album art response is too large');
-    }
-
-    return Buffer.from(arrayBuffer);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
