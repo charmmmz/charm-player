@@ -368,6 +368,89 @@ test('bridge labels periodic snapshot refreshes for Live Activity calibration pu
   assert.equal(trigger, 'periodic-refresh');
 });
 
+test('bridge snapshots TV soundbar EQ controls', async () => {
+  const bridge = testBridge();
+  const eqValues: Record<string, number> = {
+    NightMode: 1,
+    SpeechEnhanceEnabled: 1,
+    DialogLevel: 3,
+  };
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    RenderingControlService: {
+      GetEQ: async ({ EQType }: { EQType: string }) => ({ CurrentValue: eqValues[EQType] ?? 0 }),
+    },
+  }, tvPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.playbackSourceRaw, 'tv');
+  assert.equal(snapshot?.soundbarNightMode, true);
+  assert.equal(snapshot?.soundbarSpeechEnhancementRawLevel, 3);
+});
+
+test('bridge writes Night Sound through RenderingControl EQ', async () => {
+  const bridge = testBridge();
+  const calls: unknown[] = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    RenderingControlService: {
+      SetEQ: async (input: unknown) => {
+        calls.push(input);
+        return true;
+      },
+      GetEQ: async ({ EQType }: { EQType: string }) => ({
+        CurrentValue: EQType === 'NightMode' ? 1 : 0,
+      }),
+    },
+  }, tvPositionInfo());
+  device.Coordinator = device;
+  (bridge as unknown as { manager: { devices: unknown[] } }).manager.devices = [device];
+
+  await bridge.setSoundbarNightMode('192.168.50.25', true);
+
+  assert.deepEqual(calls, [
+    { InstanceID: 0, EQType: 'NightMode', DesiredValue: 1 },
+  ]);
+  assert.equal(bridge.current('192.168.50.25')?.soundbarNightMode, true);
+});
+
+test('bridge writes Speech Enhancement level through RenderingControl EQ', async () => {
+  const bridge = testBridge();
+  const calls: unknown[] = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    RenderingControlService: {
+      SetEQ: async (input: unknown) => {
+        calls.push(input);
+        return true;
+      },
+      GetEQ: async ({ EQType }: { EQType: string }) => ({
+        CurrentValue: EQType === 'SpeechEnhanceEnabled' ? 1 : EQType === 'DialogLevel' ? 3 : 0,
+      }),
+    },
+  }, tvPositionInfo());
+  device.Coordinator = device;
+  (bridge as unknown as { manager: { devices: unknown[] } }).manager.devices = [device];
+
+  await bridge.setSoundbarSpeechEnhancementRawLevel('192.168.50.25', 3);
+
+  assert.deepEqual(calls, [
+    { InstanceID: 0, EQType: 'DialogLevel', DesiredValue: 3 },
+    { InstanceID: 0, EQType: 'SpeechEnhanceEnabled', DesiredValue: 1 },
+  ]);
+  assert.equal(bridge.current('192.168.50.25')?.soundbarSpeechEnhancementRawLevel, 3);
+});
+
 test('bridge keeps previous live radio song when Sonos temporarily reports only generic track metadata', async () => {
   const bridge = testBridge();
   const positions = [
@@ -638,6 +721,15 @@ function positionInfo(title: string): Record<string, string> {
     TrackDuration: '00:03:00',
     TrackURI: 'x-rincon-queue:RINCON_1#0',
     TrackMetaData: `<DIDL-Lite><item><dc:title>${title}</dc:title><dc:creator>Artist</dc:creator><upnp:album>Album</upnp:album><upnp:albumArtURI>/getaa?s=1&amp;u=x-sonos-http%3atrack</upnp:albumArtURI></item></DIDL-Lite>`,
+  };
+}
+
+function tvPositionInfo(): Record<string, string> {
+  return {
+    RelTime: '00:00:00',
+    TrackDuration: '00:00:00',
+    TrackURI: 'x-sonos-htastream:RINCON_123:spdif',
+    TrackMetaData: '',
   };
 }
 

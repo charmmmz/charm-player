@@ -401,6 +401,24 @@ async function main(): Promise<void> {
         await sonos.setGroupVolume(groupId, volume);
         break;
       }
+      case 'setSoundbarNightMode': {
+        const nightMode = req.body?.nightMode;
+        if (typeof nightMode !== 'boolean') {
+          res.status(400).json({ ok: false, error: 'nightMode must be a boolean' });
+          return;
+        }
+        await sonos.setSoundbarNightMode(groupId, nightMode);
+        break;
+      }
+      case 'setSoundbarSpeechEnhancement': {
+        const rawLevel = req.body?.speechEnhancementRawLevel;
+        if (typeof rawLevel !== 'number' || Number.isNaN(rawLevel)) {
+          res.status(400).json({ ok: false, error: 'speechEnhancementRawLevel must be a number' });
+          return;
+        }
+        await sonos.setSoundbarSpeechEnhancementRawLevel(groupId, rawLevel);
+        break;
+      }
       default:
         res.status(400).json({ ok: false, error: 'unsupported_command' });
         return;

@@ -1113,6 +1113,41 @@ extension SonosActivityAttributes.ContentState {
         return isTVSource ? .widgetTVRemote : .widgetCard
     }
 
+    var tvLiveActivityTitle: String {
+        guard isTVSource else { return trackTitle }
+        let title = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholderTitles = ["", "UNKNOWN", "NOT PLAYING", "TV"]
+        return placeholderTitles.contains(title.uppercased()) ? "TV Audio" : title
+    }
+
+    var tvLiveActivitySubtitle: String {
+        guard isTVSource else {
+            return liveActivitySubtitle(from: artist, album: album)
+        }
+        if let quality = audioQualityLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quality.isEmpty {
+            return quality
+        }
+        let subtitle = liveActivitySubtitle(from: artist, album: album)
+        return subtitle == "Unknown" ? "Live audio" : subtitle
+    }
+
+    func applyingSoundbarLiveActivityUpdate(
+        nightMode: Bool? = nil,
+        speechEnhancement: SpeechEnhancementLevel? = nil
+    ) -> Self {
+        guard isTVSource else { return self }
+
+        var state = self
+        if let nightMode {
+            state.soundbarNightMode = nightMode
+        }
+        if let speechEnhancement {
+            state.soundbarSpeechEnhancementRawLevel = speechEnhancement.rawValue
+        }
+        return state
+    }
+
     var isSoundbarNightModeEnabled: Bool {
         soundbarNightMode ?? SharedStorage.cachedSoundbarNightMode
     }
@@ -1124,6 +1159,13 @@ extension SonosActivityAttributes.ContentState {
         return SpeechEnhancementLevel.from(
             rawLevel: SharedStorage.cachedSoundbarSpeechEnhancementRawLevel)
     }
+}
+
+private func liveActivitySubtitle(from artist: String, album: String) -> String {
+    let parts = [artist, album]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && $0 != "—" }
+    return parts.isEmpty ? "Unknown" : parts.joined(separator: " · ")
 }
 
 // MARK: - Time Helpers

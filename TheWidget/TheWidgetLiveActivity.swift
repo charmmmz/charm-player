@@ -340,22 +340,18 @@ private struct WidgetTVRemoteLockScreenView: View {
                             height: 7)
                     }
 
-                    QualityBadgeRow(quality: state.audioQualityLabel)
-
-                    Text(state.trackTitle)
+                    Text(state.tvLiveActivityTitle)
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
-                    Text(tvLiveSubtitle(state))
+                    Text(state.tvLiveActivitySubtitle)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.64))
                         .lineLimit(1)
                 }
 
                 Spacer(minLength: 0)
-
-                SourceBadgeView(source: .tv, tintColor: accent, compact: true)
             }
 
             LiveProgressView(state: state)
@@ -363,7 +359,7 @@ private struct WidgetTVRemoteLockScreenView: View {
             HStack(spacing: 10) {
                 TVSoundbarControlsView(state: state, accent: accent, compact: false)
                 Spacer(minLength: 0)
-                LiveSourcePill(accent: accent)
+                TVInputPill(accent: accent)
             }
         }
         .padding(.horizontal, 14)
@@ -496,7 +492,7 @@ private struct WidgetTransportControlsView: View {
     }
 }
 
-private struct LiveSourcePill: View {
+private struct TVInputPill: View {
     let accent: Color
 
     var body: some View {
@@ -504,7 +500,7 @@ private struct LiveSourcePill: View {
             Circle()
                 .fill(accent)
                 .frame(width: 6, height: 6)
-            Text("LIVE")
+            Text("TV")
                 .font(.system(size: 10, weight: .heavy, design: .rounded))
                 .tracking(1)
         }
@@ -770,11 +766,6 @@ private func trackSubtitle(_ state: SonosActivityAttributes.ContentState) -> Str
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty && $0 != "—" }
     return parts.isEmpty ? "Unknown" : parts.joined(separator: " · ")
-}
-
-private func tvLiveSubtitle(_ state: SonosActivityAttributes.ContentState) -> String {
-    let subtitle = trackSubtitle(state)
-    return subtitle == "Unknown" ? "Live audio" : subtitle
 }
 
 private func themeColor(from hex: String?) -> Color {

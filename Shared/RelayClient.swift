@@ -201,6 +201,8 @@ enum RelayClient {
         let isPlaying: Bool
         let playbackSourceRaw: String?
         let audioQualityLabel: String?
+        let soundbarNightMode: Bool?
+        let soundbarSpeechEnhancementRawLevel: Int?
         let positionSeconds: Double
         let durationSeconds: Double
         let groupMemberCount: Int
@@ -227,11 +229,13 @@ enum RelayClient {
         }
     }
 
-    private struct LiveActivityCommandBody: Encodable {
+    struct LiveActivityCommandBody: Encodable, Sendable {
         let groupId: String
         let token: String
         let command: String
         let volume: Int?
+        let nightMode: Bool?
+        let speechEnhancementRawLevel: Int?
     }
 
     private struct LiveActivityCommandResponse: Decodable {
@@ -244,7 +248,9 @@ enum RelayClient {
         groupId: String,
         token: String,
         command: String,
-        volume: Int? = nil
+        volume: Int? = nil,
+        nightMode: Bool? = nil,
+        speechEnhancementRawLevel: Int? = nil
     ) async throws -> RelayPlaybackState? {
         let url = baseURL.appendingPathComponent("/api/live-activity-command")
         var request = URLRequest(url: url, timeoutInterval: 5)
@@ -255,7 +261,9 @@ enum RelayClient {
                 groupId: groupId,
                 token: token,
                 command: command,
-                volume: volume
+                volume: volume,
+                nightMode: nightMode,
+                speechEnhancementRawLevel: speechEnhancementRawLevel
             )
         )
         let (data, response) = try await noProxySession.data(for: request)

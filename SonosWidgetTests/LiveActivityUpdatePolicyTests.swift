@@ -141,6 +141,79 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertTrue(state.isSoundbarNightModeEnabled)
     }
 
+    func testTVLiveActivityTitleReplacesPlaybackPlaceholder() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Not Playing",
+            artist: "Live audio",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue
+        )
+
+        XCTAssertEqual(state.tvLiveActivityTitle, "TV Audio")
+    }
+
+    func testTVLiveActivitySubtitlePrefersAudioFormatLabel() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "TV",
+            artist: "Live audio",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue,
+            audioQualityLabel: "Dolby Atmos · MAT"
+        )
+
+        XCTAssertEqual(state.tvLiveActivitySubtitle, "Dolby Atmos · MAT")
+    }
+
+    func testTVLiveActivityAppliesSoundbarControlUpdates() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "TV",
+            artist: "Live audio",
+            album: "",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 0,
+            playbackSourceRaw: PlaybackSource.tv.rawValue,
+            soundbarNightMode: false,
+            soundbarSpeechEnhancementRawLevel: SpeechEnhancementLevel.off.rawValue
+        )
+
+        let updated = state.applyingSoundbarLiveActivityUpdate(
+            nightMode: true,
+            speechEnhancement: .medium
+        )
+
+        XCTAssertEqual(updated.soundbarNightMode, true)
+        XCTAssertEqual(updated.soundbarSpeechEnhancementRawLevel, SpeechEnhancementLevel.medium.rawValue)
+    }
+
+    func testSoundbarControlUpdatesIgnoreNonTVLiveActivityState() {
+        let state = SonosActivityAttributes.ContentState(
+            trackTitle: "Nude",
+            artist: "Radiohead",
+            album: "In Rainbows",
+            isPlaying: true,
+            positionSeconds: 0,
+            durationSeconds: 255,
+            playbackSourceRaw: PlaybackSource.appleMusic.rawValue,
+            soundbarNightMode: false,
+            soundbarSpeechEnhancementRawLevel: SpeechEnhancementLevel.off.rawValue
+        )
+
+        let updated = state.applyingSoundbarLiveActivityUpdate(
+            nightMode: true,
+            speechEnhancement: .medium
+        )
+
+        XCTAssertEqual(updated.soundbarNightMode, false)
+        XCTAssertEqual(updated.soundbarSpeechEnhancementRawLevel, SpeechEnhancementLevel.off.rawValue)
+    }
+
     func testAppKeepsUpdatingLocalLiveActivities() {
         XCTAssertTrue(
             SonosManager.shouldPerformLocalLiveActivityUpdate(
@@ -416,7 +489,7 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
     }
 
     func testLiveActivityPlaybackLayoutMetricsStayStableAcrossPlayState() {
-        var playing = SonosActivityAttributes.ContentState(
+        let playing = SonosActivityAttributes.ContentState(
             trackTitle: "Music For a Sushi Restaurant",
             artist: "Harry Styles",
             album: "Harry's House",

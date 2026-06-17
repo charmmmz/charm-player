@@ -44,6 +44,55 @@ final class RelayManagerTests: XCTestCase {
         ])
     }
 
+    func testLiveActivityCommandEncodesSoundbarFields() throws {
+        let body = RelayClient.LiveActivityCommandBody(
+            groupId: "192.168.50.25",
+            token: "push-token",
+            command: "setSoundbarSpeechEnhancement",
+            volume: nil,
+            nightMode: nil,
+            speechEnhancementRawLevel: 2
+        )
+
+        let data = try JSONEncoder().encode(body)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
+        XCTAssertEqual(json["token"] as? String, "push-token")
+        XCTAssertEqual(json["command"] as? String, "setSoundbarSpeechEnhancement")
+        XCTAssertEqual(json["speechEnhancementRawLevel"] as? Int, 2)
+        XCTAssertNil(json["volume"])
+        XCTAssertNil(json["nightMode"])
+    }
+
+    func testRelayPlaybackStateDecodesSoundbarFields() throws {
+        let data = Data("""
+        {
+          "groupId": "192.168.50.25",
+          "speakerName": "Playroom",
+          "trackTitle": "TV",
+          "artist": "Live audio",
+          "album": "",
+          "albumArtUri": null,
+          "isPlaying": true,
+          "playbackSourceRaw": "tv",
+          "soundbarNightMode": true,
+          "soundbarSpeechEnhancementRawLevel": 3,
+          "audioQualityLabel": "Dolby Atmos · MAT",
+          "positionSeconds": 0,
+          "durationSeconds": 0,
+          "groupMemberCount": 1
+        }
+        """.utf8)
+
+        let state = try JSONDecoder().decode(RelayClient.RelayPlaybackState.self, from: data)
+
+        XCTAssertEqual(state.soundbarNightMode, true)
+        XCTAssertEqual(state.soundbarSpeechEnhancementRawLevel, 3)
+    }
+
     func testHealthResponseDecodesUnknownHueAmbienceRenderModeAsNil() throws {
         let data = Data("""
         {

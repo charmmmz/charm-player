@@ -296,6 +296,25 @@ export class SonosBridge extends EventEmitter {
     await this.refreshSnapshot(coord);
   }
 
+  async setSoundbarNightMode(groupId: string, enabled: boolean): Promise<void> {
+    const coord = this.requireCoordinator(groupId);
+    await this.setEQLevel(coord, 'NightMode', enabled ? 1 : 0);
+    await this.refreshSnapshot(coord);
+  }
+
+  async setSoundbarSpeechEnhancementRawLevel(groupId: string, rawLevel: number): Promise<void> {
+    const coord = this.requireCoordinator(groupId);
+    const level = clampSpeechEnhancementLevel(rawLevel);
+    if (level === 0) {
+      await this.setOptionalEQLevel(coord, 'SpeechEnhanceEnabled', 0);
+      await this.setEQLevel(coord, 'DialogLevel', 0);
+    } else {
+      await this.setEQLevel(coord, 'DialogLevel', level);
+      await this.setOptionalEQLevel(coord, 'SpeechEnhanceEnabled', 1);
+    }
+    await this.refreshSnapshot(coord);
+  }
+
   private requireCoordinator(groupId: string): SonosDevice {
     const coord = this.resolveCoordinator(groupId);
     if (!coord) {
@@ -364,6 +383,8 @@ export class SonosBridge extends EventEmitter {
       if (localQuality?.label) {
         audioQualityLabel = localQuality.label;
       }
+      const soundbarEQ = await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw);
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
       // current song in r:streamContent while sonos-ts may cache that raw
@@ -467,6 +488,8 @@ export class SonosBridge extends EventEmitter {
         albumArtUri,
         isPlaying,
         playbackSourceRaw,
+        soundbarNightMode: soundbarEQ.soundbarNightMode,
+        soundbarSpeechEnhancementRawLevel: soundbarEQ.soundbarSpeechEnhancementRawLevel,
         audioQualityLabel,
         musicAmbienceEligible: isMusicAmbienceEligibleForSnapshot({
           trackTitle,
@@ -575,6 +598,56 @@ export class SonosBridge extends EventEmitter {
     );
   }
 
+  private async soundbarEQForSnapshot(
+    coordinator: unknown,
+    playbackSourceRaw: string | null,
+  ): Promise<Pick<SonosGroupSnapshot, 'soundbarNightMode' | 'soundbarSpeechEnhancementRawLevel'>> {
+    if (playbackSourceRaw !== 'tv') return {};
+
+    const [nightValue, speechEnabledValue, dialogValue] = await Promise.all([
+      this.getEQLevel(coordinator, 'NightMode'),
+      this.getEQLevel(coordinator, 'SpeechEnhanceEnabled'),
+      this.getEQLevel(coordinator, 'DialogLevel'),
+    ]);
+    const dialogLevel = clampSpeechEnhancementLevel(dialogValue ?? 0);
+    const speechEnabled = speechEnabledValue === null
+      ? dialogLevel > 0
+      : speechEnabledValue > 0;
+
+    return {
+      soundbarNightMode: nightValue === null ? undefined : nightValue > 0,
+      soundbarSpeechEnhancementRawLevel: speechEnabled && dialogLevel > 0 ? dialogLevel : 0,
+    };
+  }
+
+  private async getEQLevel(coordinator: unknown, eqType: string): Promise<number | null> {
+    const service = renderingControlService(coordinator);
+    if (!service || typeof service.GetEQ !== 'function') return null;
+    try {
+      const response = await service.GetEQ({ InstanceID: 0, EQType: eqType });
+      const value = Number(response?.CurrentValue);
+      return Number.isFinite(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async setEQLevel(coordinator: unknown, eqType: string, value: number): Promise<void> {
+    const service = renderingControlService(coordinator);
+    if (!service || typeof service.SetEQ !== 'function') {
+      throw new Error(`missing_rendering_control_service: ${eqType}`);
+    }
+    await service.SetEQ({ InstanceID: 0, EQType: eqType, DesiredValue: value });
+  }
+
+  private async setOptionalEQLevel(coordinator: unknown, eqType: string, value: number): Promise<void> {
+    try {
+      await this.setEQLevel(coordinator, eqType, value);
+    } catch (err) {
+      this.log.debug({ err, eqType }, 'optional soundbar EQ write failed');
+    }
+  }
+
   private async groupMemberCountForCoordinator(coordinator: any, groupId: string): Promise<number> {
     const parsedCount = await this.parsedZoneGroupMemberCountForCoordinator(coordinator, groupId);
     if (parsedCount !== null) {
@@ -660,6 +733,25 @@ function parseDuration(s: string): number {
   const parts = s.split(':').map(Number);
   if (parts.length !== 3 || parts.some(Number.isNaN)) return 0;
   return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!;
+}
+
+function clampSpeechEnhancementLevel(level: number): number {
+  if (!Number.isFinite(level)) return 0;
+  return Math.max(0, Math.min(4, Math.round(level)));
+}
+
+function renderingControlService(coordinator: unknown): {
+  GetEQ?: (input: { InstanceID: number; EQType: string }) => Promise<{ CurrentValue?: number | string }>;
+  SetEQ?: (input: { InstanceID: number; EQType: string; DesiredValue: number }) => Promise<unknown>;
+} | null {
+  if (!coordinator || typeof coordinator !== 'object') return null;
+  const service = (coordinator as { RenderingControlService?: unknown }).RenderingControlService;
+  if (!service || typeof service !== 'object') return null;
+  const candidate = service as {
+    GetEQ?: (input: { InstanceID: number; EQType: string }) => Promise<{ CurrentValue?: number | string }>;
+    SetEQ?: (input: { InstanceID: number; EQType: string; DesiredValue: number }) => Promise<unknown>;
+  };
+  return candidate;
 }
 
 export function albumArtUriFromMetadata(metadata: unknown): string | null {
