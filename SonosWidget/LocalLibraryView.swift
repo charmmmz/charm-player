@@ -1,4 +1,5 @@
 import MusicKit
+import Observation
 import SwiftUI
 
 struct LocalLibraryView: View {
@@ -14,9 +15,7 @@ struct LocalLibraryView: View {
     @State private var librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
     @State private var categoryDetailSearchText = ""
     @State private var categorySortSelections: [LocalLibraryCategory: LocalLibraryCategorySortOption] = [:]
-    @State private var pullRefreshDistance = 0.0
-    @State private var isPullRefreshActive = false
-    @State private var hasTriggeredPullRefresh = false
+    @State private var pullRefreshController = LocalLibraryPullRefreshController()
     @FocusState private var isCategorySearchFieldFocused: Bool
     @Namespace private var catalogCategorySelectionNamespace
     @Namespace private var librarySearchCategorySelectionNamespace
@@ -256,55 +255,16 @@ struct LocalLibraryView: View {
         .coordinateSpace(name: scrollCoordinateSpaceName)
         .scrollDismissesKeyboard(.immediately)
         .onPreferenceChange(LocalLibraryPullDistancePreferenceKey.self) { distance in
-            pullRefreshDistance = distance
-            if LocalLibraryPullRefreshPolicy.shouldResetGesture(pullDistance: distance) {
-                hasTriggeredPullRefresh = false
+            pullRefreshController.handle(
+                distance: distance,
+                isExternalRefreshActive: store.isLoading,
+                hasLoaded: store.hasLoaded
+            ) {
+                await store.refresh(source: .pullToRefresh)
             }
-            guard LocalLibraryPullRefreshPolicy.shouldTrigger(
-                pullDistance: distance,
-                isRefreshing: isPullRefreshActive || store.isLoading,
-                hasLoaded: store.hasLoaded,
-                hasTriggeredInCurrentPull: hasTriggeredPullRefresh
-            ) else {
-                return
-            }
-            triggerPullRefresh()
         }
         .overlay(alignment: .top) {
-            pullRefreshIndicator
-        }
-    }
-
-    private var pullRefreshIndicator: some View {
-        let opacity = LocalLibraryPullRefreshPolicy.indicatorOpacity(
-            pullDistance: pullRefreshDistance,
-            isRefreshing: isPullRefreshActive)
-
-        return ProgressView()
-            .progressViewStyle(.circular)
-            .controlSize(.regular)
-            .tint(.white.opacity(0.74))
-            .padding(10)
-            .background(.black.opacity(0.18), in: Circle())
-            .opacity(opacity)
-            .scaleEffect(0.86 + (0.14 * opacity))
-            .allowsHitTesting(false)
-            .animation(.easeOut(duration: 0.16), value: opacity)
-            .padding(.top, 8)
-    }
-
-    private func triggerPullRefresh() {
-        guard !isPullRefreshActive else { return }
-        isPullRefreshActive = true
-        hasTriggeredPullRefresh = true
-        Task {
-            await store.refresh(source: .pullToRefresh)
-            await MainActor.run {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isPullRefreshActive = false
-                    pullRefreshDistance = 0
-                }
-            }
+            LocalLibraryPullRefreshIndicator(controller: pullRefreshController)
         }
     }
 
@@ -2340,6 +2300,82 @@ private extension LocalMusicArtworkURL.ContentMode {
         case .fit: return .fit
         case .fill: return .fill
         }
+    }
+}
+
+@MainActor
+@Observable
+private final class LocalLibraryPullRefreshController {
+    private(set) var pullDistance = 0.0
+    private(set) var isRefreshing = false
+
+    @ObservationIgnored private var hasTriggeredInCurrentPull = false
+
+    var indicatorOpacity: Double {
+        LocalLibraryPullRefreshPolicy.indicatorOpacity(
+            pullDistance: pullDistance,
+            isRefreshing: isRefreshing)
+    }
+
+    func handle(
+        distance: Double,
+        isExternalRefreshActive: Bool,
+        hasLoaded: Bool,
+        onRefresh: @escaping @MainActor () async -> Void
+    ) {
+        if abs(distance - pullDistance) >= 1 || distance == 0 {
+            pullDistance = distance
+        }
+
+        if LocalLibraryPullRefreshPolicy.shouldResetGesture(pullDistance: distance) {
+            hasTriggeredInCurrentPull = false
+        }
+
+        guard LocalLibraryPullRefreshPolicy.shouldTrigger(
+            pullDistance: distance,
+            isRefreshing: isRefreshing || isExternalRefreshActive,
+            hasLoaded: hasLoaded,
+            hasTriggeredInCurrentPull: hasTriggeredInCurrentPull
+        ) else {
+            return
+        }
+
+        trigger(onRefresh: onRefresh)
+    }
+
+    private func trigger(onRefresh: @escaping @MainActor () async -> Void) {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        hasTriggeredInCurrentPull = true
+
+        Task { @MainActor [weak self] in
+            await onRefresh()
+            guard let self else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                isRefreshing = false
+                pullDistance = 0
+            }
+        }
+    }
+}
+
+private struct LocalLibraryPullRefreshIndicator: View {
+    let controller: LocalLibraryPullRefreshController
+
+    var body: some View {
+        let opacity = controller.indicatorOpacity
+
+        ProgressView()
+            .progressViewStyle(.circular)
+            .controlSize(.regular)
+            .tint(.white.opacity(0.74))
+            .padding(10)
+            .background(.black.opacity(0.18), in: Circle())
+            .opacity(opacity)
+            .scaleEffect(0.86 + (0.14 * opacity))
+            .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.16), value: opacity)
+            .padding(.top, 8)
     }
 }
 
