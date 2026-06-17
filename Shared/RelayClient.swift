@@ -176,6 +176,41 @@ enum RelayClient {
         return data
     }
 
+    // MARK: - Cached playback state
+
+    struct PlaybackStateResponse: Decodable, Sendable {
+        let ok: Bool
+        let source: String?
+        let state: RelayPlaybackState?
+    }
+
+    static func playbackStateURL(baseURL: URL, groupId: String) -> URL? {
+        let trimmedGroupId = groupId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedGroupId.isEmpty else { return nil }
+
+        let endpoint = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("playback-state")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "groupId", value: trimmedGroupId)
+        ]
+        return components.url
+    }
+
+    static func fetchPlaybackState(baseURL: URL, groupId: String) async throws -> RelayPlaybackState? {
+        guard let url = playbackStateURL(baseURL: baseURL, groupId: groupId) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 2.5)
+        request.httpMethod = "GET"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(PlaybackStateResponse.self, from: data).state
+    }
+
     // MARK: - Activity registration
 
     /// Sent in the JSON body of `POST /api/register-activity`.

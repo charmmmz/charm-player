@@ -93,6 +93,58 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(state.soundbarSpeechEnhancementRawLevel, 3)
     }
 
+    func testPlaybackStateURLUsesRelayBaseURLAndCoordinatorGroup() throws {
+        let url = try XCTUnwrap(
+            RelayClient.playbackStateURL(
+                baseURL: URL(string: "http://192.168.50.2:8787")!,
+                groupId: " 192.168.50.25 "
+            )
+        )
+
+        XCTAssertEqual(url.scheme, "http")
+        XCTAssertEqual(url.host, "192.168.50.2")
+        XCTAssertEqual(url.port, 8787)
+        XCTAssertEqual(url.path, "/api/playback-state")
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(
+            components.queryItems?.first(where: { $0.name == "groupId" })?.value,
+            "192.168.50.25"
+        )
+    }
+
+    func testPlaybackStateResponseDecodesCachedRelayState() throws {
+        let data = Data("""
+        {
+          "ok": true,
+          "source": "cached",
+          "state": {
+            "groupId": "192.168.50.25",
+            "speakerName": "Playroom",
+            "trackTitle": "Song A",
+            "artist": "Artist A",
+            "album": "Album A",
+            "albumArtUri": "http://192.168.50.25:1400/getaa?u=x",
+            "isPlaying": true,
+            "playbackSourceRaw": "appleMusic",
+            "audioQualityLabel": "Lossless",
+            "soundbarNightMode": null,
+            "soundbarSpeechEnhancementRawLevel": null,
+            "positionSeconds": 42,
+            "durationSeconds": 240,
+            "groupMemberCount": 2
+          }
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RelayClient.PlaybackStateResponse.self, from: data)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.source, "cached")
+        XCTAssertEqual(response.state?.trackTitle, "Song A")
+        XCTAssertEqual(response.state?.albumArtUri, "http://192.168.50.25:1400/getaa?u=x")
+        XCTAssertEqual(response.state?.groupMemberCount, 2)
+    }
+
     func testLiveActivityCommandRouteUsesRegisteredRelayTokenAndCoordinatorGroup() throws {
         let route = try XCTUnwrap(
             RelayClient.liveActivityCommandRoute(

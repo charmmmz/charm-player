@@ -17,6 +17,7 @@ import { Cs2GameStateService } from './cs2GameState.js';
 import { createCs2GameStateRouter } from './cs2Routes.js';
 import { Cs2LightingService } from './cs2Lighting.js';
 import { createArtworkRouter } from './artworkRoutes.js';
+import { createPlaybackStateRouter } from './playbackStateRoutes.js';
 import { shouldIgnoreHttpAutoLog } from './httpLogging.js';
 import {
   buildLiveActivityContentState,
@@ -222,6 +223,7 @@ async function main(): Promise<void> {
   );
 
   app.use('/internal', internalAuthMiddleware(log), createInternalSonosRouter(sonos, log));
+  app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createArtworkRouter(log.child({ module: 'artwork' })));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createCs2GameStateRouter(cs2GameState, log.child({ module: 'cs2' })));

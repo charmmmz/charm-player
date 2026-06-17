@@ -100,6 +100,13 @@ struct SonosProvider: TimelineProvider {
             return LiveEntryResult(entry: .unconfigured, trackInfo: nil)
         }
 
+        if let relayResult = await fetchRelayLiveEntry(
+            baseURLString: SharedStorage.relayURLString,
+            groupId: ip
+        ) {
+            return relayResult
+        }
+
         do {
             async let stateTask = SonosAPI.getTransportInfo(ip: ip)
             async let infoTask = SonosAPI.getPositionInfo(ip: ip)
@@ -179,6 +186,92 @@ struct SonosProvider: TimelineProvider {
         } catch {
             return LiveEntryResult(entry: cachedEntry(), trackInfo: nil)
         }
+    }
+
+    private func fetchRelayLiveEntry(baseURLString: String?, groupId: String) async -> LiveEntryResult? {
+        let trimmedURL = baseURLString?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let relayBaseURL = URL(string: trimmedURL) else { return nil }
+        guard let state = try? await RelayClient.fetchPlaybackState(
+            baseURL: relayBaseURL,
+            groupId: groupId
+        ) else {
+            return nil
+        }
+
+        let info = state.trackInfo
+        let cachedAlbumArtDataURL = SharedStorage.cachedAlbumArtDataURL
+        SharedStorage.cachedTrackTitle = info.title
+        SharedStorage.cachedArtist = info.artist
+        SharedStorage.cachedAlbum = info.album
+        SharedStorage.cachedAlbumArtURL = info.albumArtURL
+        SharedStorage.cachedPlaybackSource = info.source.rawValue
+        SharedStorage.cachedGroupMemberCount = state.groupMemberCount
+        let audioQualityLabel = state.audioQualityLabel
+            ?? info.audioQuality?.label
+            ?? info.tvFormat?.geekLabel
+            ?? SharedStorage.cachedAudioQualityLabel
+        SharedStorage.cachedAudioQualityLabel = audioQualityLabel
+
+        if Date() > SharedStorage.playStateLockUntil {
+            SharedStorage.isPlaying = state.isPlaying
+        }
+        let isPlaying = SharedStorage.isPlaying
+
+        var artData = AlbumArtSharedCacheRecoveryPolicy.reusableArtworkData(
+            currentURLString: info.albumArtURL,
+            cachedDataURLString: cachedAlbumArtDataURL,
+            cachedData: SharedStorage.albumArtData
+        )
+        if CachedArtworkFetchPolicy.shouldFetch(
+            incomingURLString: info.albumArtURL,
+            cachedURLString: cachedAlbumArtDataURL,
+            hasCachedData: artData != nil
+        ),
+           let urlStr = info.albumArtURL,
+           let url = URL(string: urlStr) {
+            var fetchedData = try? await RelayClient.fetchArtwork(
+                baseURL: relayBaseURL,
+                sourceURLString: urlStr
+            )
+            if fetchedData == nil {
+                fetchedData = await directArtworkData(from: url)
+            }
+            if let fetchedData {
+                artData = fetchedData
+                SharedStorage.albumArtData = fetchedData
+                SharedStorage.cachedAlbumArtDataURL = urlStr
+                if let uiImage = UIImage(data: fetchedData) {
+                    SharedStorage.cachedDominantColorHex = uiImage.dominantColorHex()
+                }
+            }
+        }
+
+        let isLiveStream = info.isLiveStream
+        SharedStorage.cachedIsLiveStream = isLiveStream
+        return LiveEntryResult(
+            entry: SonosEntry(date: .now,
+                              trackTitle: info.title,
+                              artist: info.artist,
+                              album: info.album,
+                              isPlaying: isPlaying,
+                              albumArtData: artData,
+                              isConfigured: true,
+                              speakerName: state.speakerName ?? SharedStorage.speakerName,
+                              groupMemberCount: state.groupMemberCount,
+                              playbackSource: info.source,
+                              dominantColorHex: SharedStorage.cachedDominantColorHex,
+                              audioQualityLabel: audioQualityLabel,
+                              isLiveStream: isLiveStream),
+            trackInfo: info)
+    }
+
+    private func directArtworkData(from url: URL) async -> Data? {
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "GET"
+        guard let (data, _) = try? await noProxySession.data(for: request) else {
+            return nil
+        }
+        return data
     }
 }
 
