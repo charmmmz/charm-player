@@ -45,4 +45,14 @@ final class RelayDiscoveryTests: XCTestCase {
 
         XCTAssertEqual(url.absoluteString, "http://IMPRESSIVE-NAS.local:8787")
     }
+
+    func testResolvedRelayURLsFallBackToBonjourHostname() {
+        let urls = RelayDiscovery.resolvedRelayURLs(
+            hostName: "IMPRESSIVE-NAS.",
+            addresses: [],
+            port: 8787
+        )
+
+        XCTAssertEqual(urls.map(\.absoluteString), ["http://IMPRESSIVE-NAS.local:8787"])
+    }
 }

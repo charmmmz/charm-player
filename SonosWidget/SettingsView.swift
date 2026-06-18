@@ -735,9 +735,13 @@ struct SettingsView: View {
         case .disabled:
             return "Leave the URL blank to search for a relay on this network."
         case .probing:
-            return relay.urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Searching for NAS Relay on the local network…"
-                : nil
+            if relay.urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let message = relay.relayDiscoveryMessage, !message.isEmpty {
+                    return "Searching for NAS Relay on the local network…\n\(message)"
+                }
+                return "Searching for NAS Relay on the local network…"
+            }
+            return nil
         case .connected:
             return [
                 relayActiveURLSummary,

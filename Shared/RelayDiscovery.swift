@@ -1,14 +1,16 @@
 import Foundation
-import Network
+import Darwin
 
 @MainActor
-final class RelayDiscovery {
+final class RelayDiscovery: NSObject {
     nonisolated static let bonjourType = "_charmrelay._tcp"
+    private nonisolated static let netServiceType = "_charmrelay._tcp."
 
     var onCandidate: ((URL) -> Void)?
+    var onEvent: ((String) -> Void)?
 
-    private var browser: NWBrowser?
-    private var connections: [NWConnection] = []
+    private var browser: NetServiceBrowser?
+    private var services: [NetService] = []
     private var seenURLs: Set<URL> = []
 
     nonisolated static func preferredRelayURL(
@@ -37,6 +39,30 @@ final class RelayDiscovery {
         return components.url
     }
 
+    nonisolated static func resolvedRelayURLs(
+        hostName: String?,
+        addresses: [Data],
+        port: Int
+    ) -> [URL] {
+        var urls: [URL] = []
+        var seen: Set<URL> = []
+
+        for host in addresses.compactMap(numericHost(from:)) {
+            guard let url = relayURL(host: host, port: port),
+                  seen.insert(url).inserted
+            else { continue }
+            urls.append(url)
+        }
+
+        if let hostName,
+           let url = relayURL(host: hostName, port: port),
+           seen.insert(url).inserted {
+            urls.append(url)
+        }
+
+        return urls
+    }
+
     private nonisolated static func normalizedBonjourHost(_ host: String) -> String {
         let hostWithoutScope = host.split(separator: "%", maxSplits: 1).first.map(String.init) ?? host
         let rootlessHost = hostWithoutScope.hasSuffix(".")
@@ -49,72 +75,115 @@ final class RelayDiscovery {
         return "\(rootlessHost).local"
     }
 
+    private nonisolated static func numericHost(from address: Data) -> String? {
+        address.withUnsafeBytes { rawBuffer -> String? in
+            guard let baseAddress = rawBuffer.baseAddress else { return nil }
+            let socketAddress = baseAddress.assumingMemoryBound(to: sockaddr.self)
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                socketAddress,
+                socklen_t(address.count),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            guard result == 0 else { return nil }
+            return String(cString: host)
+        }
+    }
+
     func start() {
-        guard browser == nil else { return }
+        guard browser == nil else {
+            record("bonjour search already running")
+            return
+        }
 
-        let browser = NWBrowser(
-            for: .bonjour(type: Self.bonjourType, domain: nil),
-            using: .tcp
-        )
+        let browser = NetServiceBrowser()
+        browser.delegate = self
         self.browser = browser
-
-        browser.browseResultsChangedHandler = { [weak self] _, changes in
-            guard let self else { return }
-            for change in changes {
-                if case .added(let result) = change {
-                    Task { @MainActor in
-                        self.resolve(result.endpoint)
-                    }
-                }
-            }
-        }
-
-        browser.stateUpdateHandler = { [weak self] state in
-            if case .failed = state {
-                Task { @MainActor [weak self] in self?.stop() }
-            }
-        }
-
-        browser.start(queue: .main)
+        record("starting bonjour search type=\(Self.netServiceType) domain=local.")
+        browser.searchForServices(ofType: Self.netServiceType, inDomain: "local.")
     }
 
     func stop() {
-        browser?.cancel()
+        record("stopping bonjour search services=\(services.count)")
+        browser?.stop()
+        browser?.delegate = nil
         browser = nil
-        for connection in connections {
-            connection.cancel()
+        for service in services {
+            service.stop()
+            service.delegate = nil
         }
-        connections.removeAll()
+        services.removeAll()
     }
 
-    private func resolve(_ endpoint: NWEndpoint) {
-        let connection = NWConnection(to: endpoint, using: .tcp)
-        connections.append(connection)
-
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            if case .ready = state {
-                Task { @MainActor [weak self, weak connection] in
-                    guard let self, let connection else { return }
-                    self.didResolve(connection)
-                    connection.cancel()
-                }
-            } else if case .failed = state {
-                connection?.cancel()
-            }
+    private func emitCandidate(_ url: URL) {
+        guard seenURLs.insert(url).inserted else {
+            record("duplicate candidate ignored url=\(url.absoluteString)")
+            return
         }
-
-        connection.start(queue: .main)
-    }
-
-    private func didResolve(_ connection: NWConnection) {
-        guard let endpoint = connection.currentPath?.remoteEndpoint,
-              case .hostPort(let host, let port) = endpoint
-        else { return }
-
-        guard let url = Self.relayURL(host: "\(host)", port: Int(port.rawValue)),
-              seenURLs.insert(url).inserted
-        else { return }
-
+        record("candidate url=\(url.absoluteString)")
         onCandidate?(url)
+    }
+
+    private func record(_ message: String) {
+        let line = "relay-discovery \(message)"
+        SonosLog.info(.relay, line)
+        onEvent?(message)
+    }
+}
+
+extension RelayDiscovery: NetServiceBrowserDelegate, NetServiceDelegate {
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        record("bonjour browser will search")
+    }
+
+    func netServiceBrowser(
+        _ browser: NetServiceBrowser,
+        didFind service: NetService,
+        moreComing: Bool
+    ) {
+        record(
+            "found service name='\(service.name)' type=\(service.type) " +
+            "domain=\(service.domain) moreComing=\(moreComing)"
+        )
+        service.delegate = self
+        services.append(service)
+        service.resolve(withTimeout: 5)
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        let urls = Self.resolvedRelayURLs(
+            hostName: sender.hostName,
+            addresses: sender.addresses ?? [],
+            port: sender.port
+        )
+        let addressHosts = (sender.addresses ?? []).compactMap(Self.numericHost(from:))
+        record(
+            "resolved service name='\(sender.name)' host=\(sender.hostName ?? "nil") " +
+            "port=\(sender.port) addresses=\(addressHosts.joined(separator: ",")) " +
+            "urls=\(urls.map(\.absoluteString).joined(separator: ","))"
+        )
+        for url in urls {
+            emitCandidate(url)
+        }
+    }
+
+    func netServiceBrowser(
+        _ browser: NetServiceBrowser,
+        didNotSearch errorDict: [String: NSNumber]
+    ) {
+        record("bonjour browser did not search error=\(errorDict)")
+        stop()
+    }
+
+    func netService(
+        _ sender: NetService,
+        didNotResolve errorDict: [String: NSNumber]
+    ) {
+        record("service did not resolve name='\(sender.name)' error=\(errorDict)")
+        sender.stop()
     }
 }

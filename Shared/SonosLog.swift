@@ -36,6 +36,7 @@ enum SonosLog {
         case sonosEvents    = "SonosEvents"
         case networkAudit   = "NetworkAudit"
         case playbackLink   = "PlaybackLink"
+        case relay          = "Relay"
     }
 
     /// Always logged. Use sparingly for unexpected failures worth reporting.
@@ -128,6 +129,7 @@ enum SonosLog {
         .playbackLink,
         .playback,
         .playlistDetail,
+        .relay,
         .station,
         .soap
     ]

@@ -53,6 +53,7 @@ final class RelayManager {
     private(set) var status: Status = .disabled
     private(set) var relaySonos: RelayClient.HealthResponse.Sonos?
     private(set) var relayAPNs: RelayClient.HealthResponse.APNs?
+    private(set) var relayDiscoveryMessage: String?
     private(set) var isHueAmbienceRelayConfigured = false
     private(set) var isHueAmbienceRelayEnabled = false
     private(set) var hueAmbienceRuntimeStatus: HueLiveEntertainmentRuntimeStatus = .unavailable
@@ -116,6 +117,9 @@ final class RelayManager {
                 await self?.handleDiscoveredRelay(url)
             }
         }
+        discovery.onEvent = { [weak self] message in
+            self?.relayDiscoveryMessage = message
+        }
     }
 
     // MARK: - Lifecycle
@@ -144,6 +148,7 @@ final class RelayManager {
     /// just overwrite `status` once a fresh result arrives).
     func probeNow() async {
         guard let url else {
+            SonosLog.info(.relay, "probe skipped: no relay URL yet; starting discovery")
             status = .probing
             startRelayDiscovery()
             return
@@ -153,9 +158,15 @@ final class RelayManager {
         let task = Task { [weak self] in
             guard let self else { return }
             self.status = .probing
+            SonosLog.info(.relay, "health probe start url=\(url.absoluteString)")
             do {
                 let health = try await RelayClient.health(baseURL: url)
                 guard !Task.isCancelled else { return }
+                SonosLog.info(
+                    .relay,
+                    "health probe success url=\(url.absoluteString) groups=\(health.groups.count) " +
+                    "apns=\(health.apns?.mode.rawValue ?? "nil")"
+                )
                 self.status = .connected(groupCount: health.groups.count)
                 self.relaySonos = health.sonos
                 self.relayAPNs = health.apns
@@ -166,6 +177,7 @@ final class RelayManager {
                 // Newer probe took over — its result is what matters.
             } catch {
                 guard !Task.isCancelled else { return }
+                SonosLog.error(.relay, "health probe failed url=\(url.absoluteString) error=\(error)")
                 self.status = .unreachable(reason: error.localizedDescription)
                 self.relaySonos = nil
                 self.relayAPNs = nil
@@ -202,11 +214,13 @@ final class RelayManager {
 
     private func startRelayDiscovery() {
         guard manualURL == nil else { return }
+        SonosLog.info(.relay, "start relay auto-discovery")
         discovery.start()
     }
 
     private func handleDiscoveredRelay(_ url: URL) async {
         guard manualURL == nil else { return }
+        SonosLog.info(.relay, "received relay candidate url=\(url.absoluteString)")
         discoveredURLString = url.absoluteString
         await probeNow()
     }
