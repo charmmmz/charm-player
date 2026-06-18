@@ -1,11 +1,13 @@
 import { Bonjour, type Service, type ServiceConfig } from 'bonjour-service';
+import { hostname } from 'node:os';
 import type { Logger } from 'pino';
 
-export function relayBonjourServiceConfig(port: number): ServiceConfig {
+export function relayBonjourServiceConfig(port: number, host = hostname()): ServiceConfig {
   return {
     name: 'Charm Sonos Relay',
     type: 'charmrelay',
     protocol: 'tcp',
+    host: localBonjourHost(host),
     port,
     txt: {
       path: '/api/health',
@@ -22,9 +24,10 @@ export function publishRelayBonjour(port: number, log: Logger): RelayBonjourAdve
   const bonjour = new Bonjour();
   let service: Service | null = null;
   try {
-    service = bonjour.publish(relayBonjourServiceConfig(port));
+    const config = relayBonjourServiceConfig(port);
+    service = bonjour.publish(config);
     log.info(
-      { service: '_charmrelay._tcp', port },
+      { service: '_charmrelay._tcp', host: config.host, port },
       'published relay Bonjour service',
     );
   } catch (err) {
@@ -43,3 +46,11 @@ export function publishRelayBonjour(port: number, log: Logger): RelayBonjourAdve
   };
 }
 
+function localBonjourHost(rawHost: string): string {
+  const trimmed = rawHost.trim();
+  const withoutRootDot = trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+  if (!withoutRootDot) return 'localhost.local';
+  if (withoutRootDot.endsWith('.local')) return withoutRootDot;
+  if (withoutRootDot.includes('.')) return withoutRootDot;
+  return `${withoutRootDot}.local`;
+}
