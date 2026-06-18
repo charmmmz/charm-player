@@ -5,18 +5,21 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
     private let sidMappingKey = "CloudLocalSidMapping"
     private let enabledServicesKey = "SearchEnabledServices"
     private let serviceCatalogKey = "musicServiceCatalogByLocalSid"
+    private let recentlyPlayedKey = "RecentlyPlayedItems"
 
     override func setUp() {
         super.setUp()
         UserDefaults.standard.removeObject(forKey: sidMappingKey)
         UserDefaults.standard.removeObject(forKey: enabledServicesKey)
         UserDefaults.standard.removeObject(forKey: serviceCatalogKey)
+        UserDefaults.standard.removeObject(forKey: recentlyPlayedKey)
     }
 
     override func tearDown() {
         UserDefaults.standard.removeObject(forKey: sidMappingKey)
         UserDefaults.standard.removeObject(forKey: enabledServicesKey)
         UserDefaults.standard.removeObject(forKey: serviceCatalogKey)
+        UserDefaults.standard.removeObject(forKey: recentlyPlayedKey)
         super.tearDown()
     }
 
@@ -187,6 +190,54 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
 
         XCTAssertTrue(item.includeAlbumArtInCloudMetadata)
         XCTAssertTrue(metadata.contains("<upnp:albumArtURI>https://example.com/playlist.jpg</upnp:albumArtURI>"))
+    }
+
+    func testLocalServicePlaylistRecentlyPlayedIsSkippedWithoutSonosTileArtwork() async {
+        let manager = SearchManager()
+        manager.localServicePlaylistArtworkLookupOverride = { _ in nil }
+        let item = BrowseItem(
+            id: "playlist:pl.abc123",
+            title: "Chill",
+            artist: "Apple Music for Charm",
+            album: "",
+            albumArtURL: "https://example.com/wide-library-artwork.jpg",
+            uri: "x-rincon-cpcontainer:1006206cplaylist%3apl.abc123?sid=204&flags=8300&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "PLAYLIST",
+            includeAlbumArtInCloudMetadata: false)
+
+        let didRecord = await manager.recordLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(item)
+
+        XCTAssertFalse(didRecord)
+        XCTAssertTrue(manager.recentlyPlayed.isEmpty)
+        XCTAssertTrue(SearchManager().recentlyPlayed.isEmpty)
+    }
+
+    func testLocalServicePlaylistRecentlyPlayedUsesSonosTileArtwork() async {
+        let manager = SearchManager()
+        manager.localServicePlaylistArtworkLookupOverride = { _ in
+            "https://example.com/sonos-tile1x1.jpg"
+        }
+        let item = BrowseItem(
+            id: "playlist:pl.abc123",
+            title: "Chill",
+            artist: "Apple Music for Charm",
+            album: "",
+            albumArtURL: "https://example.com/wide-library-artwork.jpg",
+            uri: "x-rincon-cpcontainer:1006206cplaylist%3apl.abc123?sid=204&flags=8300&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "PLAYLIST",
+            includeAlbumArtInCloudMetadata: false)
+
+        let didRecord = await manager.recordLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(item)
+
+        XCTAssertTrue(didRecord)
+        XCTAssertEqual(manager.recentlyPlayed.first?.id, "playlist:pl.abc123")
+        XCTAssertEqual(manager.recentlyPlayed.first?.albumArtURL, "https://example.com/sonos-tile1x1.jpg")
+        XCTAssertEqual(manager.recentlyPlayed.first?.includeAlbumArtInCloudMetadata, false)
+        XCTAssertEqual(SearchManager().recentlyPlayed.first?.albumArtURL, "https://example.com/sonos-tile1x1.jpg")
     }
 
     func testAppleMusicStationTransportUsesProgramMetadataShape() {

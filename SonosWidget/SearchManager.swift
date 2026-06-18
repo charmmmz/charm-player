@@ -191,6 +191,7 @@ final class SearchManager {
 
     private var speakerIP: String?
     private var searchTask: Task<Void, Never>?
+    @ObservationIgnored var localServicePlaylistArtworkLookupOverride: ((BrowseItem) async -> String?)?
     /// The query string that produced the most recent `searchResults` /
     /// `serviceDetailResults`. Readable from views so they can react when a
     /// new search commits (e.g. to re-fetch the selected service tab).
@@ -341,6 +342,97 @@ final class SearchManager {
               let items = try? JSONDecoder().decode([BrowseItem].self, from: data),
               !items.isEmpty else { return }
         recentlyPlayed = items
+    }
+
+    private func scheduleLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(_ item: BrowseItem) {
+        Task { [weak self] in
+            _ = await self?.recordLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(item)
+        }
+    }
+
+    @discardableResult
+    func recordLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(_ item: BrowseItem) async -> Bool {
+        guard item.cloudType == "PLAYLIST" else { return false }
+        let artworkURLString = await localServicePlaylistArtworkURLString(for: item)
+        return recordLocalServicePlaylistRecentlyPlayed(
+            item,
+            sonosArtworkURLString: artworkURLString)
+    }
+
+    @discardableResult
+    private func recordLocalServicePlaylistRecentlyPlayed(
+        _ item: BrowseItem,
+        sonosArtworkURLString: String?
+    ) -> Bool {
+        guard let artworkURLString = normalizedSonosPlaylistArtworkURLString(sonosArtworkURLString) else {
+            SonosLog.debug(
+                .search,
+                "LocalService playlist recently played skipped title='\(item.title)' reason=no-sonos-tile")
+            return false
+        }
+
+        var enrichedItem = item
+        enrichedItem.albumArtURL = artworkURLString
+        pushRecentlyPlayed(enrichedItem)
+        SonosLog.debug(
+            .search,
+            "LocalService playlist recently played recorded title='\(item.title)' " +
+                "artwork=\(SonosLog.playbackLinkValue(artworkURLString, maxLength: 240))")
+        return true
+    }
+
+    private func localServicePlaylistArtworkURLString(for item: BrowseItem) async -> String? {
+        if let localServicePlaylistArtworkLookupOverride {
+            return await localServicePlaylistArtworkLookupOverride(item)
+        }
+        return await sonosCloudPlaylistArtworkURLString(for: item)
+    }
+
+    private func sonosCloudPlaylistArtworkURLString(for item: BrowseItem) async -> String? {
+        guard let ids = parseCloudIds(from: item) else { return nil }
+        guard let token = await SonosAuth.shared.validAccessToken(),
+              let householdId = SonosAuth.shared.householdId else {
+            return nil
+        }
+
+        do {
+            let response = try await SonosCloudAPI.browsePlaylist(
+                token: token,
+                householdId: householdId,
+                serviceId: ids.cloudServiceId,
+                accountId: ids.accountId,
+                playlistId: ids.objectId,
+                count: 1)
+            return response.images?.tile1x1
+        } catch SonosCloudError.httpError(let code) where (500...599).contains(code) {
+            do {
+                let response = try await SonosCloudAPI.browseContainer(
+                    token: token,
+                    householdId: householdId,
+                    serviceId: ids.cloudServiceId,
+                    accountId: ids.accountId,
+                    containerId: ids.objectId,
+                    count: 1)
+                return response.images?.tile1x1
+            } catch {
+                SonosLog.debug(
+                    .search,
+                    "LocalService playlist Sonos artwork container fallback failed " +
+                        "title='\(item.title)' error=\(error)")
+                return nil
+            }
+        } catch {
+            SonosLog.debug(
+                .search,
+                "LocalService playlist Sonos artwork lookup failed title='\(item.title)' error=\(error)")
+            return nil
+        }
+    }
+
+    private func normalizedSonosPlaylistArtworkURLString(_ value: String?) -> String? {
+        ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            preserveExistingAppleArtworkSize: true)
     }
 
     func setServiceEnabled(serviceId: String, enabled: Bool) {
@@ -1209,6 +1301,14 @@ final class SearchManager {
                 artURL: playable.artworkURLString,
                 resMD: item.resMD,
                 manager: manager)
+        }
+
+        if playable.kind == .playlist {
+            scheduleLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(item)
+            return await playNowInternal(
+                item: item,
+                manager: manager,
+                recordRecentlyPlayed: false)
         }
 
         return await playNowInternal(item: item, manager: manager)
@@ -2514,11 +2614,14 @@ final class SearchManager {
     private func playNowInternal(
         item: BrowseItem,
         manager: SonosManager,
-        lockedTarget: SonosPlayer? = nil
+        lockedTarget: SonosPlayer? = nil,
+        recordRecentlyPlayed: Bool = true
     ) async -> Bool {
         // Push to recents before any await so a failed play still records
         // intent (mirrors Apple Music's "attempted plays" behaviour).
-        pushRecentlyPlayed(item)
+        if recordRecentlyPlayed {
+            pushRecentlyPlayed(item)
+        }
         let activeSpeaker = lockedTarget ?? manager.selectedSpeaker
         let activeBackend = manager.transportBackend
         let activeCloudGroupId = manager.currentCloudGroupId
