@@ -260,6 +260,15 @@ final class AlbumDetailPresentationTests: XCTestCase {
         )
     }
 
+    func testExpandableDescriptionStripsCommonHTMLMarkupForPlainText() {
+        XCTAssertEqual(
+            ExpandableDescriptionTextFormatter.plainText(
+                from: "<p><b>100 Best Albums</b> &amp; <strong>Essentials</strong></p><p>Line<br/>Next&nbsp;Part</p>"
+            ),
+            "100 Best Albums & Essentials\n\nLine\nNext Part"
+        )
+    }
+
     func testExpandableDescriptionSegmentsItalicMarkup() {
         XCTAssertEqual(
             ExpandableDescriptionTextFormatter.segments(
@@ -272,6 +281,23 @@ final class AlbumDetailPresentationTests: XCTestCase {
                 ExpandableDescriptionTextSegment(text: "ENOUGH", isItalic: true)
             ]
         )
+    }
+
+    func testExpandableDescriptionTruncatorAppliesBoldMarkup() {
+        let result = ExpandableDescriptionTruncator.collapsedText(
+            from: "A <b>bold</b> and <strong>strong</strong> note",
+            font: .systemFont(ofSize: 15),
+            textColor: .secondaryLabel,
+            moreColor: .label,
+            width: 0,
+            lineLimit: 2
+        )
+        let boldRange = (result.attributedText.string as NSString).range(of: "bold")
+        let strongRange = (result.attributedText.string as NSString).range(of: "strong")
+
+        XCTAssertEqual(result.attributedText.string, "A bold and strong note")
+        XCTAssertTrue(isBoldFont(in: result.attributedText, at: boldRange.location))
+        XCTAssertTrue(isBoldFont(in: result.attributedText, at: strongRange.location))
     }
 
     func testArtistTopSongsPreviewShowsAtMostFiveSongs() {
@@ -291,5 +317,13 @@ final class AlbumDetailPresentationTests: XCTestCase {
             return -1
         }
         return color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).cgColor.alpha
+    }
+
+    private func isBoldFont(in attributedText: NSAttributedString, at location: Int) -> Bool {
+        guard location >= 0, location < attributedText.length,
+              let font = attributedText.attribute(.font, at: location, effectiveRange: nil) as? UIFont else {
+            return false
+        }
+        return font.fontDescriptor.symbolicTraits.contains(.traitBold)
     }
 }

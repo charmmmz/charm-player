@@ -239,7 +239,7 @@ enum ExpandableDescriptionTruncator {
                 NSAttributedString(
                     string: segmentText,
                     attributes: [
-                        .font: segment.isItalic ? fontWithTraits(font, traits: .traitItalic) : font,
+                        .font: fontWithTraits(font, traits: segment.fontTraits),
                         .foregroundColor: textColor
                     ]
                 )
@@ -353,6 +353,28 @@ private struct ExpandableDescriptionWidthPreferenceKey: PreferenceKey {
 struct ExpandableDescriptionTextSegment: Equatable, Sendable {
     let text: String
     let isItalic: Bool
+    let isBold: Bool
+
+    init(text: String, isItalic: Bool = false, isBold: Bool = false) {
+        self.text = text
+        self.isItalic = isItalic
+        self.isBold = isBold
+    }
+
+    init(text: String, isItalic: Bool) {
+        self.init(text: text, isItalic: isItalic, isBold: false)
+    }
+
+    var fontTraits: UIFontDescriptor.SymbolicTraits {
+        var traits = UIFontDescriptor.SymbolicTraits()
+        if isItalic {
+            traits.insert(.traitItalic)
+        }
+        if isBold {
+            traits.insert(.traitBold)
+        }
+        return traits
+    }
 }
 
 enum ExpandableDescriptionTextFormatter {
@@ -364,8 +386,15 @@ enum ExpandableDescriptionTextFormatter {
         var result = AttributedString()
         for segment in segments(from: rawText) where !segment.text.isEmpty {
             var part = AttributedString(segment.text)
-            if segment.isItalic {
+            switch (segment.isItalic, segment.isBold) {
+            case (true, true):
+                part.inlinePresentationIntent = [.emphasized, .stronglyEmphasized]
+            case (true, false):
                 part.inlinePresentationIntent = .emphasized
+            case (false, true):
+                part.inlinePresentationIntent = .stronglyEmphasized
+            case (false, false):
+                break
             }
             result += part
         }
@@ -375,51 +404,205 @@ enum ExpandableDescriptionTextFormatter {
     static func segments(from rawText: String) -> [ExpandableDescriptionTextSegment] {
         var segments: [ExpandableDescriptionTextSegment] = []
         var buffer = ""
-        var isItalic = false
+        var italicDepth = 0
+        var boldDepth = 0
+        var pendingLineBreakCount = 0
         var index = rawText.startIndex
 
         func flush() {
             guard !buffer.isEmpty else { return }
             segments.append(
-                ExpandableDescriptionTextSegment(text: buffer, isItalic: isItalic)
+                ExpandableDescriptionTextSegment(
+                    text: decodeHTMLEntities(in: buffer),
+                    isItalic: italicDepth > 0,
+                    isBold: boldDepth > 0
+                )
             )
             buffer.removeAll(keepingCapacity: true)
         }
 
+        func appendPendingLineBreaksIfNeeded() {
+            guard pendingLineBreakCount > 0, !segments.isEmpty || !buffer.isEmpty else {
+                pendingLineBreakCount = 0
+                return
+            }
+            buffer.append(String(repeating: "\n", count: pendingLineBreakCount))
+            pendingLineBreakCount = 0
+        }
+
+        func appendText(_ text: String) {
+            appendPendingLineBreaksIfNeeded()
+            buffer.append(text)
+        }
+
+        func requestLineBreaks(_ count: Int) {
+            guard !segments.isEmpty || !buffer.isEmpty else { return }
+            if buffer.hasSuffix("\n") {
+                pendingLineBreakCount = max(pendingLineBreakCount, max(0, count - trailingLineBreakCount(in: buffer)))
+            } else {
+                pendingLineBreakCount = max(pendingLineBreakCount, count)
+            }
+        }
+
         while index < rawText.endIndex {
             if rawText[index] == "<",
-               let tagEnd = rawText[index...].firstIndex(of: ">") {
-                let tagBody = rawText[rawText.index(after: index)..<tagEnd]
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased()
+               let tagEnd = rawText[index...].firstIndex(of: ">"),
+               let tag = parsedTag(from: rawText[rawText.index(after: index)..<tagEnd]) {
+                if tag.name == "br" {
+                    appendText("\n")
+                    index = rawText.index(after: tagEnd)
+                    continue
+                }
 
-                switch tagBody {
-                case "i", "em":
+                switch tag.name {
+                case "i", "em", "cite":
                     flush()
-                    isItalic = true
+                    if tag.isClosing {
+                        italicDepth = max(0, italicDepth - 1)
+                    } else if !tag.isSelfClosing {
+                        italicDepth += 1
+                    }
                     index = rawText.index(after: tagEnd)
                     continue
-                case "/i", "/em":
+                case "b", "strong":
                     flush()
-                    isItalic = false
+                    if tag.isClosing {
+                        boldDepth = max(0, boldDepth - 1)
+                    } else if !tag.isSelfClosing {
+                        boldDepth += 1
+                    }
                     index = rawText.index(after: tagEnd)
                     continue
-                case "br", "br/":
-                    buffer.append("\n")
+                case "p", "div", "section", "article", "blockquote":
+                    requestLineBreaks(2)
+                    index = rawText.index(after: tagEnd)
+                    continue
+                case "ul", "ol", "li":
+                    requestLineBreaks(1)
+                    index = rawText.index(after: tagEnd)
+                    continue
+                case "a", "span", "font", "small", "sup", "sub", "u", "s", "strike", "del", "ins":
                     index = rawText.index(after: tagEnd)
                     continue
                 default:
-                    break
+                    index = rawText.index(after: tagEnd)
+                    continue
                 }
             }
 
-            buffer.append(rawText[index])
+            appendText(String(rawText[index]))
             index = rawText.index(after: index)
         }
 
         flush()
         return segments
     }
+
+    private static func parsedTag(from rawTagBody: Substring) -> ExpandableDescriptionHTMLTag? {
+        var body = rawTagBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        if body.hasPrefix("!--") {
+            return ExpandableDescriptionHTMLTag(name: "comment", isClosing: false, isSelfClosing: true)
+        }
+
+        let isClosing = body.hasPrefix("/")
+        if isClosing {
+            body.removeFirst()
+            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let isSelfClosing = body.hasSuffix("/")
+        if isSelfClosing {
+            body.removeLast()
+            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let name = body
+            .split(whereSeparator: { $0.isWhitespace })
+            .first
+            .map { String($0).lowercased() } ?? ""
+        guard let first = name.first, first.isLetter else { return nil }
+        return ExpandableDescriptionHTMLTag(name: name, isClosing: isClosing, isSelfClosing: isSelfClosing)
+    }
+
+    private static func trailingLineBreakCount(in text: String) -> Int {
+        var count = 0
+        var index = text.endIndex
+        while index > text.startIndex {
+            let previous = text.index(before: index)
+            guard text[previous] == "\n" else { break }
+            count += 1
+            index = previous
+        }
+        return count
+    }
+
+    private static func decodeHTMLEntities(in text: String) -> String {
+        var result = ""
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            guard text[index] == "&",
+                  let semicolon = text[index...].firstIndex(of: ";") else {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+
+            let entityStart = text.index(after: index)
+            let entity = String(text[entityStart..<semicolon])
+            guard entity.count <= 32, let decoded = decodedHTMLEntity(entity) else {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+
+            result.append(decoded)
+            index = text.index(after: semicolon)
+        }
+
+        return result
+    }
+
+    private static func decodedHTMLEntity(_ entity: String) -> String? {
+        if entity.hasPrefix("#x") || entity.hasPrefix("#X") {
+            return unicodeScalarString(from: entity.dropFirst(2), radix: 16)
+        }
+        if entity.hasPrefix("#") {
+            return unicodeScalarString(from: entity.dropFirst(), radix: 10)
+        }
+
+        switch entity.lowercased() {
+        case "amp": return "&"
+        case "lt": return "<"
+        case "gt": return ">"
+        case "quot": return "\""
+        case "apos": return "'"
+        case "nbsp": return " "
+        case "rsquo": return "\u{2019}"
+        case "lsquo": return "\u{2018}"
+        case "rdquo": return "\u{201D}"
+        case "ldquo": return "\u{201C}"
+        case "ndash": return "\u{2013}"
+        case "mdash": return "\u{2014}"
+        case "hellip": return "\u{2026}"
+        default: return nil
+        }
+    }
+
+    private static func unicodeScalarString<T: StringProtocol>(from value: T, radix: Int) -> String? {
+        guard let scalarValue = UInt32(value, radix: radix),
+              let scalar = UnicodeScalar(scalarValue) else {
+            return nil
+        }
+        return String(Character(scalar))
+    }
+}
+
+private struct ExpandableDescriptionHTMLTag {
+    let name: String
+    let isClosing: Bool
+    let isSelfClosing: Bool
 }
 
 /// The modal Apple-Music–style fullscreen reader presented when the user
