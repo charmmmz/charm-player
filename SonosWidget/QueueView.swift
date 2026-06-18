@@ -169,22 +169,27 @@ private struct QueueArtView: View {
     let manager: SonosManager
 
     var body: some View {
-        if let urlStr,
-           manager.cachedArtURLs.contains(urlStr),
-           let cached = manager.queueImage(for: urlStr) {
-            Image(uiImage: cached)
-                .resizable().aspectRatio(contentMode: .fill)
-        } else if let urlStr,
-                  let url = URL(string: urlStr),
-                  let cached = RemoteArtworkImageLoader.shared.cachedImage(for: url) {
-            Image(uiImage: cached)
-                .resizable().aspectRatio(contentMode: .fill)
-        } else if let urlStr, let url = URL(string: urlStr) {
-            RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+        Group {
+            if let urlStr,
+               manager.cachedArtURLs.contains(urlStr),
+               let cached = manager.queueImage(for: urlStr) {
+                Image(uiImage: cached)
+                    .resizable().aspectRatio(contentMode: .fill)
+            } else if let urlStr,
+                      let url = URL(string: urlStr),
+                      let cached = RemoteArtworkImageLoader.shared.cachedImage(for: url) {
+                Image(uiImage: cached)
+                    .resizable().aspectRatio(contentMode: .fill)
+            } else if let urlStr, let url = URL(string: urlStr) {
+                RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
+                    placeholder
+                }
+            } else {
                 placeholder
             }
-        } else {
-            placeholder
+        }
+        .task(id: artworkSourceLogKey) {
+            logArtworkSource()
         }
     }
 
@@ -195,5 +200,45 @@ private struct QueueArtView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+    }
+
+    private var artworkSourceLogKey: String {
+        "\(artworkSource.rawValue):\(urlStr ?? "nil")"
+    }
+
+    private var artworkSource: ArtworkSource {
+        guard let urlStr, !urlStr.isEmpty else { return .missingURL }
+        if manager.cachedArtURLs.contains(urlStr),
+           manager.queueImage(for: urlStr) != nil {
+            return .queueCache
+        }
+        guard let url = URL(string: urlStr) else { return .invalidURL }
+        if RemoteArtworkImageLoader.shared.cachedImage(for: url) != nil {
+            return .remoteMemoryCache
+        }
+        return .remoteLoad
+    }
+
+    private func logArtworkSource() {
+        let source = artworkSource
+        let key: String
+        if let urlStr, let url = URL(string: urlStr) {
+            key = RemoteArtworkImageCacheKey.normalized(url)
+        } else {
+            key = "nil"
+        }
+        SonosLog.debug(
+            .nowPlaying,
+            "Queue artwork view source=\(source.rawValue) " +
+                "key=\(SonosLog.playbackLinkValue(key, maxLength: 240)) " +
+                "url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+    }
+
+    private enum ArtworkSource: String {
+        case missingURL = "missing-url"
+        case invalidURL = "invalid-url"
+        case queueCache = "queue-cache"
+        case remoteMemoryCache = "remote-memory-cache"
+        case remoteLoad = "remote-load"
     }
 }

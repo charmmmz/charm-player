@@ -149,18 +149,39 @@ final class RemoteArtworkImageLoader {
     ) async {
         guard limit > 0, maxConcurrent > 0 else { return }
         var seen = Set<String>()
-        let candidates = urls.compactMap { url -> URL? in
-            let key = cacheKey(for: url) as String
-            guard seen.insert(key).inserted,
-                  memoryCache.object(forKey: key as NSString) == nil else {
-                return nil
-            }
-            return url
-        }.prefix(limit)
-        guard !candidates.isEmpty else { return }
+        var duplicateCount = 0
+        var memoryHitCount = 0
+        var limitedCount = 0
+        var ordered: [URL] = []
 
-        let ordered = Array(candidates)
-        await withTaskGroup(of: Void.self) { group in
+        for url in urls {
+            let key = cacheKey(for: url) as String
+            guard seen.insert(key).inserted else {
+                duplicateCount += 1
+                continue
+            }
+            guard memoryCache.object(forKey: key as NSString) == nil else {
+                memoryHitCount += 1
+                continue
+            }
+            guard ordered.count < limit else {
+                limitedCount += 1
+                continue
+            }
+            ordered.append(url)
+        }
+
+        SonosLog.debug(
+            .playbackLink,
+            "Remote artwork prefetch input=\(urls.count) scheduled=\(ordered.count) " +
+                "duplicate=\(duplicateCount) memoryHit=\(memoryHitCount) limited=\(limitedCount) " +
+                "limit=\(limit) maxConcurrent=\(maxConcurrent) " +
+                "first=\(SonosLog.playbackLinkValue(ordered.first?.absoluteString, maxLength: 240))")
+
+        guard !ordered.isEmpty else { return }
+
+        var successCount = 0
+        await withTaskGroup(of: Bool.self) { group in
             var index = 0
 
             func addNext() {
@@ -168,27 +189,50 @@ final class RemoteArtworkImageLoader {
                 let url = ordered[index]
                 index += 1
                 group.addTask { [weak self] in
-                    guard let self else { return }
-                    _ = try? await self.image(for: url)
+                    guard let self else { return false }
+                    do {
+                        _ = try await self.image(for: url)
+                        return true
+                    } catch {
+                        SonosLog.debug(
+                            .playbackLink,
+                            "Remote artwork prefetch failed key=\(SonosLog.playbackLinkValue(RemoteArtworkImageCacheKey.normalized(url), maxLength: 240)) error=\(error)")
+                        return false
+                    }
                 }
             }
 
             for _ in 0..<min(maxConcurrent, ordered.count) { addNext() }
-            for await _ in group { addNext() }
+            for await didLoad in group {
+                if didLoad { successCount += 1 }
+                addNext()
+            }
         }
+        SonosLog.debug(
+            .playbackLink,
+            "Remote artwork prefetch finished scheduled=\(ordered.count) success=\(successCount) failed=\(ordered.count - successCount)")
     }
 
     func image(for url: URL) async throws -> UIImage {
         let key = cacheKey(for: url)
         if let cached = memoryCache.object(forKey: key) {
+            SonosLog.debug(
+                .playbackLink,
+                "Remote artwork cache hit key=\(SonosLog.playbackLinkValue(key as String, maxLength: 240))")
             return cached
         }
         if let inFlight = inFlightLoads[key as String] {
+            SonosLog.debug(
+                .playbackLink,
+                "Remote artwork joined in-flight key=\(SonosLog.playbackLinkValue(key as String, maxLength: 240))")
             return try await inFlight.value.image
         }
 
         var request = URLRequest(url: url, timeoutInterval: 25)
         request.httpMethod = "GET"
+        SonosLog.debug(
+            .playbackLink,
+            "Remote artwork fetch start key=\(SonosLog.playbackLinkValue(key as String, maxLength: 240))")
 
         let task = Task<LoadResult, Error> { [fetch] in
             let (data, response) = try await fetch(request)
@@ -208,9 +252,15 @@ final class RemoteArtworkImageLoader {
             let result = try await task.value
             memoryCache.setObject(result.image, forKey: key, cost: result.cost)
             inFlightLoads[key as String] = nil
+            SonosLog.debug(
+                .playbackLink,
+                "Remote artwork fetch stored key=\(SonosLog.playbackLinkValue(key as String, maxLength: 240)) cost=\(result.cost)")
             return result.image
         } catch {
             inFlightLoads[key as String] = nil
+            SonosLog.debug(
+                .playbackLink,
+                "Remote artwork fetch failed key=\(SonosLog.playbackLinkValue(key as String, maxLength: 240)) error=\(error)")
             throw error
         }
     }

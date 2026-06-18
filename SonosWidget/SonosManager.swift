@@ -1042,11 +1042,17 @@ final class SonosManager {
             $0.title == trackInfo?.title && $0.artist == trackInfo?.artist
         }) ?? 0
         let reordered = Array(queue[nowIndex...]) + Array(queue[..<nowIndex])
+        let artworkURLs = reordered.compactMap { $0.albumArtURL }
 
         let ordered = QueueArtPrefetchPolicy.urlsToPrefetch(
-            from: reordered.compactMap { $0.albumArtURL },
+            from: artworkURLs,
             cachedURLs: cachedArtURLs
         )
+        SonosLog.debug(
+            .nowPlaying,
+            "Queue artwork prefetch plan queue=\(queue.count) urls=\(artworkURLs.count) " +
+                "scheduled=\(ordered.count) cachedKnown=\(cachedArtURLs.count) " +
+                "first=\(SonosLog.playbackLinkValue(ordered.first, maxLength: 240))")
         guard !ordered.isEmpty else { return }
 
         let diskCache = QueueArtDiskCache.shared
@@ -1073,17 +1079,41 @@ final class SonosManager {
     }
 
     private func fetchArtForURL(_ urlStr: String, diskCache: QueueArtDiskCache) async {
-        guard !cachedArtURLs.contains(urlStr) else { return }
+        guard !cachedArtURLs.contains(urlStr) else {
+            SonosLog.debug(
+                .nowPlaying,
+                "Queue artwork prefetch skip memory url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+            return
+        }
 
         // L2: disk cache.
         // L3: network. Always capture raw data so we can populate sibling disk slots.
         let imageData: Data
+        let source: String
         if let d = diskCache.data(for: urlStr) {
             imageData = d
+            source = "disk"
         } else {
-            guard let url = URL(string: urlStr),
-                  let downloaded = try? await Self.fetchAlbumArtData(from: url, originalURLString: urlStr) else { return }
+            guard let url = URL(string: urlStr) else {
+                SonosLog.debug(
+                    .nowPlaying,
+                    "Queue artwork prefetch invalid url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+                return
+            }
+            SonosLog.debug(
+                .nowPlaying,
+                "Queue artwork prefetch network start url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+            let downloaded: Data
+            do {
+                downloaded = try await Self.fetchAlbumArtData(from: url, originalURLString: urlStr)
+            } catch {
+                SonosLog.debug(
+                    .nowPlaying,
+                    "Queue artwork prefetch network failed url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240)) error=\(error)")
+                return
+            }
             imageData = downloaded
+            source = "network"
             diskCache.store(imageData, for: urlStr)
         }
         guard let image = UIImage(data: imageData) else { return }
@@ -1123,6 +1153,10 @@ final class SonosManager {
                 self.cachedArtURLs.insert(sibling)
             }
         }
+        SonosLog.debug(
+            .nowPlaying,
+            "Queue artwork prefetch stored source=\(source) siblings=\(siblings.count) " +
+                "url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
     }
 
     func deleteFromQueue(item: QueueItem) async {
