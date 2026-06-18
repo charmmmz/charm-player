@@ -294,6 +294,90 @@ enum RelayClient {
         return try JSONDecoder().decode(PlaybackStateResponse.self, from: data).state
     }
 
+    // MARK: - Artwork hints
+
+    struct ArtworkHintsBody: Encodable, Sendable {
+        let hints: [ArtworkHint]
+
+        init(hints: [ArtworkHint]) {
+            self.hints = hints
+        }
+
+        init(items: [BrowseItem], limit: Int = 100) {
+            self.hints = Array(items.compactMap(ArtworkHint.init(item:)).prefix(max(0, limit)))
+        }
+    }
+
+    struct ArtworkHint: Encodable, Sendable {
+        let id: String
+        let uri: String?
+        let title: String
+        let artist: String
+        let album: String
+        let cloudType: String?
+        let artworkUrl: String
+
+        init?(
+            id: String,
+            uri: String?,
+            title: String,
+            artist: String,
+            album: String,
+            cloudType: String?,
+            artworkUrl: String?
+        ) {
+            let normalizedArtworkURL = ArtworkURLNormalizer.loadableURLString(
+                from: artworkUrl,
+                preserveExistingAppleArtworkSize: true
+            )
+            guard let normalizedArtworkURL,
+                  !Self.isLocalSonosArtworkURL(normalizedArtworkURL) else {
+                return nil
+            }
+
+            self.id = id
+            self.uri = uri
+            self.title = title
+            self.artist = artist
+            self.album = album
+            self.cloudType = cloudType
+            self.artworkUrl = normalizedArtworkURL
+        }
+
+        init?(item: BrowseItem) {
+            self.init(
+                id: item.id,
+                uri: item.uri,
+                title: item.title,
+                artist: item.artist,
+                album: item.album,
+                cloudType: item.cloudType,
+                artworkUrl: item.thumbnailArtworkURL ?? item.preferredDetailArtworkURL
+            )
+        }
+
+        private static func isLocalSonosArtworkURL(_ value: String) -> Bool {
+            guard let url = URL(string: value),
+                  url.scheme?.lowercased() == "http",
+                  url.port == 1400 else {
+                return false
+            }
+            return url.path.lowercased().contains("getaa")
+        }
+    }
+
+    static func postArtworkHints(baseURL: URL, body: ArtworkHintsBody) async throws {
+        guard !body.hints.isEmpty else { return }
+
+        let url = baseURL.appendingPathComponent("/api/artwork-hints")
+        var request = URLRequest(url: url, timeoutInterval: 3)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await noProxySession.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Activity registration
 
     /// Sent in the JSON body of `POST /api/register-activity`.

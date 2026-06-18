@@ -364,6 +364,21 @@ final class RelayManager {
             : "CS2 sync is disabled."
     }
 
+    func submitArtworkHints(_ items: [BrowseItem]) {
+        guard isAvailable, let url else { return }
+        let body = RelayClient.ArtworkHintsBody(items: items)
+        guard !body.hints.isEmpty else { return }
+
+        Task {
+            do {
+                try await RelayClient.postArtworkHints(baseURL: url, body: body)
+                SonosLog.debug(.relay, "artwork hints posted count=\(body.hints.count)")
+            } catch {
+                SonosLog.debug(.relay, "artwork hints post failed count=\(body.hints.count) error=\(error)")
+            }
+        }
+    }
+
 }
 
 extension RelayManager: HueAmbienceRelayRuntimeProviding {}

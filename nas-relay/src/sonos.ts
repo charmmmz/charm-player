@@ -2,6 +2,7 @@ import { SonosEvents, SonosManager, type SonosDevice } from '@svrooij/sonos';
 import { EventEmitter } from 'node:events';
 import https from 'node:https';
 import type { Logger } from 'pino';
+import type { ArtworkHintStore } from './artworkHints.js';
 import type { SonosGroupSnapshot } from './types.js';
 
 export type SonosSnapshotChangeTrigger =
@@ -38,6 +39,7 @@ export interface SonosLocalControlClient {
 
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
+  artworkHints?: ArtworkHintStore | null;
   transitionSettleRefreshMs?: number;
   eventRefreshDebounceMs?: number;
 }
@@ -199,6 +201,7 @@ export class SonosBridge extends EventEmitter {
   private readonly localQualityLogSignatures = new Map<string, string>();
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
+  private readonly artworkHints: ArtworkHintStore | null;
   private readonly transitionSettleRefreshMs: number;
   private readonly eventRefreshDebounceMs: number;
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
@@ -216,6 +219,7 @@ export class SonosBridge extends EventEmitter {
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
+    this.artworkHints = options.artworkHints ?? null;
     this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
     this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
   }
@@ -542,6 +546,28 @@ export class SonosBridge extends EventEmitter {
         artist = previousSnapshot.artist;
         album = previousSnapshot.album;
         albumArtUri = previousSnapshot.albumArtUri ?? albumArtUri;
+      }
+      const hintedAlbumArtUri = this.artworkHints?.resolve({
+        title: trackTitle,
+        artist,
+        album,
+        objectIds: [trackUri],
+        currentArtworkUrl: albumArtUri,
+      }) ?? null;
+      if (hintedAlbumArtUri) {
+        this.log.debug(
+          {
+            groupId: resolvedGroupId,
+            trigger,
+            title: trackTitle,
+            artist,
+            album,
+            previousAlbumArtUri: summarizeAlbumArtUri(albumArtUri),
+            hintedAlbumArtUri: summarizeAlbumArtUri(hintedAlbumArtUri),
+          },
+          'snapshot album art hint applied',
+        );
+        albumArtUri = hintedAlbumArtUri;
       }
       if (liveStream) {
         this.log.info(
@@ -1446,6 +1472,12 @@ function isGenericLiveFallback(value: string | null | undefined): boolean {
 function summarizeTrackUri(trackUri: string): string {
   if (trackUri.length <= 96) return trackUri;
   return `${trackUri.slice(0, 80)}…${trackUri.slice(-12)}`;
+}
+
+function summarizeAlbumArtUri(albumArtUri: string | null | undefined): string | null {
+  if (!albumArtUri) return null;
+  if (albumArtUri.length <= 120) return albumArtUri;
+  return `${albumArtUri.slice(0, 96)}…${albumArtUri.slice(-16)}`;
 }
 
 function isInvisibleDevice(device: Record<string, unknown>): boolean {

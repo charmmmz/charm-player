@@ -17,6 +17,7 @@ import { Cs2GameStateService } from './cs2GameState.js';
 import { createCs2GameStateRouter } from './cs2Routes.js';
 import { Cs2LightingService } from './cs2Lighting.js';
 import { createArtworkRouter } from './artworkRoutes.js';
+import { ArtworkHintStore, createArtworkHintsRouter } from './artworkHints.js';
 import { createPlaybackStateRouter } from './playbackStateRoutes.js';
 import { shouldIgnoreHttpAutoLog } from './httpLogging.js';
 import {
@@ -84,7 +85,8 @@ async function main(): Promise<void> {
     log,
   );
 
-  const sonos = new SonosBridge(log);
+  const artworkHints = new ArtworkHintStore();
+  const sonos = new SonosBridge(log, { artworkHints });
   await sonos.start(SEED_IP);
   const liveActivityPreferences = new LiveActivityPreferenceStore();
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
@@ -223,6 +225,7 @@ async function main(): Promise<void> {
   app.use('/internal', internalAuthMiddleware(log), createInternalSonosRouter(sonos, log));
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createArtworkRouter(log.child({ module: 'artwork' })));
+  app.use('/api', createArtworkHintsRouter(artworkHints, log.child({ module: 'artwork-hints' })));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createCs2GameStateRouter(cs2GameState, log.child({ module: 'cs2' })));
 

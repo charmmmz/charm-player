@@ -439,9 +439,18 @@ final class SearchManager {
 
     func prewarmPlaybackArtwork(items: [BrowseItem]) async {
         PlaybackArtworkRegistry.shared.register(items: items)
+        submitArtworkHintsToRelay(items)
         await prewarmPlaybackArtwork(
             urls: PlaybackArtworkPrewarmPolicy.urls(from: items)
         )
+    }
+
+    private func submitArtworkHintsToRelay(_ items: [BrowseItem]) {
+        guard !items.isEmpty else { return }
+        let itemSnapshot = items
+        Task { @MainActor in
+            RelayManager.shared.submitArtworkHints(itemSnapshot)
+        }
     }
 
     private func schedulePlaybackArtworkPrewarm(
@@ -526,6 +535,7 @@ final class SearchManager {
                     fallbackAccountId: ids.accountId)
             }
             PlaybackArtworkRegistry.shared.register(items: trackItems)
+            submitArtworkHintsToRelay(trackItems)
             let urls = PlaybackArtworkPrewarmPolicy.urls(
                 from: trackItems,
                 limit: PlaybackArtworkPrewarmPolicy.defaultLimit)

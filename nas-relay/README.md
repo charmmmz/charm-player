@@ -121,6 +121,7 @@ requires for Live Activity pushes.
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
 | GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
 | GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
+| POST   | `/api/artwork-hints`                  | `{ hints: [{ title, artist, album, artworkUrl, ... }] }`        | Stores app-known CDN artwork hints for relay snapshots   |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
 | DELETE | `/api/register-activity/:token`       | path: `:token`                                                  | Called by iOS when the Live Activity ends                |
 | GET    | `/api/hue-ambience/status`            | —                                                               | Hue runtime status without exposing the Hue app key      |
