@@ -714,7 +714,12 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
     var title: String
     var artist: String
     var album: String
+    /// Legacy/card artwork URL. Existing persistence, widgets, and compact
+    /// browse surfaces treat this as the thumbnail artwork.
     var albumArtURL: String?
+    /// Higher-quality artwork URL for detail surfaces. When absent, detail
+    /// views fall back to `albumArtURL` so old persisted data remains usable.
+    var detailArtworkURL: String?
     var uri: String?
     var metaXML: String?
     /// Track duration in seconds when known. Search-result based items use this
@@ -740,6 +745,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         case artist
         case album
         case albumArtURL
+        case detailArtworkURL
         case uri
         case metaXML
         case duration
@@ -757,6 +763,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         artist: String,
         album: String,
         albumArtURL: String? = nil,
+        detailArtworkURL: String? = nil,
         uri: String? = nil,
         metaXML: String? = nil,
         duration: TimeInterval = 0,
@@ -772,6 +779,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         self.artist = artist
         self.album = album
         self.albumArtURL = albumArtURL
+        self.detailArtworkURL = detailArtworkURL
         self.uri = uri
         self.metaXML = metaXML
         self.duration = duration
@@ -790,6 +798,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         artist = try container.decode(String.self, forKey: .artist)
         album = try container.decode(String.self, forKey: .album)
         albumArtURL = try container.decodeIfPresent(String.self, forKey: .albumArtURL)
+        detailArtworkURL = try container.decodeIfPresent(String.self, forKey: .detailArtworkURL)
         uri = try container.decodeIfPresent(String.self, forKey: .uri)
         metaXML = try container.decodeIfPresent(String.self, forKey: .metaXML)
         duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
@@ -802,6 +811,19 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
             forKey: .includeAlbumArtInCloudMetadata
         ) ?? true
         cloudFavoriteId = try container.decodeIfPresent(String.self, forKey: .cloudFavoriteId)
+    }
+
+    var thumbnailArtworkURL: String? {
+        Self.nonEmptyArtworkURL(albumArtURL) ?? Self.nonEmptyArtworkURL(detailArtworkURL)
+    }
+
+    var preferredDetailArtworkURL: String? {
+        Self.nonEmptyArtworkURL(detailArtworkURL) ?? Self.nonEmptyArtworkURL(albumArtURL)
+    }
+
+    private static func nonEmptyArtworkURL(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     var isArtist: Bool {

@@ -236,8 +236,10 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
         XCTAssertTrue(didRecord)
         XCTAssertEqual(manager.recentlyPlayed.first?.id, "playlist:pl.abc123")
         XCTAssertEqual(manager.recentlyPlayed.first?.albumArtURL, "https://example.com/sonos-tile1x1.jpg")
+        XCTAssertEqual(manager.recentlyPlayed.first?.detailArtworkURL, "https://example.com/sonos-tile1x1.jpg")
         XCTAssertEqual(manager.recentlyPlayed.first?.includeAlbumArtInCloudMetadata, false)
         XCTAssertEqual(SearchManager().recentlyPlayed.first?.albumArtURL, "https://example.com/sonos-tile1x1.jpg")
+        XCTAssertEqual(SearchManager().recentlyPlayed.first?.detailArtworkURL, "https://example.com/sonos-tile1x1.jpg")
     }
 
     func testAppleMusicStationTransportUsesProgramMetadataShape() {

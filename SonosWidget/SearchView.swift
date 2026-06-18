@@ -499,7 +499,7 @@ struct SearchView: View {
         _ item: BrowseItem,
         category: BrowseItem.FavoriteCategory?
     ) -> some View {
-        if let urlString = item.albumArtURL,
+        if let urlString = item.thumbnailArtworkURL,
            let url = URL(string: urlString) {
             RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
                 browseCardArtworkPlaceholder(item, category: category)
@@ -533,7 +533,7 @@ struct SearchView: View {
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         var nav = searchManager.makeAlbumItem(
             objectId: ids.objectId, title: item.title, artist: item.artist,
-            artURL: item.albumArtURL,
+            artURL: item.preferredDetailArtworkURL,
             cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
             preserveArtworkSize: true)
         // Preserve the Sonos browse URI as a safety net (it's known to work for
@@ -555,7 +555,7 @@ struct SearchView: View {
             return nil
         }
         return searchManager.makeArtistItem(
-            objectId: ids.objectId, name: item.title, artURL: item.albumArtURL,
+            objectId: ids.objectId, name: item.title, artURL: item.preferredDetailArtworkURL,
             cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
             preserveArtworkSize: true)
     }
@@ -582,6 +582,7 @@ struct SearchView: View {
             return BrowseItem(
                 id: ids.objectId, title: item.title, artist: item.artist,
                 album: "", albumArtURL: item.albumArtURL,
+                detailArtworkURL: item.detailArtworkURL,
                 uri: item.uri, isContainer: true,
                 serviceId: searchManager.localSid(forCloudServiceId: ids.cloudServiceId),
                 cloudType: "COLLECTION")
@@ -593,6 +594,7 @@ struct SearchView: View {
                 return BrowseItem(
                     id: objectId, title: item.title, artist: item.artist,
                     album: "", albumArtURL: item.albumArtURL,
+                    detailArtworkURL: item.detailArtworkURL,
                     uri: item.uri, isContainer: true,
                     serviceId: item.serviceId,
                     cloudType: "COLLECTION")
@@ -612,6 +614,8 @@ struct SearchView: View {
             "itemCloudType='\(item.cloudType ?? "nil")' navCloudType='\(nav.cloudType ?? "nil")' " +
             "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
             "navArt=\(SonosLog.playbackLinkValue(nav.albumArtURL, maxLength: 640)) " +
+            "itemDetail=\(SonosLog.playbackLinkValue(item.detailArtworkURL, maxLength: 640)) " +
+            "navDetail=\(SonosLog.playbackLinkValue(nav.detailArtworkURL, maxLength: 640)) " +
             "itemURI=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640)) " +
             "navURI=\(SonosLog.playbackLinkValue(nav.uri, maxLength: 640))")
     }
@@ -692,7 +696,7 @@ struct SearchView: View {
     private func browseRowLabel(_ item: BrowseItem, isLoading: Bool, isDisabled: Bool) -> some View {
         HStack(spacing: 12) {
             ZStack {
-                AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
+                AsyncImage(url: URL(string: item.thumbnailArtworkURL ?? "")) { phase in
                     if let img = phase.image {
                         img.resizable().aspectRatio(contentMode: .fill)
                     } else {
@@ -997,7 +1001,7 @@ struct SearchView: View {
                                          manager: manager)
                     } label: {
                         VStack(spacing: 8) {
-                            AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
+                            AsyncImage(url: URL(string: item.thumbnailArtworkURL ?? "")) { phase in
                                 if let img = phase.image {
                                     img.resizable().aspectRatio(contentMode: .fill)
                                 } else {
@@ -1042,7 +1046,7 @@ struct SearchView: View {
                 } label: {
                     HStack(spacing: 12) {
                         ZStack {
-                            AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
+                            AsyncImage(url: URL(string: item.thumbnailArtworkURL ?? "")) { phase in
                                 if let img = phase.image {
                                     img.resizable().aspectRatio(contentMode: .fill)
                                 } else {
@@ -1190,7 +1194,7 @@ struct SearchView: View {
 
     private func albumScrollCard(_ item: BrowseItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: URL(string: item.albumArtURL ?? "")) { phase in
+            AsyncImage(url: URL(string: item.thumbnailArtworkURL ?? "")) { phase in
                 if let img = phase.image {
                     img.resizable().aspectRatio(contentMode: .fill)
                 } else {
@@ -1515,7 +1519,7 @@ struct FavoriteCategoryDetailView: View {
         return VStack(alignment: hAlign, spacing: 0) {
             FavoriteCoverImageView(
                 itemId: item.id,
-                imageURLString: item.albumArtURL,
+                imageURLString: item.thumbnailArtworkURL,
                 placeholderIcon: placeholderIcon(for: item)
             )
             .frame(width: 140, height: 140)
@@ -1548,7 +1552,7 @@ struct FavoriteCategoryDetailView: View {
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         var nav = searchManager.makeAlbumItem(
             objectId: ids.objectId, title: item.title, artist: item.artist,
-            artURL: item.albumArtURL,
+            artURL: item.preferredDetailArtworkURL,
             cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
             preserveArtworkSize: true)
         if let original = item.uri { nav.uri = original }
@@ -1564,7 +1568,7 @@ struct FavoriteCategoryDetailView: View {
         }
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         return searchManager.makeArtistItem(
-            objectId: ids.objectId, name: item.title, artURL: item.albumArtURL,
+            objectId: ids.objectId, name: item.title, artURL: item.preferredDetailArtworkURL,
             cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
             preserveArtworkSize: true)
     }
@@ -1588,6 +1592,7 @@ struct FavoriteCategoryDetailView: View {
             return BrowseItem(
                 id: ids.objectId, title: item.title, artist: item.artist,
                 album: "", albumArtURL: item.albumArtURL,
+                detailArtworkURL: item.detailArtworkURL,
                 uri: item.uri, isContainer: true,
                 serviceId: searchManager.localSid(forCloudServiceId: ids.cloudServiceId),
                 cloudType: "COLLECTION")
@@ -1599,6 +1604,7 @@ struct FavoriteCategoryDetailView: View {
                 return BrowseItem(
                     id: objectId, title: item.title, artist: item.artist,
                     album: "", albumArtURL: item.albumArtURL,
+                    detailArtworkURL: item.detailArtworkURL,
                     uri: item.uri, isContainer: true,
                     serviceId: item.serviceId,
                     cloudType: "COLLECTION")
@@ -1618,6 +1624,8 @@ struct FavoriteCategoryDetailView: View {
             "itemCloudType='\(item.cloudType ?? "nil")' navCloudType='\(nav.cloudType ?? "nil")' " +
             "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
             "navArt=\(SonosLog.playbackLinkValue(nav.albumArtURL, maxLength: 640)) " +
+            "itemDetail=\(SonosLog.playbackLinkValue(item.detailArtworkURL, maxLength: 640)) " +
+            "navDetail=\(SonosLog.playbackLinkValue(nav.detailArtworkURL, maxLength: 640)) " +
             "itemURI=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640)) " +
             "navURI=\(SonosLog.playbackLinkValue(nav.uri, maxLength: 640))")
     }

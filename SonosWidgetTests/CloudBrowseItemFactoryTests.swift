@@ -58,7 +58,7 @@ final class CloudBrowseItemFactoryTests: XCTestCase {
         )
     }
 
-    func testAlbumItemPreservesExistingArtworkSizeWhenRequested() {
+    func testAlbumItemStoresThumbnailAndDetailArtworkWhenRequested() {
         let artworkURL = "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/1200x1200bb.jpg"
 
         let item = makeFactory().albumItem(
@@ -71,7 +71,13 @@ final class CloudBrowseItemFactoryTests: XCTestCase {
             preserveArtworkSize: true
         )
 
-        XCTAssertEqual(item.albumArtURL, artworkURL)
+        XCTAssertEqual(
+            item.albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/400x400bb.jpg"
+        )
+        XCTAssertEqual(item.detailArtworkURL, artworkURL)
+        XCTAssertEqual(item.thumbnailArtworkURL, item.albumArtURL)
+        XCTAssertEqual(item.preferredDetailArtworkURL, artworkURL)
     }
 
     func testAlbumItemNormalizesArtworkByDefault() {
@@ -88,6 +94,7 @@ final class CloudBrowseItemFactoryTests: XCTestCase {
             item.albumArtURL,
             "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/400x400bb.jpg"
         )
+        XCTAssertNil(item.detailArtworkURL)
     }
 
     func testCloudFavoriteItemInfersTypeAndNormalizesArtwork() throws {

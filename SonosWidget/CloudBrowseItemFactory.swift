@@ -167,7 +167,8 @@ struct CloudBrowseItemFactory: Sendable {
             title: title,
             artist: artist,
             album: album,
-            albumArtURL: normalizedArtworkURLString(
+            albumArtURL: normalizedArtworkURLString(artURL),
+            detailArtworkURL: detailArtworkURLString(
                 artURL,
                 preserveExistingSize: preserveArtworkSize
             ),
@@ -290,6 +291,10 @@ struct CloudBrowseItemFactory: Sendable {
             artist: artistName,
             album: albumName,
             albumArtURL: normalizedArtworkURLString(artURL),
+            detailArtworkURL: detailArtworkURLString(
+                artURL,
+                preserveExistingSize: true
+            ),
             uri: playableURI(
                 objectId: objectId,
                 serviceId: serviceId,
@@ -340,6 +345,10 @@ struct CloudBrowseItemFactory: Sendable {
                 artist: artist,
                 album: album,
                 albumArtURL: normalizedArtworkURLString(artURL),
+                detailArtworkURL: detailArtworkURLString(
+                    artURL,
+                    preserveExistingSize: true
+                ),
                 duration: duration,
                 isContainer: false,
                 serviceId: resolvedCloudServiceId.flatMap { cloudToLocalSid[$0] },
@@ -376,6 +385,10 @@ struct CloudBrowseItemFactory: Sendable {
             artist: Self.firstNonEmpty([item.subtitle]) ?? "",
             album: "",
             albumArtURL: normalizedArtworkURLString(item.images?.tile1x1),
+            detailArtworkURL: detailArtworkURLString(
+                item.images?.tile1x1,
+                preserveExistingSize: true
+            ),
             uri: playableURI(
                 objectId: objectId,
                 serviceId: cloudServiceId,
@@ -397,6 +410,10 @@ struct CloudBrowseItemFactory: Sendable {
             artist: favorite.description ?? "",
             album: "",
             albumArtURL: normalizedArtworkURLString(favorite.imageUrl),
+            detailArtworkURL: detailArtworkURLString(
+                favorite.imageUrl,
+                preserveExistingSize: true
+            ),
             uri: nil,
             metaXML: nil,
             resMD: nil,
@@ -417,6 +434,17 @@ struct CloudBrowseItemFactory: Sendable {
             from: value,
             shortSidePixels: preserveExistingSize ? nil : 400,
             preserveExistingAppleArtworkSize: preserveExistingSize
+        )
+    }
+
+    func detailArtworkURLString(
+        _ value: String?,
+        preserveExistingSize: Bool
+    ) -> String? {
+        guard preserveExistingSize else { return nil }
+        return ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            preserveExistingAppleArtworkSize: true
         )
     }
 

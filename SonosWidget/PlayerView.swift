@@ -1736,6 +1736,7 @@ struct NowPlayingOverlay: View {
             "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
             "cloudType='\(item.cloudType ?? "nil")' serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
             "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
+            "itemDetail=\(SonosLog.playbackLinkValue(item.detailArtworkURL, maxLength: 640)) " +
             "nowPlayingArt=\(SonosLog.playbackLinkValue(nowPlayingInfo?.images?.tile1x1, maxLength: 640)) " +
             "trackInfoArt=\(SonosLog.playbackLinkValue(manager.trackInfo?.albumArtURL, maxLength: 640)) " +
             "uri=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640))")

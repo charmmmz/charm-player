@@ -23,7 +23,7 @@ struct AlbumDetailView: View {
     /// art before giving up and showing the placeholder disc icon.
     private var coverURL: String? {
         DetailArtworkURLSelection.firstAvailable(
-            entryArtworkURL: albumItem.albumArtURL,
+            entryArtworkURL: albumItem.preferredDetailArtworkURL,
             responseArtworkURL: response?.images?.tile1x1,
             fallbackArtworkURL: response?.tracks?.items?.first?.images?.tile1x1
         )
@@ -115,6 +115,7 @@ struct AlbumDetailView: View {
             "Artwork selection trigger=\(trigger) title='\(albumItem.title)' " +
             "rawId=\(SonosLog.playbackLinkValue(albumItem.id, maxLength: 640)) " +
             "entry=\(SonosLog.playbackLinkValue(albumItem.albumArtURL, maxLength: 640)) " +
+            "entryDetail=\(SonosLog.playbackLinkValue(albumItem.detailArtworkURL, maxLength: 640)) " +
             "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
             "fallback=\(SonosLog.playbackLinkValue(response?.tracks?.items?.first?.images?.tile1x1, maxLength: 640)) " +
             "selected=\(SonosLog.playbackLinkValue(coverURL, maxLength: 640))")

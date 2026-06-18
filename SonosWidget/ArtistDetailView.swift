@@ -24,7 +24,7 @@ struct ArtistDetailView: View {
     private var artistName: String { response?.title ?? artistItem.title }
     private var headerImageURL: String? {
         DetailArtworkURLSelection.firstAvailable(
-            entryArtworkURL: artistItem.albumArtURL,
+            entryArtworkURL: artistItem.preferredDetailArtworkURL,
             responseArtworkURL: response?.images?.tile1x1,
             fallbackArtworkURL: resolvedArtistImageURL
         )
@@ -142,6 +142,7 @@ struct ArtistDetailView: View {
             "Artwork selection trigger=\(trigger) title='\(artistItem.title)' " +
             "rawId=\(SonosLog.playbackLinkValue(artistItem.id, maxLength: 640)) " +
             "entry=\(SonosLog.playbackLinkValue(artistItem.albumArtURL, maxLength: 640)) " +
+            "entryDetail=\(SonosLog.playbackLinkValue(artistItem.detailArtworkURL, maxLength: 640)) " +
             "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
             "fallback=\(SonosLog.playbackLinkValue(resolvedArtistImageURL, maxLength: 640)) " +
             "selected=\(SonosLog.playbackLinkValue(headerImageURL, maxLength: 640))")
@@ -331,7 +332,7 @@ struct ArtistDetailView: View {
                             manager: manager)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                squareAlbumArt(url: album.albumArtURL)
+                squareAlbumArt(url: album.thumbnailArtworkURL)
 
                 Text(album.title)
                     .font(.subheadline.weight(.medium))

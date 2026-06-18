@@ -373,6 +373,7 @@ final class SearchManager {
 
         var enrichedItem = item
         enrichedItem.albumArtURL = artworkURLString
+        enrichedItem.detailArtworkURL = artworkURLString
         pushRecentlyPlayed(enrichedItem)
         SonosLog.debug(
             .search,
@@ -3176,7 +3177,20 @@ final class SearchManager {
         _ item: BrowseItem,
         preserveArtworkSize: Bool = false
     ) -> BrowseItem? {
-        if item.playbackDescriptor.directURI != nil { return item }
+        if item.playbackDescriptor.directURI != nil {
+            guard preserveArtworkSize,
+                  item.detailArtworkURL == nil,
+                  let detailArtworkURL = item.preferredDetailArtworkURL else {
+                return item
+            }
+            var enriched = item
+            enriched.albumArtURL = ArtworkURLNormalizer.loadableURLString(
+                from: detailArtworkURL,
+                shortSidePixels: 400
+            ) ?? item.albumArtURL
+            enriched.detailArtworkURL = detailArtworkURL
+            return enriched
+        }
         guard let ids = parseCloudIds(from: item) else { return nil }
         let typeString: String? = item.cloudType ?? favoriteCategoryAsCloudType(item)
         guard let ts = typeString, let kind = CloudObjectType(rawValue: ts) else { return nil }
@@ -3186,13 +3200,13 @@ final class SearchManager {
         switch kind {
         case .artist:
             return makeArtistItem(
-                objectId: oid, name: item.title, artURL: item.albumArtURL,
+                objectId: oid, name: item.title, artURL: item.preferredDetailArtworkURL,
                 cloudServiceId: cloudSid, accountId: aid,
                 preserveArtworkSize: preserveArtworkSize)
         case .album:
             return makeAlbumItem(
                 objectId: oid, title: item.title, artist: item.artist,
-                artURL: item.albumArtURL,
+                artURL: item.preferredDetailArtworkURL,
                 cloudServiceId: cloudSid, accountId: aid,
                 preserveArtworkSize: preserveArtworkSize)
         case .playlist:

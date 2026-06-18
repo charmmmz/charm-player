@@ -22,7 +22,7 @@ struct PlaylistDetailView: View {
     private var subtitleText: String { response?.subtitle ?? playlistItem.artist }
     private var coverURL: String? {
         DetailArtworkURLSelection.firstAvailable(
-            entryArtworkURL: playlistItem.albumArtURL,
+            entryArtworkURL: playlistItem.preferredDetailArtworkURL,
             responseArtworkURL: response?.images?.tile1x1
         )
     }
@@ -109,6 +109,7 @@ struct PlaylistDetailView: View {
             "rawId=\(SonosLog.playbackLinkValue(playlistItem.id, maxLength: 640)) " +
             "cloudType='\(playlistItem.cloudType ?? "nil")' " +
             "entry=\(SonosLog.playbackLinkValue(playlistItem.albumArtURL, maxLength: 640)) " +
+            "entryDetail=\(SonosLog.playbackLinkValue(playlistItem.detailArtworkURL, maxLength: 640)) " +
             "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
             "selected=\(SonosLog.playbackLinkValue(coverURL, maxLength: 640))")
     }
