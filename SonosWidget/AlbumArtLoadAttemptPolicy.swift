@@ -59,7 +59,7 @@ enum AlbumArtURLCarryoverPolicy {
 }
 
 nonisolated enum QueueArtPrefetchPolicy {
-    static let defaultLocalSonosArtworkLimit = 3
+    static let defaultLocalSonosArtworkLimit = 0
     static let localSonosArtworkConcurrency = 2
     static let remoteArtworkConcurrency = 8
 

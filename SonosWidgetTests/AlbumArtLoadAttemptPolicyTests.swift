@@ -153,6 +153,22 @@ final class AlbumArtLoadAttemptPolicyTests: XCTestCase {
         )
     }
 
+    func testQueueArtPrefetchSkipsLocalSonosArtworkByDefaultButKeepsRemoteArtwork() {
+        let urls = [
+            "http://192.168.50.25:1400/getaa?s=1",
+            "http://192.168.50.25:1400/getaa?s=2",
+            "https://is1-ssl.mzstatic.com/image/thumb/example.jpg"
+        ]
+
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.urlsToPrefetch(
+                from: urls,
+                cachedURLs: []
+            ),
+            ["https://is1-ssl.mzstatic.com/image/thumb/example.jpg"]
+        )
+    }
+
     func testQueueArtPrefetchSkipsCachedAndDuplicateURLs() {
         let urls = [
             "http://192.168.50.25:1400/getaa?s=1",
