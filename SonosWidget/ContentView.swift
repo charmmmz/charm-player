@@ -6,6 +6,7 @@ struct ContentView: View {
     @State var searchManager = SearchManager()
     @State private var selectedTab: AppTab = .home
     @State private var pendingAppleMusicShare: PendingAppleMusicShare?
+    @State private var playerDetailPath: [PlayerDetailRoute] = []
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -13,7 +14,8 @@ struct ContentView: View {
                 PlayerView(
                     manager: manager,
                     searchManager: searchManager,
-                    pendingAppleMusicShare: $pendingAppleMusicShare)
+                    pendingAppleMusicShare: $pendingAppleMusicShare,
+                    detailPath: $playerDetailPath)
                     .miniPlayerLegacyInsetIfNeeded(manager: manager)
             }
             Tab("Browse", systemImage: "magnifyingglass", value: AppTab.browse) {
@@ -51,7 +53,11 @@ struct ContentView: View {
                 }()
 
                 if manager.isConfigured {
-                    NowPlayingOverlay(manager: manager, searchManager: searchManager)
+                    NowPlayingOverlay(
+                        manager: manager,
+                        searchManager: searchManager,
+                        navigateToDetail: routeFromNowPlaying
+                    )
                         .offset(y: overlayY)
                         .allowsHitTesting(manager.showFullPlayer || manager.miniPlayerDragOffset < -5)
                 }
@@ -92,6 +98,22 @@ struct ContentView: View {
         pendingAppleMusicShare = SharedStorage.pendingAppleMusicShare
         if pendingAppleMusicShare != nil {
             selectedTab = .home
+        }
+    }
+
+    private func routeFromNowPlaying(_ route: PlayerDetailRoute) {
+        let transition = PlayerDetailNavigationPolicy.transitionAfterNowPlayingDetailTap
+        if transition.selectsHomeTab {
+            selectedTab = .home
+        }
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            manager.miniPlayerDragOffset = transition.miniPlayerDragOffset
+            manager.showFullPlayer = transition.showFullPlayer
+        }
+
+        DispatchQueue.main.async {
+            playerDetailPath.append(route)
         }
     }
 

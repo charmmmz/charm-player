@@ -4,6 +4,7 @@ struct PlayerView: View {
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
     @Binding var pendingAppleMusicShare: PendingAppleMusicShare?
+    @Binding var detailPath: [PlayerDetailRoute]
     @State private var newSpeakerIP = ""
     @State private var showManualEntry = false
     /// Tracked per-session so we only auto-connect on the *first* discovery
@@ -37,15 +38,36 @@ struct PlayerView: View {
     // MARK: - Configured View
 
     private var configuredView: some View {
-        NavigationStack {
+        NavigationStack(path: $detailPath) {
             speakersHomeView
                 .background {
                     blurredArtBackground.ignoresSafeArea()
                 }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationDestination(for: PlayerDetailRoute.self) { route in
+                    playerDetailDestination(route)
+                }
         }
         .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private func playerDetailDestination(_ route: PlayerDetailRoute) -> some View {
+        switch route.kind {
+        case .artist:
+            ArtistDetailView(
+                artistItem: route.browseItem,
+                searchManager: searchManager,
+                manager: manager
+            )
+        case .album:
+            AlbumDetailView(
+                albumItem: route.browseItem,
+                searchManager: searchManager,
+                manager: manager
+            )
+        }
     }
 
     private var blurredArtBackground: some View {
@@ -1143,6 +1165,7 @@ private struct GroupVolumeBar: View {
 struct NowPlayingOverlay: View {
     @Bindable var manager: SonosManager
     var searchManager: SearchManager
+    let navigateToDetail: (PlayerDetailRoute) -> Void
     @State private var volumeSliderValue: Double = 0
     @State private var isDraggingVolume = false
     @State private var premuteVolume: Int?
@@ -1686,17 +1709,14 @@ struct NowPlayingOverlay: View {
             // complained about the duplicate Dolby Atmos label.
             if !isTV {
                 if let artistNav = artistBrowseItem {
-                    NavigationLink {
-                        ArtistDetailView(artistItem: artistNav, searchManager: searchManager, manager: manager)
+                    Button {
+                        navigateFromNowPlaying(kind: .artist, item: artistNav)
                     } label: {
                         Text(manager.trackInfo?.artist ?? "—")
                             .font(.body).foregroundStyle(manager.albumArtDominantColor ?? .white.opacity(0.7)).lineLimit(1)
                             .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        logPlayerNavigation(kind: "artist", item: artistNav)
-                    })
                 } else {
                     Text(manager.trackInfo?.artist ?? "—")
                         .font(.body).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
@@ -1704,17 +1724,14 @@ struct NowPlayingOverlay: View {
                 }
 
                 if let albumNav = albumBrowseItem {
-                    NavigationLink {
-                        AlbumDetailView(albumItem: albumNav, searchManager: searchManager, manager: manager)
+                    Button {
+                        navigateFromNowPlaying(kind: .album, item: albumNav)
                     } label: {
                         Text(manager.trackInfo?.album ?? "")
                             .font(.subheadline).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                             .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        logPlayerNavigation(kind: "album", item: albumNav)
-                    })
                 } else {
                     Text(manager.trackInfo?.album ?? "")
                         .font(.subheadline).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
@@ -1725,6 +1742,19 @@ struct NowPlayingOverlay: View {
     }
 
     // MARK: - Now Playing Navigation
+
+    private func navigateFromNowPlaying(kind: PlayerDetailRoute.Kind, item: BrowseItem) {
+        let route: PlayerDetailRoute
+        switch kind {
+        case .artist:
+            route = .artist(item)
+        case .album:
+            route = .album(item)
+        }
+
+        logPlayerNavigation(kind: kind.logName, item: item)
+        navigateToDetail(route)
+    }
 
     private func logPlayerNavigation(kind: String, item: BrowseItem) {
         SonosLog.debug(

@@ -53,13 +53,8 @@ struct AlbumDetailView: View {
             albumBackground
         }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Color.clear.frame(height: DetailTopControlLayout.reservedContentHeight)
-        }
-        .overlay(alignment: .top) {
-            DetailFloatingTopControls {
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
                 albumMenu
             }
         }
@@ -148,10 +143,10 @@ struct AlbumDetailView: View {
                 Label("Add to Queue", systemImage: "text.badge.plus")
             }
         } label: {
-            DetailTopControlIcon(systemImage: "ellipsis")
+            Image(systemName: "ellipsis.circle")
+                .font(.body)
+                .symbolRenderingMode(.hierarchical)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Album actions")
     }
 
     // MARK: - Header
