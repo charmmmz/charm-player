@@ -71,7 +71,7 @@ nonisolated struct LocalMusicCatalogArtworkCache {
     private let defaults: UserDefaults
     private let now: () -> Date
     private let ttl: TimeInterval
-    private let urlStoreKey = "LocalMusicCatalogArtworkURLCache.v1"
+    private let urlStoreKey = "LocalMusicCatalogArtworkURLCache.v2"
 
     init(
         defaults: UserDefaults,
@@ -180,11 +180,11 @@ nonisolated struct LocalMusicCatalogArtworkPlan {
             if inMemoryURLStrings[storageKey] != nil {
                 continue
             }
-            if item.hasMusicKitArtwork { continue }
             if let cachedURLString = cacheSnapshot.urlString(for: key) {
                 immediate[key] = cachedURLString
                 continue
             }
+            if item.hasMusicKitArtwork && item.catalogID == nil { continue }
             if inMemoryMissIDs.contains(storageKey) {
                 continue
             }

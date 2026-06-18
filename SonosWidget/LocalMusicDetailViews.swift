@@ -58,7 +58,7 @@ struct LocalMusicAlbumDetailView: View {
     }
     private var albumPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(album: displayAlbum)?
-            .withFallbackArtworkURLString(coverURL?.absoluteString)
+            .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
     private var albumFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(albumPlayable)
@@ -781,7 +781,7 @@ struct LocalMusicPlaylistDetailView: View {
     }
     private var playlistPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(playlist: displayPlaylist)?
-            .withFallbackArtworkURLString(coverURL?.absoluteString)
+            .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
     private var playlistFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(playlistPlayable)
@@ -1402,7 +1402,7 @@ struct LocalMusicArtistDetailView: View {
     }
     private var artistPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(artist: displayArtist)?
-            .withFallbackArtworkURLString(coverURL?.absoluteString)
+            .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
@@ -2035,7 +2035,7 @@ private struct LocalMusicCatalogArtistDetailView: View {
     }
     private var artistPlayable: LocalServiceAppleMusicPlayable? {
         LocalServiceAppleMusicPlayable.make(artist: artist)?
-            .withFallbackArtworkURLString(coverURL?.absoluteString)
+            .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
     private var albums: [Album] {
         LocalMusicCatalogArtistContent.albums(for: artist)

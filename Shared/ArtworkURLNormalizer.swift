@@ -4,12 +4,14 @@ nonisolated enum ArtworkURLNormalizer {
     static func loadableURLString(
         from value: String?,
         shortSidePixels: Int? = nil,
+        preserveExistingAppleArtworkSize: Bool = false,
         speakerIP: String? = nil,
         sonosPort: Int = 1400
     ) -> String? {
         loadableURL(
             from: value,
             shortSidePixels: shortSidePixels,
+            preserveExistingAppleArtworkSize: preserveExistingAppleArtworkSize,
             speakerIP: speakerIP,
             sonosPort: sonosPort
         )?.absoluteString
@@ -18,6 +20,7 @@ nonisolated enum ArtworkURLNormalizer {
     static func loadableURL(
         from value: String?,
         shortSidePixels: Int? = nil,
+        preserveExistingAppleArtworkSize: Bool = false,
         speakerIP: String? = nil,
         sonosPort: Int = 1400
     ) -> URL? {
@@ -29,13 +32,21 @@ nonisolated enum ArtworkURLNormalizer {
             switch scheme {
             case "http", "https":
                 guard isLoadableArtworkURLString(url.absoluteString) else { return nil }
-                return resizedAppleArtworkURL(url, shortSidePixels: shortSidePixels)
+                return resizedAppleArtworkURL(
+                    url,
+                    shortSidePixels: shortSidePixels,
+                    preserveExistingSize: preserveExistingAppleArtworkSize
+                )
             case "musickit":
                 guard let artworkURL = appleArtworkURL(fromMusicKitArtworkURL: url),
                       isLoadableArtworkURLString(artworkURL.absoluteString) else {
                     return nil
                 }
-                return resizedAppleArtworkURL(artworkURL, shortSidePixels: shortSidePixels)
+                return resizedAppleArtworkURL(
+                    artworkURL,
+                    shortSidePixels: shortSidePixels,
+                    preserveExistingSize: preserveExistingAppleArtworkSize
+                )
             default:
                 return nil
             }
@@ -141,7 +152,11 @@ nonisolated enum ArtworkURLNormalizer {
         return components.url
     }
 
-    private static func resizedAppleArtworkURL(_ url: URL, shortSidePixels: Int?) -> URL {
+    private static func resizedAppleArtworkURL(
+        _ url: URL,
+        shortSidePixels: Int?,
+        preserveExistingSize: Bool = false
+    ) -> URL {
         guard let shortSidePixels, shortSidePixels > 0,
               var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url
@@ -152,6 +167,9 @@ nonisolated enum ArtworkURLNormalizer {
             of: #"/\d+x\d+bb(\.[^/]+)?$"#,
             options: .regularExpression
         ) else {
+            return url
+        }
+        if preserveExistingSize {
             return url
         }
 

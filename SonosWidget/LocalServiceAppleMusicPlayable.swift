@@ -106,6 +106,24 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
         )
     }
 
+    func withPreferredArtworkURLString(_ preferredURLString: String?) -> LocalServiceAppleMusicPlayable {
+        guard let preferredURLString = Self.normalizedPreferredArtworkURLString(preferredURLString),
+              preferredURLString != artworkURLString else {
+            return self
+        }
+        return LocalServiceAppleMusicPlayable(
+            kind: kind,
+            catalogID: catalogID,
+            title: title,
+            artist: artist,
+            album: album,
+            artworkURLString: preferredURLString,
+            duration: duration,
+            stationPlaybackKind: stationPlaybackKind,
+            stationStreamObjectID: stationStreamObjectID
+        )
+    }
+
     var sonosObjectID: String {
         switch kind {
         case .song, .album, .artist, .playlist, .station:
@@ -534,8 +552,31 @@ struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     private static func normalizedArtworkURLString(_ value: String?) -> String? {
         LocalMusicArtworkURL.loadableURLString(
             from: value?.trimmingCharacters(in: .whitespacesAndNewlines),
-            shortSidePixels: 400
+            shortSidePixels: LocalMusicArtworkURL.catalogDisplayShortSidePixels
         )
+    }
+
+    private static func normalizedPreferredArtworkURLString(_ value: String?) -> String? {
+        LocalMusicArtworkURL.catalogDisplayURLString(
+            from: value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+}
+
+enum LocalServicePlaybackArtworkPolicy {
+    static func shouldPreferCatalogArtwork(
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        existingArtworkURLString: String?
+    ) -> Bool {
+        let hasExistingArtwork = !(existingArtworkURLString?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+
+        if kind == .playlist && hasExistingArtwork {
+            return false
+        }
+
+        return true
     }
 }
 

@@ -123,7 +123,7 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
 
         XCTAssertEqual(
             playable?.artworkURLString,
-            "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/cover/400x400bb.jpg"
+            "https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/cover/600x600bb.jpg"
         )
     }
 
@@ -141,7 +141,7 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
 
         XCTAssertEqual(
             playable?.artworkURLString,
-            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover.png/400x400bb.jpg"
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover.png/600x600bb.jpg"
         )
     }
 
@@ -272,5 +272,72 @@ final class LocalServiceAppleMusicPlayableTests: XCTestCase {
         let updated = playable.withFallbackArtworkURLString("https://example.com/fallback.jpg")
 
         XCTAssertEqual(updated.artworkURLString, "https://example.com/original.jpg")
+    }
+
+    func testPlayableUsesPreferredArtworkURLOverExistingArtworkURL() throws {
+        let playable = try XCTUnwrap(LocalServiceAppleMusicPlayable.make(
+            kind: .playlist,
+            rawID: "library-playlist-id",
+            playParameterCandidates: ["pl.abc123"],
+            title: "Frank Ocean Essentials",
+            artist: "Apple Music R&B",
+            album: "",
+            artworkURLString: "https://example.com/library.jpg",
+            duration: nil
+        ))
+
+        let updated = playable.withPreferredArtworkURLString("https://example.com/catalog.jpg")
+
+        XCTAssertEqual(updated.artworkURLString, "https://example.com/catalog.jpg")
+        XCTAssertEqual(updated.catalogID, playable.catalogID)
+    }
+
+    func testPlayablePreservesConcretePreferredCatalogArtworkURLSize() throws {
+        let playable = try XCTUnwrap(LocalServiceAppleMusicPlayable.make(
+            kind: .playlist,
+            rawID: "library-playlist-id",
+            playParameterCandidates: ["pl.abc123"],
+            title: "Frank Ocean Essentials",
+            artist: "Apple Music R&B",
+            album: "",
+            artworkURLString: "https://example.com/library.jpg",
+            duration: nil
+        ))
+
+        let updated = playable.withPreferredArtworkURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/1200x1200bb.jpg"
+        )
+
+        XCTAssertEqual(
+            updated.artworkURLString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/1200x1200bb.jpg"
+        )
+    }
+
+    func testPlaybackArtworkPolicyKeepsExistingPlaylistArtworkOverCatalogLookup() {
+        XCTAssertFalse(
+            LocalServicePlaybackArtworkPolicy.shouldPreferCatalogArtwork(
+                kind: .playlist,
+                existingArtworkURLString: "https://example.com/library-playlist.jpg"
+            )
+        )
+    }
+
+    func testPlaybackArtworkPolicyAllowsCatalogLookupWhenPlaylistArtworkIsMissing() {
+        XCTAssertTrue(
+            LocalServicePlaybackArtworkPolicy.shouldPreferCatalogArtwork(
+                kind: .playlist,
+                existingArtworkURLString: nil
+            )
+        )
+    }
+
+    func testPlaybackArtworkPolicyStillAllowsCatalogLookupForAlbumsWithArtwork() {
+        XCTAssertTrue(
+            LocalServicePlaybackArtworkPolicy.shouldPreferCatalogArtwork(
+                kind: .album,
+                existingArtworkURLString: "https://example.com/library-album.jpg"
+            )
+        )
     }
 }

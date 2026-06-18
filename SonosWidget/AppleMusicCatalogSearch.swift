@@ -75,7 +75,7 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     }
 
     private static func normalizedArtworkURLString(_ value: String?) -> String? {
-        LocalMusicArtworkURL.loadableURLString(from: value, shortSidePixels: 400)
+        LocalMusicArtworkURL.catalogDisplayURLString(from: value)
     }
 
     var sonosPlayableObjectID: String {
@@ -427,15 +427,51 @@ struct AppleMusicCatalogSearchClient {
     }
 
     func playlistArtworkURLString(catalogID: String) async throws -> String? {
+        try await artworkURLString(kind: .playlist, catalogID: catalogID)
+    }
+
+    func artworkURLString(
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        catalogID: String
+    ) async throws -> String? {
         try await ensureAuthorized()
 
-        var request = MusicCatalogResourceRequest<Playlist>(
-            matching: \.id,
-            equalTo: MusicItemID(catalogID)
-        )
-        request.limit = 1
-        let response = try await request.response()
-        return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+        switch kind {
+        case .song:
+            var request = MusicCatalogResourceRequest<Song>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+        case .album:
+            var request = MusicCatalogResourceRequest<Album>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+        case .artist:
+            var request = MusicCatalogResourceRequest<Artist>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+        case .playlist:
+            var request = MusicCatalogResourceRequest<Playlist>(
+                matching: \.id,
+                equalTo: MusicItemID(catalogID)
+            )
+            request.limit = 1
+            let response = try await request.response()
+            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+        case .station:
+            return nil
+        }
     }
 
     func appleMusicURLString(
@@ -565,8 +601,11 @@ struct AppleMusicCatalogSearchClient {
 
     private static func artworkURLString(_ artwork: Artwork?) -> String? {
         LocalMusicArtworkURL.loadableURLString(
-            from: artwork?.url(width: 400, height: 400)?.absoluteString,
-            shortSidePixels: 400
+            from: artwork?.url(
+                width: LocalMusicArtworkURL.catalogDisplayShortSidePixels,
+                height: LocalMusicArtworkURL.catalogDisplayShortSidePixels
+            )?.absoluteString,
+            shortSidePixels: LocalMusicArtworkURL.catalogDisplayShortSidePixels
         )
     }
 }

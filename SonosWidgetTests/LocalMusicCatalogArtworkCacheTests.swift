@@ -139,7 +139,7 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
         XCTAssertEqual(plan.lookupItems.map(\.id), ["album-1"])
     }
 
-    func testPlannerSkipsCachedArtworkWhenMusicKitArtworkIsAlreadyPresent() {
+    func testPlannerUsesCachedArtworkWhenMusicKitArtworkIsAlreadyPresent() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let item = LocalMusicCatalogArtworkLookupItem(
@@ -157,8 +157,32 @@ final class LocalMusicCatalogArtworkCacheTests: XCTestCase {
             inMemoryMissIDs: [],
             cache: cache)
 
-        XCTAssertTrue(plan.immediateURLStrings.isEmpty)
+        XCTAssertEqual(
+            plan.immediateURLStrings[item.key.storageKey],
+            "https://example.com/cached-wrong.jpg")
         XCTAssertTrue(plan.lookupItems.isEmpty)
+    }
+
+    func testPlannerSchedulesCatalogLookupWhenPlaylistHasDirectArtworkAndCatalogID() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let item = LocalMusicCatalogArtworkLookupItem(
+            id: "playlist-with-library-artwork",
+            kind: .playlist,
+            catalogID: "pl.abc123",
+            title: "Frank Ocean Essentials",
+            artist: "Apple Music R&B",
+            album: nil,
+            directArtworkURLString: "https://example.com/library.jpg")
+
+        let plan = LocalMusicCatalogArtworkPlan.make(
+            items: [item],
+            inMemoryURLStrings: [:],
+            inMemoryMissIDs: [],
+            cache: cache)
+
+        XCTAssertTrue(plan.immediateURLStrings.isEmpty)
+        XCTAssertEqual(plan.lookupItems.map(\.id), ["playlist-with-library-artwork"])
     }
 
     func testPlannerUsesCachedArtworkBeforeLookupWhenMusicKitArtworkIsMissing() {

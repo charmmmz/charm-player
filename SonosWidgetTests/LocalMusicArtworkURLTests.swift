@@ -138,7 +138,7 @@ final class LocalMusicArtworkURLTests: XCTestCase {
         XCTAssertNil(LocalMusicArtworkURL.loadableURL(from: url, shortSidePixels: 600))
     }
 
-    func testArtworkSourcePrefersMusicKitArtworkOverRemoteURL() {
+    func testArtworkSourcePrefersMusicKitArtworkOverCatalogRemoteURLForDisplay() {
         let remoteURL = URL(string: "https://example.com/cover.jpg")
 
         XCTAssertEqual(

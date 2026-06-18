@@ -1326,6 +1326,7 @@ final class SearchManager {
                 artURL: playable.artworkURLString,
                 cloudServiceId: cloudServiceId,
                 accountId: accountId)
+            item.includeAlbumArtInCloudMetadata = false
         case .station:
             item = makeStationItem(
                 objectId: playable.sonosObjectID,
@@ -1467,7 +1468,9 @@ final class SearchManager {
         let artist = wantsRichMetadata && !item.artist.isEmpty ? item.artist : nil
         let albumArtist = wantsRichMetadata && cloudType != "PLAYLIST" ? artist : nil
         let album = (cloudType == "TRACK" && !item.album.isEmpty) ? item.album : nil
-        let albumArtURI = wantsRichMetadata && item.albumArtURL?.isEmpty == false ? item.albumArtURL : nil
+        let albumArtURI = wantsRichMetadata &&
+            item.includeAlbumArtInCloudMetadata &&
+            item.albumArtURL?.isEmpty == false ? item.albumArtURL : nil
 
         return SonosDIDLBuilder.document([
             SonosDIDLElement(
@@ -3140,7 +3143,7 @@ final class SearchManager {
         do {
             try await SonosAPI.addToFavorites(
                 ip: ip, title: resolved.title, uri: uri, metadata: meta,
-                albumArtURI: resolved.albumArtURL,
+                albumArtURI: resolved.includeAlbumArtInCloudMetadata ? resolved.albumArtURL : nil,
                 rType: rType, description: description, emitRes: emitRes)
             SonosLog.info(.favorites, "Added '\(resolved.title)' to Sonos Favorites")
             try? await Task.sleep(for: .milliseconds(500))

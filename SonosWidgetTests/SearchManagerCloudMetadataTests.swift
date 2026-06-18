@@ -168,6 +168,27 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
         XCTAssertFalse(metadata.contains("id=\"1004206c1440668749\""))
     }
 
+    func testCloudPlaylistMetadataIncludesArtworkByDefault() {
+        UserDefaults.standard.set(["52231": 204], forKey: sidMappingKey)
+        let manager = SearchManager()
+
+        let item = manager.makePlaylistItem(
+            objectId: "playlist:pl.abc123",
+            title: "Sunday Queue",
+            artist: "Apple Music",
+            artURL: "https://example.com/playlist.jpg",
+            cloudServiceId: "52231",
+            accountId: "2")
+
+        let metadata = manager.buildCloudDIDLMetadata(
+            item: item,
+            localSid: 204,
+            accountId: "2")
+
+        XCTAssertTrue(item.includeAlbumArtInCloudMetadata)
+        XCTAssertTrue(metadata.contains("<upnp:albumArtURI>https://example.com/playlist.jpg</upnp:albumArtURI>"))
+    }
+
     func testAppleMusicStationTransportUsesProgramMetadataShape() {
         UserDefaults.standard.set(["52231": 204], forKey: sidMappingKey)
         let manager = SearchManager()

@@ -726,6 +726,9 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
     var serviceId: Int?
     /// Cloud API resource type: "TRACK", "ARTIST", "ALBUM", "PLAYLIST", "PROGRAM"
     var cloudType: String?
+    /// Some app-rendered artwork URLs are suitable for our UI but not for the
+    /// Sonos Cloud DIDL we send on playback/favorites.
+    var includeAlbumArtInCloudMetadata: Bool
     /// Set when this `BrowseItem` was sourced from the Sonos Cloud Control API's
     /// `listFavorites` endpoint. Lets `playNow` route tap-to-play through
     /// `loadFavorite` instead of UPnP when the app is in remote mode.
@@ -744,6 +747,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         case isContainer
         case serviceId
         case cloudType
+        case includeAlbumArtInCloudMetadata
         case cloudFavoriteId
     }
 
@@ -760,6 +764,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         isContainer: Bool,
         serviceId: Int? = nil,
         cloudType: String? = nil,
+        includeAlbumArtInCloudMetadata: Bool = true,
         cloudFavoriteId: String? = nil
     ) {
         self.id = id
@@ -774,6 +779,7 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         self.isContainer = isContainer
         self.serviceId = serviceId
         self.cloudType = cloudType
+        self.includeAlbumArtInCloudMetadata = includeAlbumArtInCloudMetadata
         self.cloudFavoriteId = cloudFavoriteId
     }
 
@@ -791,6 +797,10 @@ struct BrowseItem: Identifiable, Codable, Equatable, Sendable {
         isContainer = try container.decode(Bool.self, forKey: .isContainer)
         serviceId = try container.decodeIfPresent(Int.self, forKey: .serviceId)
         cloudType = try container.decodeIfPresent(String.self, forKey: .cloudType)
+        includeAlbumArtInCloudMetadata = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .includeAlbumArtInCloudMetadata
+        ) ?? true
         cloudFavoriteId = try container.decodeIfPresent(String.self, forKey: .cloudFavoriteId)
     }
 

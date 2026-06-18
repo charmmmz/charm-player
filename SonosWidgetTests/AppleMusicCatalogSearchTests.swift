@@ -67,7 +67,26 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
 
         XCTAssertEqual(
             browseItem.albumArtURL,
-            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/400x400bb.jpg"
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/600x600bb.jpg"
+        )
+    }
+
+    func testSearchItemPreservesConcreteCatalogArtworkURLSizeForRows() {
+        let item = AppleMusicCatalogSearchItem(
+            id: "pl.u-11zBXe4t8ZL1",
+            type: .playlist,
+            title: "Imagine Dragons Essentials",
+            artist: "Apple Music Alternative",
+            album: "",
+            artworkURLString: "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/1200x1200bb.jpg",
+            duration: nil
+        )
+
+        let browseItem = item.browseItem(localServiceId: 204)
+
+        XCTAssertEqual(
+            browseItem.albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Features125/v4/ad/0e/48/cover/1200x1200bb.jpg"
         )
     }
 
@@ -292,7 +311,7 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
 
         XCTAssertEqual(
             urlString,
-            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/cover.png/400x400bb.jpg"
+            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/cover.png/600x600bb.jpg"
         )
     }
 

@@ -793,12 +793,27 @@ struct LocalLibraryView: View {
         }
     }
 
+    private func playableWithPreferredPlaybackArtwork(
+        _ playable: LocalServiceAppleMusicPlayable?,
+        artworkURL: URL?
+    ) -> LocalServiceAppleMusicPlayable? {
+        guard let playable else { return nil }
+        guard LocalServicePlaybackArtworkPolicy.shouldPreferCatalogArtwork(
+            kind: playable.kind,
+            existingArtworkURLString: playable.artworkURLString
+        ) else {
+            return playable
+        }
+        return playable.withPreferredArtworkURLString(artworkURL?.absoluteString)
+    }
+
     @ViewBuilder
     private func card(_ presentation: LocalServiceCardPresentation) -> some View {
         let item = presentation.item
         let playable = presentation.playable
-        let playbackPlayable = playable?.withFallbackArtworkURLString(
-            item.catalogArtworkURL(using: store)?.absoluteString
+        let playbackPlayable = playableWithPreferredPlaybackArtwork(
+            playable,
+            artworkURL: item.catalogArtworkURL(using: store)
         )
 
         switch item {
@@ -1513,8 +1528,10 @@ struct LocalLibraryView: View {
         } else {
             ForEach(songs) { song in
                 let artworkURL = store.catalogArtworkURL(for: song)
-                let playable = LocalServiceAppleMusicPlayable.make(song: song)?
-                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
+                let playable = playableWithPreferredPlaybackArtwork(
+                    LocalServiceAppleMusicPlayable.make(song: song),
+                    artworkURL: artworkURL
+                )
                 playRow(
                     id: song.id.rawValue,
                     artwork: song.artwork,
@@ -1556,8 +1573,10 @@ struct LocalLibraryView: View {
         } else {
             ForEach(albums) { album in
                 let artworkURL = store.catalogArtworkURL(for: album)
-                let playable = LocalServiceAppleMusicPlayable.make(album: album)?
-                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
+                let playable = playableWithPreferredPlaybackArtwork(
+                    LocalServiceAppleMusicPlayable.make(album: album),
+                    artworkURL: artworkURL
+                )
                 NavigationLink {
                     LocalMusicAlbumDetailView(
                         album: album,
@@ -1598,8 +1617,10 @@ struct LocalLibraryView: View {
         } else {
             ForEach(artists) { artist in
                 let artworkURL = store.catalogArtworkURL(for: artist)
-                let playable = LocalServiceAppleMusicPlayable.make(artist: artist)?
-                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
+                let playable = playableWithPreferredPlaybackArtwork(
+                    LocalServiceAppleMusicPlayable.make(artist: artist),
+                    artworkURL: artworkURL
+                )
                 if LocalServiceLibraryInteraction.primaryAction(for: .artist) == .navigate {
                     NavigationLink {
                         LocalMusicArtistDetailView(
@@ -1672,8 +1693,10 @@ struct LocalLibraryView: View {
         } else {
             ForEach(playlists) { playlist in
                 let artworkURL = store.catalogArtworkURL(for: playlist)
-                let playable = LocalServiceAppleMusicPlayable.make(playlist: playlist)?
-                    .withFallbackArtworkURLString(artworkURL?.absoluteString)
+                let playable = playableWithPreferredPlaybackArtwork(
+                    LocalServiceAppleMusicPlayable.make(playlist: playlist),
+                    artworkURL: artworkURL
+                )
                 NavigationLink {
                     LocalMusicPlaylistDetailView(
                         playlist: playlist,

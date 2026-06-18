@@ -2,6 +2,8 @@ import Foundation
 import MusicKit
 
 nonisolated enum LocalMusicArtworkURL {
+    static let catalogDisplayShortSidePixels = 600
+
     enum ContentMode: Equatable {
         case fit
         case fill
@@ -59,6 +61,14 @@ nonisolated enum LocalMusicArtworkURL {
         ArtworkURLNormalizer.loadableURLString(
             from: value,
             shortSidePixels: shortSidePixels
+        )
+    }
+
+    static func catalogDisplayURLString(from value: String?) -> String? {
+        ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            shortSidePixels: catalogDisplayShortSidePixels,
+            preserveExistingAppleArtworkSize: true
         )
     }
 

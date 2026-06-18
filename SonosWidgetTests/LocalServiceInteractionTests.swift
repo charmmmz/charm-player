@@ -604,10 +604,19 @@ final class LocalServiceInteractionTests: XCTestCase {
 
         XCTAssertEqual(item?.id, "playlist:pl.abc123")
         XCTAssertEqual(item?.title, "Sunday Queue")
+        XCTAssertEqual(item?.albumArtURL, "https://example.com/playlist.jpg")
+        XCTAssertEqual(item?.includeAlbumArtInCloudMetadata, false)
         XCTAssertTrue(item?.isContainer ?? false)
         XCTAssertEqual(item?.serviceId, 204)
         XCTAssertEqual(item?.cloudType, "PLAYLIST")
         XCTAssertEqual(item?.uri?.isEmpty, false)
+
+        let unwrappedItem = try XCTUnwrap(item)
+        let metadata = searchManager.buildCloudDIDLMetadata(
+            item: unwrappedItem,
+            localSid: 204,
+            accountId: "2")
+        XCTAssertFalse(metadata.contains("<upnp:albumArtURI>"))
     }
 
     func testStationLocalServicePlayableResolvesToProgramRadioBrowseItem() async throws {

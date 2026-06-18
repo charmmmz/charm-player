@@ -2,14 +2,14 @@ import XCTest
 @testable import SonosWidget
 
 final class DetailArtworkURLSelectionTests: XCTestCase {
-    func testKeepsEntryArtworkBeforeResponseArtwork() {
+    func testPrefersResponseArtworkOverEntryArtwork() {
         let url = DetailArtworkURLSelection.firstAvailable(
             entryArtworkURL: "https://example.com/favorite.jpg",
             responseArtworkURL: "https://example.com/response.jpg",
             fallbackArtworkURL: nil
         )
 
-        XCTAssertEqual(url, "https://example.com/favorite.jpg")
+        XCTAssertEqual(url, "https://example.com/response.jpg")
     }
 
     func testUsesResponseArtworkWhenEntryArtworkIsMissing() {

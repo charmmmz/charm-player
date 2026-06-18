@@ -466,7 +466,8 @@ final class LocalLibraryStore {
         var didAttemptPlayback = false
         if let playable {
             didAttemptPlayback = true
-            let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
+            let playbackPlayable = await playablePreferringCatalogArtwork(playable)
+            let didStart = await searchManager.playLocalAppleMusic(playbackPlayable, manager: manager)
             if didStart { return }
         }
 
@@ -480,7 +481,8 @@ final class LocalLibraryStore {
            ),
            catalogPlayable.id != playable?.id {
             didAttemptPlayback = true
-            let didStart = await searchManager.playLocalAppleMusic(catalogPlayable, manager: manager)
+            let playbackPlayable = await playablePreferringCatalogArtwork(catalogPlayable)
+            let didStart = await searchManager.playLocalAppleMusic(playbackPlayable, manager: manager)
             if didStart { return }
         }
 
@@ -488,6 +490,60 @@ final class LocalLibraryStore {
             throw LocalServiceSonosPlaybackError.noPlayableCatalogID
         }
         throw LocalServiceSonosPlaybackError.playbackFailed(searchManager.errorMessage)
+    }
+
+    private func playablePreferringCatalogArtwork(
+        _ playable: LocalServiceAppleMusicPlayable
+    ) async -> LocalServiceAppleMusicPlayable {
+        guard playable.kind != .station else { return playable }
+        guard LocalServicePlaybackArtworkPolicy.shouldPreferCatalogArtwork(
+            kind: playable.kind,
+            existingArtworkURLString: playable.artworkURLString
+        ) else {
+            SonosLog.debug(
+                .localService,
+                "LocalService playback artwork keeping existing kind=\(playable.kind.cloudType) " +
+                    "title='\(playable.title)' direct=\(Self.diagnosticURLStatus(playable.artworkURLString))")
+            return playable
+        }
+
+        let lookupItem = Self.artworkLookupItem(for: playable)
+        let key = lookupItem.key
+        let storageKey = key.storageKey
+        let directStatus = Self.diagnosticURLStatus(playable.artworkURLString)
+
+        if let cachedURLString = catalogArtworkURLStrings[storageKey] ?? catalogArtworkCache.urlString(for: key) {
+            SonosLog.debug(
+                .localService,
+                "LocalService playback artwork using cached catalog kind=\(playable.kind.cloudType) " +
+                    "title='\(playable.title)' storageKey='\(storageKey)' direct=\(directStatus) " +
+                    "catalog=\(Self.diagnosticURLStatus(cachedURLString))")
+            return playable.withPreferredArtworkURLString(cachedURLString)
+        }
+
+        SonosLog.debug(
+            .localService,
+            "LocalService playback artwork catalog lookup start kind=\(playable.kind.cloudType) " +
+                "title='\(playable.title)' storageKey='\(storageKey)' " +
+                "catalogID=\(Self.diagnosticValue(lookupItem.catalogID)) direct=\(directStatus)")
+
+        guard let catalogURLString = await Self.catalogArtworkURLString(for: lookupItem) else {
+            SonosLog.debug(
+                .localService,
+                "LocalService playback artwork catalog lookup empty kind=\(playable.kind.cloudType) " +
+                    "title='\(playable.title)' storageKey='\(storageKey)' fallback=library " +
+                    "direct=\(directStatus)")
+            return playable
+        }
+
+        catalogArtworkURLStrings[storageKey] = catalogURLString
+        catalogArtworkCache.storeURLString(catalogURLString, for: key)
+        SonosLog.debug(
+            .localService,
+            "LocalService playback artwork catalog lookup applied kind=\(playable.kind.cloudType) " +
+                "title='\(playable.title)' storageKey='\(storageKey)' direct=\(directStatus) " +
+                "catalog=\(Self.diagnosticURLStatus(catalogURLString))")
+        return playable.withPreferredArtworkURLString(catalogURLString)
     }
 
     private func resolveQueueBrowseItems(
@@ -533,14 +589,15 @@ final class LocalLibraryStore {
         var didAttemptResolution = false
         if let playable {
             didAttemptResolution = true
-            let primaryCatalogID = SonosLog.playbackLinkValue(playable.catalogID, maxLength: 640)
-            let primaryResolveMessage = "LocalService queue resolve primary kind=\(playable.kind.cloudType) " +
-                "title='\(playable.title)' catalogID=\(primaryCatalogID)"
+            let playbackPlayable = await playablePreferringCatalogArtwork(playable)
+            let primaryCatalogID = SonosLog.playbackLinkValue(playbackPlayable.catalogID, maxLength: 640)
+            let primaryResolveMessage = "LocalService queue resolve primary kind=\(playbackPlayable.kind.cloudType) " +
+                "title='\(playbackPlayable.title)' catalogID=\(primaryCatalogID)"
             SonosLog.debug(
                 .playbackLink,
                 primaryResolveMessage)
             if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
-                playable,
+                playbackPlayable,
                 manager: manager
             ) {
                 let itemID = SonosLog.playbackLinkValue(item.id, maxLength: 640)
@@ -564,14 +621,15 @@ final class LocalLibraryStore {
            ),
            catalogPlayable.id != playable?.id {
             didAttemptResolution = true
-            let fallbackCatalogID = SonosLog.playbackLinkValue(catalogPlayable.catalogID, maxLength: 640)
-            let fallbackResolveMessage = "LocalService queue resolve fallback kind=\(catalogPlayable.kind.cloudType) " +
-                "title='\(catalogPlayable.title)' catalogID=\(fallbackCatalogID)"
+            let playbackPlayable = await playablePreferringCatalogArtwork(catalogPlayable)
+            let fallbackCatalogID = SonosLog.playbackLinkValue(playbackPlayable.catalogID, maxLength: 640)
+            let fallbackResolveMessage = "LocalService queue resolve fallback kind=\(playbackPlayable.kind.cloudType) " +
+                "title='\(playbackPlayable.title)' catalogID=\(fallbackCatalogID)"
             SonosLog.debug(
                 .playbackLink,
                 fallbackResolveMessage)
             if let item = await searchManager.resolveLocalAppleMusicBrowseItem(
-                catalogPlayable,
+                playbackPlayable,
                 manager: manager
             ) {
                 let itemID = SonosLog.playbackLinkValue(item.id, maxLength: 640)
@@ -766,6 +824,44 @@ final class LocalLibraryStore {
             directArtworkURLString: directArtworkURLString)
     }
 
+    private static func artworkLookupItem(
+        for playable: LocalServiceAppleMusicPlayable
+    ) -> LocalMusicCatalogArtworkLookupItem {
+        LocalMusicCatalogArtworkLookupItem(
+            id: playable.catalogID,
+            kind: playable.kind,
+            catalogID: catalogArtworkCatalogID(for: playable),
+            title: playable.title,
+            artist: playable.artist.isEmpty ? nil : playable.artist,
+            album: playable.album.isEmpty ? nil : playable.album,
+            directArtworkURLString: playable.artworkURLString)
+    }
+
+    private static func catalogArtworkCatalogID(
+        for playable: LocalServiceAppleMusicPlayable
+    ) -> String? {
+        let decoded = playable.catalogID.removingPercentEncoding ?? playable.catalogID
+        let suffix = decoded
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? decoded
+        let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        switch playable.kind {
+        case .song:
+            return SonosAppleMusicTrackResolver.storeID(fromObjectID: decoded)
+        case .album:
+            return trimmed.hasPrefix("l.") ? nil : trimmed
+        case .artist:
+            return trimmed.hasPrefix("r.") ? nil : trimmed
+        case .playlist:
+            return trimmed.hasPrefix("pl.") ? trimmed : nil
+        case .station:
+            return nil
+        }
+    }
+
     private static func artworkLookupItem(forPlaylistTrack track: Track) -> LocalMusicCatalogArtworkLookupItem {
         let directArtworkURLString = directArtworkURLString(track.artwork)
         let item = LocalMusicPlaylistTrackArtworkLookup.lookupItem(
@@ -919,36 +1015,38 @@ final class LocalLibraryStore {
     }
 
     private static func catalogArtworkURLString(for item: LocalMusicCatalogArtworkLookupItem) async -> String? {
-        if item.kind == .playlist {
-            if let catalogID = item.catalogID {
-                SonosLog.debug(
-                    .localService,
-                    "Playlist artwork direct catalog lookup start title='\(item.title)' catalogID='\(catalogID)'")
+        if let catalogID = item.catalogID {
+            SonosLog.debug(
+                .localService,
+                "LocalService catalog artwork direct lookup start kind=\(item.kind.cloudType) " +
+                    "title='\(item.title)' catalogID='\(catalogID)'")
 
-                do {
-                    if let urlString = try await AppleMusicCatalogSearchClient.shared.playlistArtworkURLString(
-                        catalogID: catalogID
-                    ) {
-                        SonosLog.debug(
-                            .localService,
-                            "Playlist artwork direct catalog lookup success title='\(item.title)' " +
-                                "catalogID='\(catalogID)' url=\(diagnosticURLStatus(urlString))")
-                        return urlString
-                    }
+            do {
+                if let urlString = try await AppleMusicCatalogSearchClient.shared.artworkURLString(
+                    kind: item.kind,
+                    catalogID: catalogID
+                ) {
                     SonosLog.debug(
                         .localService,
-                        "Playlist artwork direct catalog lookup empty title='\(item.title)' catalogID='\(catalogID)'")
-                } catch {
-                    SonosLog.debug(
-                        .localService,
-                        "Playlist artwork direct catalog lookup failed title='\(item.title)' " +
-                            "catalogID='\(catalogID)' error=\(error)")
+                        "LocalService catalog artwork direct lookup success kind=\(item.kind.cloudType) " +
+                            "title='\(item.title)' catalogID='\(catalogID)' " +
+                            "url=\(diagnosticURLStatus(urlString))")
+                    return urlString
                 }
-            } else {
                 SonosLog.debug(
                     .localService,
-                    "Playlist artwork direct catalog lookup skipped title='\(item.title)' reason=no-catalog-id")
+                    "LocalService catalog artwork direct lookup empty kind=\(item.kind.cloudType) " +
+                        "title='\(item.title)' catalogID='\(catalogID)'")
+            } catch {
+                SonosLog.debug(
+                    .localService,
+                    "LocalService catalog artwork direct lookup failed kind=\(item.kind.cloudType) " +
+                        "title='\(item.title)' catalogID='\(catalogID)' error=\(error)")
             }
+        } else if item.kind == .playlist {
+            SonosLog.debug(
+                .localService,
+                "Playlist artwork direct catalog lookup skipped title='\(item.title)' reason=no-catalog-id")
         }
 
         let term = LocalMusicCatalogMatcher.searchTerm(
@@ -1025,7 +1123,10 @@ final class LocalLibraryStore {
 
     private static func directArtworkURLString(_ artwork: Artwork?) -> String? {
         guard let artwork else { return nil }
-        return LocalMusicArtworkURL.url(for: artwork, shortSidePixels: 400)?.absoluteString
+        return LocalMusicArtworkURL.url(
+            for: artwork,
+            shortSidePixels: LocalMusicArtworkURL.catalogDisplayShortSidePixels
+        )?.absoluteString
     }
 
     private static func diagnosticValue(_ value: String?) -> String {

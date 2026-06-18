@@ -6,7 +6,7 @@ enum DetailArtworkURLSelection {
         responseArtworkURL: String?,
         fallbackArtworkURL: String? = nil
     ) -> String? {
-        [entryArtworkURL, responseArtworkURL, fallbackArtworkURL]
+        [responseArtworkURL, entryArtworkURL, fallbackArtworkURL]
             .lazy
             .compactMap { normalized($0) }
             .first
