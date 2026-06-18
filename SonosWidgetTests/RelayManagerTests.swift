@@ -342,10 +342,10 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(response.status.cs2EntertainmentAreaId, "ent-game")
     }
 
-    func testDisabledHueAmbienceConfigStillReportsSynced() {
+    func testDisabledHueAmbienceConfigStillReportsSynced() async {
         let relay = RelayManager.shared
-        relay.setURL("")
-        defer { relay.setURL("") }
+        await prepareUnavailableRelay(relay)
+        defer { resetRelay(relay) }
 
         relay.updateHueAmbienceRuntimeStatus(
             configured: true,
@@ -369,10 +369,10 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertFalse(relay.shouldDeferLocalHueAmbience)
     }
 
-    func testStreamingReadyRuntimeReportsClipFallbackDetail() {
+    func testStreamingReadyRuntimeReportsClipFallbackDetail() async {
         let relay = RelayManager.shared
-        relay.setURL("")
-        defer { relay.setURL("") }
+        await prepareUnavailableRelay(relay)
+        defer { resetRelay(relay) }
 
         relay.updateHueAmbienceRuntimeStatus(
             configured: true,
@@ -393,5 +393,17 @@ final class RelayManagerTests: XCTestCase {
             "NAS controls Hue Ambience while it is reachable."
         )
         XCTAssertFalse(relay.shouldDeferLocalHueAmbience)
+    }
+
+    private func prepareUnavailableRelay(_ relay: RelayManager) async {
+        relay.setURL("http://127.0.0.1:1")
+        relay.stopPeriodicProbe()
+        await relay.probeNow()
+        relay.stopPeriodicProbe()
+    }
+
+    private func resetRelay(_ relay: RelayManager) {
+        relay.setURL("")
+        relay.stopPeriodicProbe()
     }
 }
