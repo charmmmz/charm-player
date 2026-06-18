@@ -126,6 +126,7 @@ enum SonosLog {
         .localService,
         .navItem,
         .networkAudit,
+        .nowPlaying,
         .playbackLink,
         .playback,
         .playlistDetail,

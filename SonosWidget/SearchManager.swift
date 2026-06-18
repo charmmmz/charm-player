@@ -438,6 +438,7 @@ final class SearchManager {
     }
 
     func prewarmPlaybackArtwork(items: [BrowseItem]) async {
+        PlaybackArtworkRegistry.shared.register(items: items)
         await prewarmPlaybackArtwork(
             urls: PlaybackArtworkPrewarmPolicy.urls(from: items)
         )
@@ -515,8 +516,18 @@ final class SearchManager {
             }
 
             let tracks = response.tracks?.items ?? response.section?.items ?? []
+            let trackItems = tracks.map {
+                makeAlbumTrackItem(
+                    from: $0,
+                    fallbackAlbumTitle: item.title,
+                    fallbackArtist: item.artist,
+                    fallbackArtURL: item.thumbnailArtworkURL,
+                    fallbackServiceId: ids.cloudServiceId,
+                    fallbackAccountId: ids.accountId)
+            }
+            PlaybackArtworkRegistry.shared.register(items: trackItems)
             let urls = PlaybackArtworkPrewarmPolicy.urls(
-                from: tracks.map { $0.images?.tile1x1 },
+                from: trackItems,
                 limit: PlaybackArtworkPrewarmPolicy.defaultLimit)
             await prewarmPlaybackArtwork(urls: urls)
             SonosLog.debug(

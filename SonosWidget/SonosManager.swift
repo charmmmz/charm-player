@@ -1014,7 +1014,14 @@ final class SonosManager {
     }
 
     private func applyQueueResult(_ result: QueueResult) {
-        queue = QueueReorderPolicy.confirmedQueue(result.items, preservingIDsFrom: queue)
+        let resolvedArtwork = PlaybackArtworkRegistry.shared.resolvedQueueItems(result.items)
+        if resolvedArtwork.replacementCount > 0 {
+            SonosLog.debug(
+                .nowPlaying,
+                "Queue artwork registry replaced count=\(resolvedArtwork.replacementCount) " +
+                    "queue=\(result.items.count)")
+        }
+        queue = QueueReorderPolicy.confirmedQueue(resolvedArtwork.items, preservingIDsFrom: queue)
         queueUpdateID = result.updateID
         queueLoaded = true
         pruneQueueReorderStatuses()
