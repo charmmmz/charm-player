@@ -146,9 +146,12 @@ struct QueueView: View {
         }
         .background {
             if reorderStatus != nil {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(accent.opacity(reorderStatus == .syncing ? 0.10 : 0.16))
+                    .padding(.horizontal, -12)
+                    .padding(.vertical, -9)
                     .transition(.opacity)
+                    .allowsHitTesting(false)
             }
         }
         .scaleEffect(isNowPlaying ? 1.05 : 1.0, anchor: .leading)
