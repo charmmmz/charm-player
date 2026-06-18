@@ -117,6 +117,17 @@ final class AlbumDetailPresentationTests: XCTestCase {
         XCTAssertEqual(metrics.contentLeadingInset, metrics.horizontalPadding)
     }
 
+    func testDetailTopControlsUseStableNavigationReplacementMetrics() {
+        XCTAssertEqual(DetailTopControlLayout.buttonDimension, 54)
+        XCTAssertEqual(DetailTopControlLayout.horizontalPadding, 22)
+        XCTAssertEqual(DetailTopControlLayout.topPadding, 8)
+        XCTAssertEqual(DetailTopControlLayout.reservedContentHeight, 44)
+        XCTAssertGreaterThan(
+            DetailTopControlLayout.reservedContentHeight + DetailTopControlLayout.topPadding,
+            DetailTopControlLayout.buttonDimension * 0.9
+        )
+    }
+
     func testEditorialDescriptionPrefersStandardText() {
         XCTAssertEqual(
             EditorialDescriptionPolicy.text(

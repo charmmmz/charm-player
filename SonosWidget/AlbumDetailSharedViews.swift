@@ -1,5 +1,82 @@
 import SwiftUI
 
+enum DetailTopControlLayout {
+    static let buttonDimension: CGFloat = 54
+    static let horizontalPadding: CGFloat = 22
+    static let topPadding: CGFloat = 8
+    static let reservedContentHeight: CGFloat = 44
+}
+
+struct DetailFloatingTopControls<Trailing: View>: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let trailing: Trailing
+
+    init(@ViewBuilder trailing: () -> Trailing) {
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack {
+            DetailTopControlButton(systemImage: "chevron.left", accessibilityTitle: "Back") {
+                dismiss()
+            }
+
+            Spacer(minLength: 24)
+
+            trailing
+        }
+        .padding(.horizontal, DetailTopControlLayout.horizontalPadding)
+        .padding(.top, DetailTopControlLayout.topPadding)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .zIndex(20)
+    }
+}
+
+struct DetailTopControlButton: View {
+    let systemImage: String
+    let accessibilityTitle: String
+    var tint: Color = .white.opacity(0.92)
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            DetailTopControlIcon(systemImage: systemImage, tint: tint)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityTitle)
+    }
+}
+
+struct DetailTopControlIcon: View {
+    let systemImage: String
+    var tint: Color = .white.opacity(0.92)
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Circle().fill(.black.opacity(0.34))
+                }
+                .overlay {
+                    Circle().stroke(.white.opacity(0.08), lineWidth: 1)
+                }
+
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tint)
+        }
+        .frame(
+            width: DetailTopControlLayout.buttonDimension,
+            height: DetailTopControlLayout.buttonDimension
+        )
+        .contentShape(Circle())
+        .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+    }
+}
+
 struct AlbumPrimaryActionBar: View {
     let favoriteKind: AlbumFavoriteKind
     let tint: Color?

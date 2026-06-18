@@ -82,8 +82,13 @@ struct ArtistDetailView: View {
         }
         .background { artistBackground }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Color.clear.frame(height: DetailTopControlLayout.reservedContentHeight)
+        }
+        .overlay(alignment: .top) {
+            DetailFloatingTopControls {
                 favoriteButton
             }
         }
@@ -154,11 +159,13 @@ struct ArtistDetailView: View {
         Button {
             toggleFavorite()
         } label: {
-            Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .font(.body)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(isFavorited ? .pink : .primary)
+            DetailTopControlIcon(
+                systemImage: isFavorited ? "heart.fill" : "heart",
+                tint: isFavorited ? .pink : .white.opacity(0.92)
+            )
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isFavorited ? "Remove from Favorites" : "Add to Favorites")
     }
 
     // MARK: - Header
