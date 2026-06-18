@@ -88,6 +88,7 @@ struct PlaylistDetailView: View {
     }
 
     private func loadCoverImage() async {
+        logArtworkSelection(trigger: "loadCoverImage")
         guard let urlStr = coverURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -99,6 +100,17 @@ struct PlaylistDetailView: View {
         } catch {
             SonosLog.error(.playlistDetail, "Cover image load failed: \(error)")
         }
+    }
+
+    private func logArtworkSelection(trigger: String) {
+        SonosLog.debug(
+            .playlistDetail,
+            "Artwork selection trigger=\(trigger) title='\(playlistItem.title)' " +
+            "rawId=\(SonosLog.playbackLinkValue(playlistItem.id, maxLength: 640)) " +
+            "cloudType='\(playlistItem.cloudType ?? "nil")' " +
+            "entry=\(SonosLog.playbackLinkValue(playlistItem.albumArtURL, maxLength: 640)) " +
+            "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
+            "selected=\(SonosLog.playbackLinkValue(coverURL, maxLength: 640))")
     }
 
     // MARK: - Three-Dot Menu
@@ -538,6 +550,7 @@ struct PlaylistDetailView: View {
             response = try await fetchPage(
                 offset: 0, count: Self.playlistFetchLimit, token: token,
                 householdId: householdId, serviceId: serviceId, accountId: accountId)
+            logArtworkSelection(trigger: "playlistResponse")
             isLoading = false
 
             let total = response?.tracks?.total ?? response?.section?.total ?? 0

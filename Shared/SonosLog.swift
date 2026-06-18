@@ -119,12 +119,15 @@ enum SonosLog {
     #if DEBUG
     private nonisolated static let diagnosticCategories: Set<Category> = [
         .albumDetail,
+        .artistDetail,
         .cloudAPI,
         .cloudSearch,
         .localService,
+        .navItem,
         .networkAudit,
         .playbackLink,
         .playback,
+        .playlistDetail,
         .station,
         .soap
     ]

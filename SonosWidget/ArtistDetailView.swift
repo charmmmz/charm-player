@@ -120,6 +120,7 @@ struct ArtistDetailView: View {
     }
 
     private func loadHeaderImage() async {
+        logArtworkSelection(trigger: "loadHeaderImage")
         guard let urlStr = headerImageURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -131,6 +132,17 @@ struct ArtistDetailView: View {
         } catch {
             SonosLog.error(.artistDetail, "Header image load failed: \(error)")
         }
+    }
+
+    private func logArtworkSelection(trigger: String) {
+        SonosLog.debug(
+            .artistDetail,
+            "Artwork selection trigger=\(trigger) title='\(artistItem.title)' " +
+            "rawId=\(SonosLog.playbackLinkValue(artistItem.id, maxLength: 640)) " +
+            "entry=\(SonosLog.playbackLinkValue(artistItem.albumArtURL, maxLength: 640)) " +
+            "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
+            "fallback=\(SonosLog.playbackLinkValue(resolvedArtistImageURL, maxLength: 640)) " +
+            "selected=\(SonosLog.playbackLinkValue(headerImageURL, maxLength: 640))")
     }
 
     // MARK: - Favorite Toggle (Toolbar)
@@ -460,6 +472,7 @@ struct ArtistDetailView: View {
                 token: token, householdId: householdId,
                 serviceId: serviceId, accountId: accountId,
                 artistId: artistId)
+            logArtworkSelection(trigger: "browseArtistResponse")
             isLoading = false
         } catch is CancellationError {
             SonosLog.debug(.artistDetail, "Load cancelled (tab switch)")
@@ -486,6 +499,7 @@ struct ArtistDetailView: View {
                   !rawResolvedId.isEmpty else { return browseArtistId(from: artistItem.id) }
             let resolvedId = browseArtistId(from: rawResolvedId)
             resolvedArtistImageURL = artistResource.images?.first?.url
+            logArtworkSelection(trigger: "artistIdResolution")
 
             if resolvedId != artistItem.id {
                 SonosLog.debug(.artistDetail, "Resolved Apple Music artist id \(artistItem.id) → \(resolvedId)")
@@ -574,6 +588,7 @@ struct ArtistDetailView: View {
             }
             let correctId = browseArtistId(from: rawCorrectId)
             resolvedArtistImageURL = artistResource.images?.first?.url
+            logArtworkSelection(trigger: "searchFallbackArtistResource")
 
             SonosLog.debug(.artistDetail, "Search fallback: found artistId=\(correctId)")
             do {
@@ -581,6 +596,7 @@ struct ArtistDetailView: View {
                     token: token, householdId: householdId,
                     serviceId: serviceId, accountId: accountId,
                     artistId: correctId)
+                logArtworkSelection(trigger: "searchFallbackBrowseArtistResponse")
                 isLoading = false
             } catch is CancellationError {
                 SonosLog.debug(.artistDetail, "Search fallback cancelled (tab switch)")

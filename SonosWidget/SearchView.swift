@@ -404,6 +404,9 @@ struct SearchView: View {
                 browseCardContent(item, category: category)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "BrowseCard", kind: "album", item: item, nav: nav)
+            })
             .contextMenu { itemContextMenu(item) }
         } else if cat == .artist {
             let nav = artistNavItem(for: item) ?? item
@@ -413,6 +416,9 @@ struct SearchView: View {
                 browseCardContent(item, category: category)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "BrowseCard", kind: "artist", item: item, nav: nav)
+            })
             .contextMenu { itemContextMenu(item) }
         } else if cat == .playlist, let nav = playlistNavItem(for: item) {
             NavigationLink {
@@ -421,6 +427,9 @@ struct SearchView: View {
                 browseCardContent(item, category: category)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "BrowseCard", kind: "playlist", item: item, nav: nav)
+            })
             .contextMenu { itemContextMenu(item) }
         } else if cat == .collection, let nav = collectionNavItem(for: item) {
             NavigationLink {
@@ -429,6 +438,9 @@ struct SearchView: View {
                 browseCardContent(item, category: category)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "BrowseCard", kind: "collection", item: item, nav: nav)
+            })
             .contextMenu { itemContextMenu(item) }
         } else {
             let isLoading = playingItemId == item.id
@@ -579,6 +591,21 @@ struct SearchView: View {
             }
         }
         return nil
+    }
+
+    private func logBrowseNavigation(surface: String, kind: String, item: BrowseItem, nav: BrowseItem) {
+        SonosLog.debug(
+            .navItem,
+            "\(surface) navigation tapped kind=\(kind) title='\(item.title)' " +
+            "favoriteCategory='\(item.favoriteCategory.rawValue)' " +
+            "favoriteId=\(SonosLog.playbackLinkValue(item.cloudFavoriteId, maxLength: 240)) " +
+            "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+            "navId=\(SonosLog.playbackLinkValue(nav.id, maxLength: 640)) " +
+            "itemCloudType='\(item.cloudType ?? "nil")' navCloudType='\(nav.cloudType ?? "nil")' " +
+            "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
+            "navArt=\(SonosLog.playbackLinkValue(nav.albumArtURL, maxLength: 640)) " +
+            "itemURI=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640)) " +
+            "navURI=\(SonosLog.playbackLinkValue(nav.uri, maxLength: 640))")
     }
 
     @ViewBuilder
@@ -756,6 +783,9 @@ struct SearchView: View {
                         browseRowLabel(item, isLoading: false, isDisabled: false)
                     }
                     .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        logBrowseNavigation(surface: "SonosPlaylistsSection", kind: "localPlaylist", item: item, nav: item)
+                    })
                     .contextMenu { itemContextMenu(item) }
                 }
             }
@@ -981,6 +1011,9 @@ struct SearchView: View {
                         .frame(width: 120)
                     }
                     .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        logBrowseNavigation(surface: "ArtistHorizontalScroll", kind: "artist", item: item, nav: item)
+                    })
                     .contextMenu { itemContextMenu(item) }
                 }
             }
@@ -1098,6 +1131,9 @@ struct SearchView: View {
                             albumScrollCard(item)
                         }
                         .buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            logBrowseNavigation(surface: "AlbumHorizontalScroll", kind: "album", item: item, nav: item)
+                        })
                         .contextMenu { itemContextMenu(item) }
                     } else if item.cloudType == "PLAYLIST" {
                         NavigationLink {
@@ -1108,6 +1144,9 @@ struct SearchView: View {
                             albumScrollCard(item)
                         }
                         .buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            logBrowseNavigation(surface: "AlbumHorizontalScroll", kind: "playlist", item: item, nav: item)
+                        })
                         .contextMenu { itemContextMenu(item) }
                     } else {
                         let isLoading = playingItemId == item.id
@@ -1394,6 +1433,9 @@ struct FavoriteCategoryDetailView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "FavoriteCategoryCard", kind: "album", item: item, nav: nav)
+            })
             .contextMenu { contextMenu(item) }
         } else if cat == .artist {
             let nav = artistNavItem(for: item) ?? item
@@ -1403,6 +1445,9 @@ struct FavoriteCategoryDetailView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "FavoriteCategoryCard", kind: "artist", item: item, nav: nav)
+            })
             .contextMenu { contextMenu(item) }
         } else if cat == .playlist, let nav = playlistNavItem(for: item) {
             NavigationLink {
@@ -1411,6 +1456,9 @@ struct FavoriteCategoryDetailView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "FavoriteCategoryCard", kind: "playlist", item: item, nav: nav)
+            })
             .contextMenu { contextMenu(item) }
         } else if cat == .collection, let nav = collectionNavItem(for: item) {
             NavigationLink {
@@ -1419,6 +1467,9 @@ struct FavoriteCategoryDetailView: View {
                 cardContent(item)
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture().onEnded {
+                logBrowseNavigation(surface: "FavoriteCategoryCard", kind: "collection", item: item, nav: nav)
+            })
             .contextMenu { contextMenu(item) }
         } else {
             let isLoading = playingItemId == item.id
@@ -1538,6 +1589,21 @@ struct FavoriteCategoryDetailView: View {
             }
         }
         return nil
+    }
+
+    private func logBrowseNavigation(surface: String, kind: String, item: BrowseItem, nav: BrowseItem) {
+        SonosLog.debug(
+            .navItem,
+            "\(surface) navigation tapped kind=\(kind) title='\(item.title)' " +
+            "favoriteCategory='\(item.favoriteCategory.rawValue)' " +
+            "favoriteId=\(SonosLog.playbackLinkValue(item.cloudFavoriteId, maxLength: 240)) " +
+            "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+            "navId=\(SonosLog.playbackLinkValue(nav.id, maxLength: 640)) " +
+            "itemCloudType='\(item.cloudType ?? "nil")' navCloudType='\(nav.cloudType ?? "nil")' " +
+            "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
+            "navArt=\(SonosLog.playbackLinkValue(nav.albumArtURL, maxLength: 640)) " +
+            "itemURI=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640)) " +
+            "navURI=\(SonosLog.playbackLinkValue(nav.uri, maxLength: 640))")
     }
 
     private func placeholderIcon(for item: BrowseItem) -> String {

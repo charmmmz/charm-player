@@ -1694,6 +1694,9 @@ struct NowPlayingOverlay: View {
                             .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     }
                     .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        logPlayerNavigation(kind: "artist", item: artistNav)
+                    })
                 } else {
                     Text(manager.trackInfo?.artist ?? "—")
                         .font(.body).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
@@ -1709,6 +1712,9 @@ struct NowPlayingOverlay: View {
                             .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
                     }
                     .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        logPlayerNavigation(kind: "album", item: albumNav)
+                    })
                 } else {
                     Text(manager.trackInfo?.album ?? "")
                         .font(.subheadline).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
@@ -1719,6 +1725,21 @@ struct NowPlayingOverlay: View {
     }
 
     // MARK: - Now Playing Navigation
+
+    private func logPlayerNavigation(kind: String, item: BrowseItem) {
+        SonosLog.debug(
+            .navItem,
+            "Player navigation tapped kind=\(kind) " +
+            "track='\(manager.trackInfo?.title ?? "nil")' " +
+            "artist='\(manager.trackInfo?.artist ?? "nil")' " +
+            "album='\(manager.trackInfo?.album ?? "nil")' " +
+            "itemId=\(SonosLog.playbackLinkValue(item.id, maxLength: 640)) " +
+            "cloudType='\(item.cloudType ?? "nil")' serviceId=\(item.serviceId.map(String.init) ?? "nil") " +
+            "itemArt=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 640)) " +
+            "nowPlayingArt=\(SonosLog.playbackLinkValue(nowPlayingInfo?.images?.tile1x1, maxLength: 640)) " +
+            "trackInfoArt=\(SonosLog.playbackLinkValue(manager.trackInfo?.albumArtURL, maxLength: 640)) " +
+            "uri=\(SonosLog.playbackLinkValue(item.uri, maxLength: 640))")
+    }
 
     private var currentAppleMusicTrackResource: AppleMusicFavoriteResource? {
         guard manager.trackInfo?.source == .appleMusic else { return nil }

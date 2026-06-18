@@ -91,6 +91,7 @@ struct AlbumDetailView: View {
     }
 
     private func loadCoverImage() async {
+        logArtworkSelection(trigger: "loadCoverImage")
         guard let urlStr = coverURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -104,6 +105,17 @@ struct AlbumDetailView: View {
         } catch {
             SonosLog.error(.albumDetail, "Cover image load failed: \(error)")
         }
+    }
+
+    private func logArtworkSelection(trigger: String) {
+        SonosLog.debug(
+            .albumDetail,
+            "Artwork selection trigger=\(trigger) title='\(albumItem.title)' " +
+            "rawId=\(SonosLog.playbackLinkValue(albumItem.id, maxLength: 640)) " +
+            "entry=\(SonosLog.playbackLinkValue(albumItem.albumArtURL, maxLength: 640)) " +
+            "response=\(SonosLog.playbackLinkValue(response?.images?.tile1x1, maxLength: 640)) " +
+            "fallback=\(SonosLog.playbackLinkValue(response?.tracks?.items?.first?.images?.tile1x1, maxLength: 640)) " +
+            "selected=\(SonosLog.playbackLinkValue(coverURL, maxLength: 640))")
     }
 
     // MARK: - Three-Dot Menu
@@ -461,6 +473,7 @@ struct AlbumDetailView: View {
                 token: token, householdId: householdId,
                 serviceId: serviceId, accountId: accountId,
                 albumId: browseAlbumId)
+            logArtworkSelection(trigger: "browseAlbumResponse")
             isLoading = false
         } catch is CancellationError {
             SonosLog.debug(.albumDetail, "Load cancelled (tab switch)")
