@@ -204,6 +204,19 @@ final class SearchManager {
     /// without ever visiting the Browse tab — otherwise `isFavorited` always
     /// returns false because `favorites` is still empty.
     private(set) var hasLoadedBrowseContent = false
+    private var lastBrowseLoadKey: String?
+    private var lastBrowseLoadedAt: Date?
+
+    var hasBrowseDisplayContent: Bool {
+        hasLoadedBrowseContent || !favorites.isEmpty || !playlists.isEmpty || !radio.isEmpty || !recentlyPlayed.isEmpty
+    }
+
+    var showsBlockingBrowseLoader: Bool {
+        BrowseRefreshPolicy.showsBlockingLoader(
+            isLoading: isLoadingBrowse,
+            hasLoadedContent: hasBrowseDisplayContent
+        )
+    }
 
     init() {
         restoreCachedAccounts()
@@ -1006,9 +1019,25 @@ final class SearchManager {
     /// radio don't have first-class Cloud endpoints in the app yet, so those
     /// sections stay empty in remote mode (the UI hides them).
     func loadBrowseContent(cloudMode: Bool = false,
-                           cloudContext: CloudContext? = nil) async {
+                           cloudContext: CloudContext? = nil,
+                           forceRefresh: Bool = false) async {
+        let loadKey = browseLoadKey(cloudMode: cloudMode, cloudContext: cloudContext)
+        if BrowseRefreshPolicy.shouldSkipLoad(
+            forceRefresh: forceRefresh,
+            isLoading: isLoadingBrowse,
+            currentKey: loadKey,
+            lastLoadedKey: lastBrowseLoadKey,
+            lastLoadedAt: lastBrowseLoadedAt
+        ) {
+            return
+        }
+
         isLoadingBrowse = true
         errorMessage = nil
+        defer {
+            isLoadingBrowse = false
+            hasLoadedBrowseContent = true
+        }
 
         if cloudMode, let ctx = cloudContext {
             // Log the failure path explicitly — silently swallowing the
@@ -1038,8 +1067,20 @@ final class SearchManager {
             }
         }
 
-        isLoadingBrowse = false
-        hasLoadedBrowseContent = true
+        if errorMessage == nil {
+            lastBrowseLoadKey = loadKey
+            lastBrowseLoadedAt = Date()
+        }
+    }
+
+    private func browseLoadKey(cloudMode: Bool, cloudContext: CloudContext?) -> String? {
+        if cloudMode {
+            guard let cloudContext else { return nil }
+            return "cloud|\(cloudContext.householdId)|\(cloudContext.groupId)"
+        }
+
+        guard let speakerIP, !speakerIP.isEmpty else { return nil }
+        return "lan|\(speakerIP)"
     }
 
     /// One-shot Browse content loader for callers outside the Search/Browse

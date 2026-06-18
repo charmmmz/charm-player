@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 import UIKit
 
@@ -11,7 +12,10 @@ struct SearchView: View {
     @State private var playingItemId: String?
     @State private var favoriteSheetItem: BrowseItem?
     @State private var isReconnectingSonos = false
+    @State private var pullRefreshController = BrowsePullRefreshController()
     @Bindable private var auth = SonosAuth.shared
+
+    private let browseScrollCoordinateSpaceName = "browse-scroll"
 
     var body: some View {
         NavigationStack {
@@ -76,12 +80,12 @@ struct SearchView: View {
             .onChange(of: manager.selectedSpeaker?.ipAddress) { _, _ in
                 searchManager.configure(speakerIP: manager.selectedSpeaker?.playbackIP)
                 searchManager.resetProbe()
-                Task { await loadBrowseForCurrentBackend() }
+                Task { await loadBrowseForCurrentBackend(forceRefresh: true) }
             }
             .onChange(of: manager.transportBackend) { _, _ in
                 // Flipping between LAN and Cloud changes where Sonos Favorites
                 // come from. Re-load so the list matches the active backend.
-                Task { await loadBrowseForCurrentBackend() }
+                Task { await loadBrowseForCurrentBackend(forceRefresh: true) }
             }
             .onChange(of: manager.currentCloudGroupId) { _, gid in
                 // Cloud group id resolves asynchronously after the backend
@@ -89,7 +93,7 @@ struct SearchView: View {
                 // the initial `loadBrowseForCurrentBackend()` call took the
                 // LAN fallback with an empty IP and silently left the page
                 // blank. Re-fire as soon as the id is ready.
-                if gid != nil { Task { await loadBrowseForCurrentBackend() } }
+                if gid != nil { Task { await loadBrowseForCurrentBackend(forceRefresh: true) } }
             }
             .confirmationDialog("Start Station",
                                 isPresented: $searchManager.showStationPicker,
@@ -159,7 +163,7 @@ struct SearchView: View {
                 await manager.refreshState()
                 await searchManager.forceReprobe()
                 if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    await loadBrowseForCurrentBackend()
+                    await loadBrowseForCurrentBackend(forceRefresh: true)
                 } else {
                     searchManager.search(query: searchText)
                 }
@@ -179,7 +183,7 @@ struct SearchView: View {
     /// leave the page blank. When cloud prerequisites (token, household id,
     /// group id) aren't ready yet, we bail and rely on the `onChange`
     /// handlers above to re-fire once they resolve.
-    private func loadBrowseForCurrentBackend() async {
+    private func loadBrowseForCurrentBackend(forceRefresh: Bool = false) async {
         switch manager.transportBackend {
         case .cloud:
             guard let token = await SonosAuth.shared.validAccessToken(),
@@ -196,9 +200,10 @@ struct SearchView: View {
             guard let gid = manager.currentCloudGroupId else { return }
             await searchManager.loadBrowseContent(
                 cloudMode: true,
-                cloudContext: .init(token: token, householdId: householdId, groupId: gid))
+                cloudContext: .init(token: token, householdId: householdId, groupId: gid),
+                forceRefresh: forceRefresh)
         case .lan:
-            await searchManager.loadBrowseContent()
+            await searchManager.loadBrowseContent(forceRefresh: forceRefresh)
         case .unknown:
             // Backend probe hasn't finished yet — `onChange(transportBackend)`
             // re-triggers this func once it flips to .lan or .cloud.
@@ -236,8 +241,16 @@ struct SearchView: View {
 
     private var browseContent: some View {
         ScrollView {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BrowsePullDistancePreferenceKey.self,
+                    value: max(0, Double(proxy.frame(in: .named(browseScrollCoordinateSpaceName)).minY))
+                )
+            }
+            .frame(height: 0)
+
             VStack(alignment: .leading, spacing: 24) {
-                if searchManager.isLoadingBrowse {
+                if searchManager.showsBlockingBrowseLoader {
                     HStack {
                         Spacer()
                         ProgressView("Loading…")
@@ -281,7 +294,20 @@ struct SearchView: View {
             }
             .padding(.vertical)
         }
+        .coordinateSpace(name: browseScrollCoordinateSpaceName)
         .scrollDismissesKeyboard(.immediately)
+        .onPreferenceChange(BrowsePullDistancePreferenceKey.self) { distance in
+            pullRefreshController.handle(
+                distance: distance,
+                isExternalRefreshActive: searchManager.isLoadingBrowse,
+                hasLoaded: searchManager.hasLoadedBrowseContent
+            ) {
+                await loadBrowseForCurrentBackend(forceRefresh: true)
+            }
+        }
+        .overlay(alignment: .top) {
+            BrowsePullRefreshIndicator(controller: pullRefreshController)
+        }
     }
 
     // MARK: - Recently Played Section
@@ -1282,6 +1308,116 @@ struct SearchView: View {
                 }
             }
         }
+    }
+}
+
+private enum BrowsePullRefreshPolicy {
+    static let triggerDistance = LocalLibraryPullRefreshPolicy.triggerDistance
+    static let resetDistance = LocalLibraryPullRefreshPolicy.resetDistance
+
+    static func shouldTrigger(
+        pullDistance: Double,
+        isRefreshing: Bool,
+        hasLoaded: Bool,
+        hasTriggeredInCurrentPull: Bool = false
+    ) -> Bool {
+        hasLoaded && !isRefreshing && !hasTriggeredInCurrentPull && pullDistance >= triggerDistance
+    }
+
+    static func shouldResetGesture(pullDistance: Double) -> Bool {
+        pullDistance < resetDistance
+    }
+
+    static func indicatorOpacity(pullDistance: Double, isRefreshing: Bool) -> Double {
+        LocalLibraryPullRefreshPolicy.indicatorOpacity(
+            pullDistance: pullDistance,
+            isRefreshing: isRefreshing
+        )
+    }
+}
+
+@MainActor
+@Observable
+private final class BrowsePullRefreshController {
+    private(set) var pullDistance = 0.0
+    private(set) var isRefreshing = false
+
+    @ObservationIgnored private var hasTriggeredInCurrentPull = false
+
+    var indicatorOpacity: Double {
+        BrowsePullRefreshPolicy.indicatorOpacity(
+            pullDistance: pullDistance,
+            isRefreshing: isRefreshing
+        )
+    }
+
+    func handle(
+        distance: Double,
+        isExternalRefreshActive: Bool,
+        hasLoaded: Bool,
+        onRefresh: @escaping @MainActor () async -> Void
+    ) {
+        if abs(distance - pullDistance) >= 1 || distance == 0 {
+            pullDistance = distance
+        }
+
+        if BrowsePullRefreshPolicy.shouldResetGesture(pullDistance: distance) {
+            hasTriggeredInCurrentPull = false
+        }
+
+        guard BrowsePullRefreshPolicy.shouldTrigger(
+            pullDistance: distance,
+            isRefreshing: isRefreshing || isExternalRefreshActive,
+            hasLoaded: hasLoaded,
+            hasTriggeredInCurrentPull: hasTriggeredInCurrentPull
+        ) else {
+            return
+        }
+
+        trigger(onRefresh: onRefresh)
+    }
+
+    private func trigger(onRefresh: @escaping @MainActor () async -> Void) {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        hasTriggeredInCurrentPull = true
+
+        Task { @MainActor [weak self] in
+            await onRefresh()
+            guard let self else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                isRefreshing = false
+                pullDistance = 0
+            }
+        }
+    }
+}
+
+private struct BrowsePullRefreshIndicator: View {
+    let controller: BrowsePullRefreshController
+
+    var body: some View {
+        let opacity = controller.indicatorOpacity
+
+        ProgressView()
+            .progressViewStyle(.circular)
+            .controlSize(.regular)
+            .tint(.white.opacity(0.74))
+            .padding(10)
+            .background(.black.opacity(0.18), in: Circle())
+            .opacity(opacity)
+            .scaleEffect(0.86 + (0.14 * opacity))
+            .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.16), value: opacity)
+            .padding(.top, 8)
+    }
+}
+
+private struct BrowsePullDistancePreferenceKey: PreferenceKey {
+    static var defaultValue = 0.0
+
+    static func reduce(value: inout Double, nextValue: () -> Double) {
+        value = max(value, nextValue())
     }
 }
 
