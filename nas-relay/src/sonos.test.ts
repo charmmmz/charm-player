@@ -480,6 +480,42 @@ test('bridge snapshots TV soundbar EQ controls', async () => {
   assert.equal(snapshot?.soundbarSpeechEnhancementRawLevel, 3);
 });
 
+test('bridge snapshots TV audio format from HTAudioIn instead of music quality metadata', async () => {
+  const calls: Array<{ host: string; playerId: string }> = [];
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackQuality: async ({ host, playerId }) => {
+        calls.push({ host, playerId });
+        return {
+          label: 'Lossless',
+          serviceName: 'Apple Music',
+          lossless: true,
+          immersive: false,
+          bitDepth: 16,
+          sampleRate: 44_100,
+        };
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    DevicePropertiesService: {
+      GetZoneInfo: async () => ({ HTAudioIn: 63 }),
+    },
+  }, tvPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.playbackSourceRaw, 'tv');
+  assert.equal(snapshot?.audioQualityLabel, 'Dolby Atmos · MAT');
+  assert.deepEqual(calls, []);
+});
+
 test('bridge writes Night Sound through RenderingControl EQ', async () => {
   const bridge = testBridge();
   const calls: unknown[] = [];

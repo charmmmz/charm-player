@@ -154,7 +154,7 @@ struct ToggleSpeechEnhancementIntent: LiveActivityIntent {
         guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
         let currentLevel = SpeechEnhancementLevel.from(
             rawLevel: SharedStorage.cachedSoundbarSpeechEnhancementRawLevel)
-        let nextLevel: SpeechEnhancementLevel = currentLevel.isOn ? .off : .low
+        let nextLevel = currentLevel.nextCyclicLevel
         SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = nextLevel.rawValue
         await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: nextLevel)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")

@@ -37,6 +37,16 @@ enum SpeechEnhancementLevel: Int, Codable, Sendable, CaseIterable {
 
     var isOn: Bool { self != .off }
 
+    var nextCyclicLevel: SpeechEnhancementLevel {
+        switch self {
+        case .off:    return .low
+        case .low:    return .medium
+        case .medium: return .high
+        case .high:   return .max
+        case .max:    return .off
+        }
+    }
+
     /// Map an arbitrary int to the closest valid level. Older bars echo back
     /// `1` as "on"; we treat that as `.low` which is functionally how the
     /// Sonos app rendered the legacy on-state when re-paired with Arc Ultra.

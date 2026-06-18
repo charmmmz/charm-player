@@ -89,6 +89,10 @@ interface SonosLocalPlaybackMetadata {
   } | null;
 }
 
+interface SonosZoneInfo {
+  HTAudioIn?: number | string | null;
+}
+
 const SONOS_LOCAL_CONTROL_PORT = 1443;
 const SONOS_LOCAL_CONTROL_API_KEY = '12345678-abcd-1234-5678-123456789000';
 
@@ -200,15 +204,15 @@ export class SonosBridge extends EventEmitter {
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
   private readonly eventRefreshTimers = new Map<string, NodeJS.Timeout>();
   private periodicHandle: NodeJS.Timeout | null = null;
-
-  constructor(log: Logger, options: SonosBridgeOptions = {}) {
-    super();
-    this.log = log.child({ module: 'sonos' });
   private discoveryState: SonosDiscoveryState = {
     mode: 'auto',
     status: 'idle',
     error: null,
   };
+
+  constructor(log: Logger, options: SonosBridgeOptions = {}) {
+    super();
+    this.log = log.child({ module: 'sonos' });
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
@@ -264,10 +268,6 @@ export class SonosBridge extends EventEmitter {
     }, 60_000);
   }
 
-  stop(): void {
-    if (this.periodicHandle) clearInterval(this.periodicHandle);
-    for (const timer of this.transitionSettleRefreshTimers.values()) {
-      clearTimeout(timer);
   private async startFromSeed(seedIp: string): Promise<boolean> {
     this.log.info({ seedIp }, 'discovering Sonos household via seed IP');
     return this.manager.InitializeFromDevice(seedIp);
@@ -279,6 +279,10 @@ export class SonosBridge extends EventEmitter {
     return this.manager.InitializeWithDiscovery(timeoutSeconds);
   }
 
+  stop(): void {
+    if (this.periodicHandle) clearInterval(this.periodicHandle);
+    for (const timer of this.transitionSettleRefreshTimers.values()) {
+      clearTimeout(timer);
     }
     this.transitionSettleRefreshTimers.clear();
     for (const timer of this.eventRefreshTimers.values()) {
@@ -454,10 +458,15 @@ export class SonosBridge extends EventEmitter {
         position.TrackMetaData,
         playbackSourceRaw,
       );
-      const localQuality = await this.localControlPlaybackQuality(coordinator, device);
-      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
-      if (localQuality?.label) {
-        audioQualityLabel = localQuality.label;
+      if (playbackSourceRaw === 'tv') {
+        audioQualityLabel = await this.tvAudioQualityLabelForSnapshot(coordinator) ?? audioQualityLabel;
+        if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+      } else {
+        const localQuality = await this.localControlPlaybackQuality(coordinator, device);
+        if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+        if (localQuality?.label) {
+          audioQualityLabel = localQuality.label;
+        }
       }
       const soundbarEQ = await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw);
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
@@ -701,6 +710,19 @@ export class SonosBridge extends EventEmitter {
     };
   }
 
+  private async tvAudioQualityLabelForSnapshot(coordinator: unknown): Promise<string | null> {
+    const service = devicePropertiesService(coordinator);
+    if (!service || typeof service.GetZoneInfo !== 'function') return null;
+    try {
+      const response = await service.GetZoneInfo();
+      const rawCode = Number(response?.HTAudioIn);
+      if (!Number.isFinite(rawCode)) return null;
+      return tvAudioFormatGeekLabel(Math.round(rawCode));
+    } catch {
+      return null;
+    }
+  }
+
   private async getEQLevel(coordinator: unknown, eqType: string): Promise<number | null> {
     const service = renderingControlService(coordinator);
     if (!service || typeof service.GetEQ !== 'function') return null;
@@ -834,6 +856,73 @@ function renderingControlService(coordinator: unknown): {
   };
   return candidate;
 }
+
+function devicePropertiesService(coordinator: unknown): {
+  GetZoneInfo?: () => Promise<SonosZoneInfo>;
+} | null {
+  if (!coordinator || typeof coordinator !== 'object') return null;
+  const service = (coordinator as { DevicePropertiesService?: unknown }).DevicePropertiesService;
+  if (!service || typeof service !== 'object') return null;
+  return service as { GetZoneInfo?: () => Promise<SonosZoneInfo> };
+}
+
+function tvAudioFormatGeekLabel(code: number): string {
+  const label = tvAudioFormatLabel(code);
+  const codec = tvAudioFormatCodec(label);
+  const channelLayout = tvAudioFormatIsAtmos(label)
+    ? null
+    : ['7.1', '5.1', '2.0'].find(layout => label.includes(layout)) ?? null;
+  return [codec, channelLayout].filter(Boolean).join(' · ');
+}
+
+function tvAudioFormatLabel(code: number): string {
+  return tvAudioFormatLabels[code] ?? `Unknown (code: ${code})`;
+}
+
+function tvAudioFormatIsAtmos(label: string): boolean {
+  return label.toLowerCase().includes('atmos');
+}
+
+function tvAudioFormatCodec(label: string): string {
+  if (label.includes('Atmos (TrueHD)')) return 'Dolby Atmos · TrueHD';
+  if (label.includes('Atmos (DD+)')) return 'Dolby Atmos · DD+';
+  if (label.includes('Atmos (MAT 2.0)')) return 'Dolby Atmos · MAT';
+  if (label.includes('Dolby TrueHD')) return 'Dolby TrueHD';
+  if (label.includes('Dolby Digital Plus')) return 'Dolby Digital+';
+  if (label.includes('Dolby Multichannel PCM')) return 'Multichannel PCM';
+  if (label.includes('Multichannel PCM')) return 'Multichannel PCM';
+  if (label.includes('Dolby')) return 'Dolby Digital';
+  if (label.includes('DTS')) return 'DTS';
+  if (label.startsWith('PCM')) return 'PCM';
+  if (label === 'Stereo') return 'Stereo PCM';
+  return label;
+}
+
+const tvAudioFormatLabels: Record<number, string> = {
+  0: 'No input connected',
+  2: 'Stereo',
+  7: 'Dolby 2.0',
+  18: 'Dolby 5.1',
+  21: 'No input',
+  22: 'No audio',
+  59: 'Dolby Atmos (DD+)',
+  61: 'Dolby Atmos (TrueHD)',
+  63: 'Dolby Atmos (MAT 2.0)',
+  33554434: 'PCM 2.0',
+  33554454: 'PCM 2.0 no audio',
+  33554488: 'Dolby 2.0',
+  33554490: 'Dolby Digital Plus 2.0',
+  33554492: 'Dolby TrueHD 2.0',
+  33554494: 'Dolby Multichannel PCM 2.0',
+  84934658: 'Multichannel PCM 5.1',
+  84934713: 'Dolby 5.1',
+  84934714: 'Dolby Digital Plus 5.1',
+  84934716: 'Dolby TrueHD 5.1',
+  84934718: 'Dolby Multichannel PCM 5.1',
+  84934721: 'DTS 5.1',
+  118489090: 'Multichannel PCM 7.1',
+  118489146: 'Dolby Digital Plus 7.1',
+};
 
 export function albumArtUriFromMetadata(metadata: unknown): string | null {
   return trackMetadataFromMetadata(metadata).albumArtUri;

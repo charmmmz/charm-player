@@ -235,6 +235,14 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertTrue(state.isSoundbarNightModeEnabled)
     }
 
+    func testSpeechEnhancementLevelCyclesThroughAllTVLevels() {
+        XCTAssertEqual(SpeechEnhancementLevel.off.nextCyclicLevel, .low)
+        XCTAssertEqual(SpeechEnhancementLevel.low.nextCyclicLevel, .medium)
+        XCTAssertEqual(SpeechEnhancementLevel.medium.nextCyclicLevel, .high)
+        XCTAssertEqual(SpeechEnhancementLevel.high.nextCyclicLevel, .max)
+        XCTAssertEqual(SpeechEnhancementLevel.max.nextCyclicLevel, .off)
+    }
+
     func testTVLiveActivityTitleReplacesPlaybackPlaceholder() {
         let state = SonosActivityAttributes.ContentState(
             trackTitle: "Not Playing",

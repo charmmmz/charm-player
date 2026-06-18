@@ -65,10 +65,7 @@ struct SonosLiveActivity: Widget {
                     VStack(spacing: 8) {
                         LiveProgressView(state: context.state)
                         if context.state.isTVSource {
-                            TVSoundbarControlsView(
-                                state: context.state,
-                                accent: accent,
-                                compact: false)
+                            TVRemoteControlsView(state: context.state, accent: accent)
                         } else {
                             HStack(spacing: 40) {
                                 if context.state.isLiveStream {
@@ -356,11 +353,7 @@ private struct WidgetTVRemoteLockScreenView: View {
 
             LiveProgressView(state: state)
 
-            HStack(spacing: 10) {
-                TVSoundbarControlsView(state: state, accent: accent, compact: false)
-                Spacer(minLength: 0)
-                TVInputPill(accent: accent)
-            }
+            TVRemoteControlsView(state: state, accent: accent)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 13)
@@ -492,29 +485,33 @@ private struct WidgetTransportControlsView: View {
     }
 }
 
-private struct TVInputPill: View {
+private struct TVRemoteControlsView: View {
+    let state: SonosActivityAttributes.ContentState
     let accent: Color
 
     var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(accent)
-                .frame(width: 6, height: 6)
-            Text("TV")
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .tracking(1)
+        HStack(spacing: 12) {
+            Button(intent: VolumeDownIntent()) {
+                Image(systemName: "speaker.minus.fill")
+                    .font(.caption2.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.52))
+
+            Spacer(minLength: 0)
+
+            TVSoundbarControlsView(state: state, accent: accent, compact: false)
+
+            Spacer(minLength: 0)
+
+            Button(intent: VolumeUpIntent()) {
+                Image(systemName: "speaker.plus.fill")
+                    .font(.caption2.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.52))
         }
-        .foregroundStyle(.white.opacity(0.86))
-        .padding(.horizontal, 10)
         .frame(height: 34)
-        .background {
-            Capsule()
-                .fill(.white.opacity(0.09))
-        }
-        .overlay {
-            Capsule()
-                .stroke(accent.opacity(0.42), lineWidth: 1)
-        }
     }
 }
 
