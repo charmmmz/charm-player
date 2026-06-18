@@ -511,6 +511,45 @@ test('CS2 lighting service logs render error causes for Hue streaming failures',
   }
 });
 
+test('CS2 lighting service cools down repeated render attempts after sidecar connection failure', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'cs2-lighting-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(config);
+    let nowMs = new Date('2026-05-12T09:30:00.000Z').getTime();
+    const logger = new RecordingCs2LightingLogger();
+    const renderer = new CountingThrowingHueAmbienceRenderer(new Error('fetch failed', {
+      cause: new Error('connect ECONNREFUSED 127.0.0.1:8788'),
+    }));
+    const service = new Cs2LightingService(
+      store,
+      () => renderer,
+      {
+        logger,
+        now: () => nowMs,
+        renderFailureCooldownMs: 10_000,
+      },
+    );
+
+    await service.receive(snapshot({
+      player: { state: { health: 100, burning: 0, flashed: 0, round_kills: 1 } },
+    }));
+    nowMs += 1_000;
+    await service.receive(snapshot({
+      player: { state: { health: 100, burning: 0, flashed: 0, round_kills: 2 } },
+    }));
+
+    assert.equal(renderer.renderCount, 1);
+    assert.equal(logger.warnRecords.length, 1);
+    assert.equal(
+      service.status().fallbackReason,
+      'render_error:fetch failed: connect ECONNREFUSED 127.0.0.1:8788',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('CS2 lighting service releases renderer when initial streaming start fails', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'cs2-lighting-'));
   try {
@@ -1537,6 +1576,19 @@ class ThrowingHueAmbienceRenderer implements HueAmbienceRenderer {
   constructor(private readonly error: Error) {}
 
   async render(_frame: HueAmbienceFrame): Promise<{ transport: 'clipFallback' | 'entertainmentStreaming' }> {
+    throw this.error;
+  }
+
+  async stop(_frame: HueAmbienceFrame): Promise<void> {}
+}
+
+class CountingThrowingHueAmbienceRenderer implements HueAmbienceRenderer {
+  renderCount = 0;
+
+  constructor(private readonly error: Error) {}
+
+  async render(_frame: HueAmbienceFrame): Promise<{ transport: 'clipFallback' | 'entertainmentStreaming' }> {
+    this.renderCount += 1;
     throw this.error;
   }
 

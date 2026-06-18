@@ -68,6 +68,7 @@ interface Cs2LightingLogger {
 interface Cs2LightingServiceOptions {
   activeTimeoutMs?: number;
   minRenderIntervalMs?: number;
+  renderFailureCooldownMs?: number;
   streamKeepaliveIntervalMs?: number;
   beforeRender?: () => Promise<void> | void;
   now?: () => number;
@@ -81,6 +82,7 @@ interface Cs2HueRendererFactoryOptions {
 
 const defaultActiveTimeoutMs = 60_000;
 const defaultMinRenderIntervalMs = 70;
+const defaultRenderFailureCooldownMs = 5_000;
 const defaultStreamKeepaliveIntervalMs = 2_000;
 const animationFrameIntervalMs = 16;
 const c4FuseMs = 40_000;
@@ -172,6 +174,7 @@ export class Cs2LightingService {
   private bombPlantedAtByProvider = new Map<string, number>();
   private activeProviderSteamId: string | null = null;
   private lastDiagnosticSignature: string | null = null;
+  private renderFailureCooldownUntilMs = 0;
 
   constructor(
     private readonly store: HueAmbienceConfigStore,
@@ -233,6 +236,9 @@ export class Cs2LightingService {
       && now - this.lastRenderAttemptAt < (this.options.minRenderIntervalMs ?? defaultMinRenderIntervalMs)) {
       return;
     }
+    if (this.isRenderFailureCoolingDown(now)) {
+      return;
+    }
 
     this.lastRenderAttemptAt = now;
     this.lastRenderSignature = signature;
@@ -247,6 +253,7 @@ export class Cs2LightingService {
         this.schedulePresetAnimation(effectiveSnapshot.providerSteamId, config, targets);
       }
     } catch (err) {
+      this.startRenderFailureCooldown(now);
       this.clearActive(true);
       this.fallbackReason = `render_error:${errorMessageWithCauses(err)}`;
       await this.logLightingRenderError(effectiveSnapshot, backgroundDecision, overlayDecision, decision, this.fallbackReason);
@@ -374,6 +381,7 @@ export class Cs2LightingService {
     this.activeMode = decision.mode;
     this.activeTransport = result.transport;
     this.fallbackReason = null;
+    this.renderFailureCooldownUntilMs = 0;
     if (providerSteamId) {
       this.displayedDecisionByProvider.set(providerSteamId, decision);
     }
@@ -535,6 +543,7 @@ export class Cs2LightingService {
     } catch (err) {
       const snapshot = this.previousByProvider.get(providerSteamId);
       const decision = this.displayedDecisionByProvider.get(providerSteamId);
+      this.startRenderFailureCooldown(nowMs);
       this.clearActive(true);
       this.fallbackReason = `render_error:${errorMessageWithCauses(err)}`;
       if (snapshot && decision) {
@@ -549,6 +558,16 @@ export class Cs2LightingService {
     return this.heldEffects.has(providerSteamId)
       || this.backgroundTransitions.has(providerSteamId)
       || isAnimatedBackgroundDecision(decision);
+  }
+
+  private isRenderFailureCoolingDown(nowMs: number): boolean {
+    return nowMs < this.renderFailureCooldownUntilMs;
+  }
+
+  private startRenderFailureCooldown(nowMs: number): void {
+    const cooldownMs = this.options.renderFailureCooldownMs ?? defaultRenderFailureCooldownMs;
+    if (cooldownMs <= 0) return;
+    this.renderFailureCooldownUntilMs = nowMs + cooldownMs;
   }
 
   private updateBombClock(
