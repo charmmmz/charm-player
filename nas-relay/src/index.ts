@@ -33,6 +33,7 @@ import {
   shouldForceLiveActivityCalibration,
 } from './liveActivityPushPolicy.js';
 import { snapshotJson } from './relaySnapshotJson.js';
+import { publishRelayBonjour, type RelayBonjourAdvertisement } from './bonjour.js';
 import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
 
 const log = pino({
@@ -41,15 +42,12 @@ const log = pino({
 });
 
 const RELAY_PORT = Number(process.env.RELAY_PORT ?? 8787);
-const SEED_IP = process.env.SONOS_SEED_IP;
+const SEED_IP = process.env.SONOS_SEED_IP?.trim() || undefined;
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data';
 const CS2_LIGHTING_LOG_PATH = process.env.CS2_LIGHTING_LOG_PATH
   ?? path.join(DATA_DIR, 'cs2-lighting.jsonl');
-
-if (!SEED_IP) {
-  log.fatal('SONOS_SEED_IP is required (any always-on speaker IP on the LAN)');
-  process.exit(1);
-}
+const DEFAULT_APNS_BUNDLE_ID = 'com.charm.SonosWidget';
+const DEFAULT_APNS_TEAM_ID = '3MSS7DJGVR';
 
 async function main(): Promise<void> {
   // ---- core wiring ------------------------------------------------------
@@ -77,17 +75,17 @@ async function main(): Promise<void> {
 
   const apns = await ApnsClient.create(
     {
-      bundleId: process.env.APNS_BUNDLE_ID ?? 'com.charm.SonosWidget',
+      bundleId: process.env.APNS_BUNDLE_ID ?? DEFAULT_APNS_BUNDLE_ID,
       keyPath: process.env.APNS_KEY_PATH ?? path.join(DATA_DIR, 'apns.p8'),
       keyId: process.env.APNS_KEY_ID ?? '',
-      teamId: process.env.APNS_TEAM_ID ?? '',
+      teamId: process.env.APNS_TEAM_ID ?? DEFAULT_APNS_TEAM_ID,
       production: (process.env.APNS_PRODUCTION ?? 'false') === 'true',
     },
     log,
   );
 
   const sonos = new SonosBridge(log);
-  await sonos.start(SEED_IP!);
+  await sonos.start(SEED_IP);
   const liveActivityPreferences = new LiveActivityPreferenceStore();
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
 
@@ -237,6 +235,12 @@ async function main(): Promise<void> {
     const hueEntertainmentStatus = await hueAmbience.entertainmentStatus();
     res.json({
       ok: true,
+      sonos: {
+        discoveryMode: sonos.discovery.mode,
+        discoveryStatus: sonos.discovery.status,
+        discoveryError: sonos.discovery.error,
+      },
+      apns: apns.status(),
       groups: sonos.allSnapshots().map(s => ({
         groupId: s.groupId,
         speakerName: s.speakerName,
@@ -464,13 +468,16 @@ async function main(): Promise<void> {
   });
 
   // ---- listen + shutdown -----------------------------------------------
+  let relayBonjour: RelayBonjourAdvertisement | null = null;
   const server = app.listen(RELAY_PORT, () => {
     log.info({ port: RELAY_PORT }, 'relay HTTP listening');
+    relayBonjour = publishRelayBonjour(RELAY_PORT, log.child({ module: 'bonjour' }));
   });
 
   const shutdown = (signal: string) => {
     log.info({ signal }, 'shutting down');
     server.close();
+    relayBonjour?.stop();
     sonos.stop();
     void hueAmbience.stop();
     apns.shutdown();

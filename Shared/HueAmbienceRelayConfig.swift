@@ -239,7 +239,7 @@ extension RelayManager {
         sonosSpeakers: [SonosPlayer]
     ) async {
         guard let url else {
-            hueAmbienceSyncStatus = .failed("Configure NAS Relay URL first")
+            hueAmbienceSyncStatus = .failed("NAS Relay is not reachable yet")
             return
         }
 

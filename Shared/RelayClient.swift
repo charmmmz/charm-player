@@ -25,6 +25,87 @@ enum RelayClient {
             let isPlaying: Bool?
             let title: String?
         }
+        struct Sonos: Decodable, Sendable {
+            enum DiscoveryMode: String, Decodable, Sendable {
+                case auto
+                case seed
+                case unknown
+
+                init(from decoder: Decoder) throws {
+                    let raw = try decoder.singleValueContainer().decode(String.self)
+                    self = DiscoveryMode(rawValue: raw) ?? .unknown
+                }
+            }
+
+            enum DiscoveryStatus: String, Decodable, Sendable {
+                case idle
+                case starting
+                case ready
+                case failed
+                case unknown
+
+                init(from decoder: Decoder) throws {
+                    let raw = try decoder.singleValueContainer().decode(String.self)
+                    self = DiscoveryStatus(rawValue: raw) ?? .unknown
+                }
+            }
+
+            let discoveryMode: DiscoveryMode
+            let discoveryStatus: DiscoveryStatus
+            let discoveryError: String?
+        }
+        struct APNs: Decodable, Sendable {
+            enum Mode: String, Decodable, Sendable {
+                case ready
+                case dryRun = "dry-run"
+                case unknown
+
+                init(from decoder: Decoder) throws {
+                    let raw = try decoder.singleValueContainer().decode(String.self)
+                    self = Mode(rawValue: raw) ?? .unknown
+                }
+            }
+
+            enum Environment: String, Decodable, Sendable {
+                case sandbox
+                case production
+                case unknown
+
+                init(from decoder: Decoder) throws {
+                    let raw = try decoder.singleValueContainer().decode(String.self)
+                    self = Environment(rawValue: raw) ?? .unknown
+                }
+            }
+
+            let mode: Mode
+            let environment: Environment
+            let bundleId: String?
+            let keyIdConfigured: Bool?
+            let teamIdConfigured: Bool?
+            let keyFilePresent: Bool?
+            let missing: [String]
+
+            private enum CodingKeys: String, CodingKey {
+                case mode
+                case environment
+                case bundleId
+                case keyIdConfigured
+                case teamIdConfigured
+                case keyFilePresent
+                case missing
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                mode = try container.decodeIfPresent(Mode.self, forKey: .mode) ?? .unknown
+                environment = try container.decodeIfPresent(Environment.self, forKey: .environment) ?? .unknown
+                bundleId = try container.decodeIfPresent(String.self, forKey: .bundleId)
+                keyIdConfigured = try container.decodeIfPresent(Bool.self, forKey: .keyIdConfigured)
+                teamIdConfigured = try container.decodeIfPresent(Bool.self, forKey: .teamIdConfigured)
+                keyFilePresent = try container.decodeIfPresent(Bool.self, forKey: .keyFilePresent)
+                missing = try container.decodeIfPresent([String].self, forKey: .missing) ?? []
+            }
+        }
         struct HueAmbience: Decodable, Sendable {
             let configured: Bool?
             let enabled: Bool?
@@ -128,6 +209,8 @@ enum RelayClient {
         }
         let ok: Bool
         let groups: [Group]
+        let sonos: Sonos?
+        let apns: APNs?
         let hueAmbience: HueAmbience?
         let hueEntertainment: HueEntertainment?
         let cs2Lighting: CS2Lighting?

@@ -49,7 +49,10 @@ final class RelayManager {
     }
 
     private(set) var urlString: String = ""
+    private(set) var discoveredURLString: String?
     private(set) var status: Status = .disabled
+    private(set) var relaySonos: RelayClient.HealthResponse.Sonos?
+    private(set) var relayAPNs: RelayClient.HealthResponse.APNs?
     private(set) var isHueAmbienceRelayConfigured = false
     private(set) var isHueAmbienceRelayEnabled = false
     private(set) var hueAmbienceRuntimeStatus: HueLiveEntertainmentRuntimeStatus = .unavailable
@@ -66,12 +69,33 @@ final class RelayManager {
 
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
     @ObservationIgnored private var inFlightProbe: Task<Void, Never>?
+    @ObservationIgnored private let discovery = RelayDiscovery()
 
-    /// Trimmed URL parsed from `urlString`, or nil if blank / malformed.
-    var url: URL? {
+    private var manualURL: URL? {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return URL(string: trimmed)
+    }
+
+    private var discoveredURL: URL? {
+        discoveredURLString.flatMap(URL.init(string:))
+    }
+
+    /// Active relay URL. Manual URL wins; discovered URL is used only when
+    /// the manual field is blank.
+    var url: URL? {
+        RelayDiscovery.preferredRelayURL(
+            manualURLString: urlString,
+            discoveredURL: discoveredURL
+        )
+    }
+
+    var activeURLString: String? {
+        url?.absoluteString
+    }
+
+    var isUsingDiscoveredURL: Bool {
+        manualURL == nil && discoveredURL != nil
     }
 
     /// Convenience flag callers gate "use the relay" on. True only when the
@@ -87,25 +111,30 @@ final class RelayManager {
 
     private init() {
         urlString = SharedStorage.relayURLString ?? ""
+        discovery.onCandidate = { [weak self] url in
+            Task { @MainActor in
+                await self?.handleDiscoveredRelay(url)
+            }
+        }
     }
 
     // MARK: - Lifecycle
 
     /// Persist the user's input, kick a fresh probe, and (re)start periodic
-    /// background probing. Empty input fully disables the relay path.
+    /// background probing. Empty input enables Bonjour auto-discovery.
     func setURL(_ string: String) {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         urlString = trimmed
         SharedStorage.relayURLString = trimmed.isEmpty ? nil : trimmed
 
         if trimmed.isEmpty {
-            status = .disabled
-            updateHueAmbienceRuntimeStatus(configured: false)
-            updateHueEntertainmentStatus(nil)
-            updateCS2LightingStatus(nil)
-            stopPeriodicProbe()
+            startRelayDiscovery()
+            startPeriodicProbe()
+            Task { await probeNow() }
             return
         }
+        discovery.stop()
+        discoveredURLString = nil
         Task { await probeNow() }
         startPeriodicProbe()
     }
@@ -115,7 +144,8 @@ final class RelayManager {
     /// just overwrite `status` once a fresh result arrives).
     func probeNow() async {
         guard let url else {
-            status = .disabled
+            status = .probing
+            startRelayDiscovery()
             return
         }
         // Don't pile up parallel probes on every onAppear / 30s tick.
@@ -127,6 +157,8 @@ final class RelayManager {
                 let health = try await RelayClient.health(baseURL: url)
                 guard !Task.isCancelled else { return }
                 self.status = .connected(groupCount: health.groups.count)
+                self.relaySonos = health.sonos
+                self.relayAPNs = health.apns
                 self.updateHueAmbienceRuntimeStatus(from: health.hueAmbience)
                 self.updateHueEntertainmentStatus(health.hueEntertainment)
                 self.updateCS2LightingStatus(health.cs2Lighting)
@@ -135,6 +167,8 @@ final class RelayManager {
             } catch {
                 guard !Task.isCancelled else { return }
                 self.status = .unreachable(reason: error.localizedDescription)
+                self.relaySonos = nil
+                self.relayAPNs = nil
                 self.updateHueEntertainmentStatus(nil)
                 self.updateCS2LightingStatus(nil)
             }
@@ -147,8 +181,10 @@ final class RelayManager {
     /// notices when the NAS comes back online (or goes away) without the
     /// user opening Settings to retest.
     func startPeriodicProbe() {
-        guard url != nil else { return }
         stopPeriodicProbe()
+        if manualURL == nil {
+            startRelayDiscovery()
+        }
         periodicTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -161,6 +197,18 @@ final class RelayManager {
     func stopPeriodicProbe() {
         periodicTask?.cancel()
         periodicTask = nil
+        discovery.stop()
+    }
+
+    private func startRelayDiscovery() {
+        guard manualURL == nil else { return }
+        discovery.start()
+    }
+
+    private func handleDiscoveredRelay(_ url: URL) async {
+        guard manualURL == nil else { return }
+        discoveredURLString = url.absoluteString
+        await probeNow()
     }
 
     func updateHueAmbienceRuntimeStatus(

@@ -14,6 +14,15 @@ export interface SonosSnapshotChangeContext {
   trigger: SonosSnapshotChangeTrigger;
 }
 
+export type SonosDiscoveryMode = 'auto' | 'seed';
+export type SonosDiscoveryStatus = 'idle' | 'starting' | 'ready' | 'failed';
+
+export interface SonosDiscoveryState {
+  mode: SonosDiscoveryMode;
+  status: SonosDiscoveryStatus;
+  error: string | null;
+}
+
 export interface SonosLocalPlaybackQuality {
   label: string;
   serviceName?: string | null;
@@ -195,6 +204,11 @@ export class SonosBridge extends EventEmitter {
   constructor(log: Logger, options: SonosBridgeOptions = {}) {
     super();
     this.log = log.child({ module: 'sonos' });
+  private discoveryState: SonosDiscoveryState = {
+    mode: 'auto',
+    status: 'idle',
+    error: null,
+  };
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
@@ -202,11 +216,29 @@ export class SonosBridge extends EventEmitter {
     this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
   }
 
-  async start(seedIp: string): Promise<void> {
-    this.log.info({ seedIp }, 'discovering Sonos household via seed IP');
-    const ok = await this.manager.InitializeFromDevice(seedIp);
-    if (!ok) {
-      throw new Error(`Sonos seed ${seedIp} did not respond — verify the IP`);
+  get discovery(): SonosDiscoveryState {
+    return this.discoveryState;
+  }
+
+  async start(seedIp?: string): Promise<void> {
+    const trimmedSeedIp = seedIp?.trim() ?? '';
+    const mode: SonosDiscoveryMode = trimmedSeedIp ? 'seed' : 'auto';
+    this.discoveryState = { mode, status: 'starting', error: null };
+
+    try {
+      const ok = trimmedSeedIp
+        ? await this.startFromSeed(trimmedSeedIp)
+        : await this.startFromDiscovery();
+      if (!ok) {
+        throw new Error(trimmedSeedIp
+          ? `Sonos seed ${trimmedSeedIp} did not respond — verify the IP`
+          : 'No Sonos speakers discovered by SSDP');
+      }
+      this.discoveryState = { mode, status: 'ready', error: null };
+    } catch (err) {
+      const message = errorSummary(err);
+      this.discoveryState = { mode, status: 'failed', error: message };
+      throw err;
     }
 
     for (const device of this.manager.Devices) {
@@ -236,6 +268,17 @@ export class SonosBridge extends EventEmitter {
     if (this.periodicHandle) clearInterval(this.periodicHandle);
     for (const timer of this.transitionSettleRefreshTimers.values()) {
       clearTimeout(timer);
+  private async startFromSeed(seedIp: string): Promise<boolean> {
+    this.log.info({ seedIp }, 'discovering Sonos household via seed IP');
+    return this.manager.InitializeFromDevice(seedIp);
+  }
+
+  private async startFromDiscovery(): Promise<boolean> {
+    const timeoutSeconds = 10;
+    this.log.info({ timeoutSeconds }, 'discovering Sonos household via SSDP');
+    return this.manager.InitializeWithDiscovery(timeoutSeconds);
+  }
+
     }
     this.transitionSettleRefreshTimers.clear();
     for (const timer of this.eventRefreshTimers.values()) {

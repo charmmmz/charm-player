@@ -273,6 +273,39 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(response.cs2Lighting?.areaName, "PC")
     }
 
+    func testHealthResponseDecodesRelayDiscoveryAndAPNsStatus() throws {
+        let data = Data("""
+        {
+          "ok": true,
+          "groups": [],
+          "sonos": {
+            "discoveryMode": "auto",
+            "discoveryStatus": "ready",
+            "discoveryError": null
+          },
+          "apns": {
+            "mode": "ready",
+            "environment": "production",
+            "bundleId": "com.charm.SonosWidget",
+            "keyIdConfigured": true,
+            "teamIdConfigured": true,
+            "keyFilePresent": true,
+            "missing": []
+          }
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RelayClient.HealthResponse.self, from: data)
+
+        XCTAssertEqual(response.sonos?.discoveryMode, .auto)
+        XCTAssertEqual(response.sonos?.discoveryStatus, .ready)
+        XCTAssertNil(response.sonos?.discoveryError)
+        XCTAssertEqual(response.apns?.mode, .ready)
+        XCTAssertEqual(response.apns?.environment, .production)
+        XCTAssertEqual(response.apns?.bundleId, "com.charm.SonosWidget")
+        XCTAssertEqual(response.apns?.missing, [])
+    }
+
     func testHueAmbienceStatusResponseDecodesUnknownRenderModeAsNil() throws {
         let data = Data("""
         {

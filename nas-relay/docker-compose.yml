@@ -44,9 +44,9 @@ services:
       RELAY_PORT: ${RELAY_PORT:-8787}
       DATA_DIR: ${DATA_DIR:-/app/data}
 
-      # Sonos — provide a single speaker IP and the lib enumerates the rest
-      # via ZoneGroupTopology. Pick any always-on speaker on your network.
-      SONOS_SEED_IP: ${SONOS_SEED_IP}
+      # Sonos — defaults to SSDP auto-discovery. Set SONOS_SEED_IP only as a
+      # fallback for networks where multicast discovery is blocked.
+      SONOS_SEED_IP: ${SONOS_SEED_IP:-}
 
       # Shared secret for `/internal/*` (Python agent). Optional if you don't run nas-agent.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
@@ -67,15 +67,14 @@ services:
       HUE_EDK_SIDECAR_TARGET_FPS: ${HUE_EDK_SIDECAR_TARGET_FPS:-60}
       HUE_EDK_SIDECAR_SESSION_POLICY: ${HUE_EDK_SIDECAR_SESSION_POLICY:-reuse}
 
-      # APNs — leave blank during initial setup; the relay runs in dry-run
-      # mode and just logs the payloads it *would* have sent. Fill these in
-      # once you have your Apple Developer .p8 key.
+      # APNs — bundle/team defaults match Charm for Sonos. Leave KEY_ID blank
+      # during initial setup; the relay runs in dry-run mode and logs the
+      # payloads it would have sent until a .p8 key is mounted.
       APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-com.charm.SonosWidget}
       APNS_KEY_PATH: ${APNS_KEY_PATH:-/app/data/apns.p8}
       APNS_KEY_ID: ${APNS_KEY_ID:-}
-      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
-      # Use the sandbox APNs endpoint for development builds (Xcode-signed),
-      # flip to "true" only after you ship a TestFlight / App Store build.
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-3MSS7DJGVR}
+      # false = Xcode debug/sandbox APNs; true = TestFlight/App Store production APNs.
       APNS_PRODUCTION: ${APNS_PRODUCTION:-false}
 
     volumes:

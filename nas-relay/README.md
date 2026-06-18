@@ -14,6 +14,9 @@ APNs, and the Live Activity updates within another ~1–3 s.
 ## Phase 1 scope
 
 - LAN-only HTTP (no auth, no TLS — fine for inside a tailnet / home LAN).
+- Relay discovery is automatic on the local subnet: the relay publishes a
+  Bonjour service (`_charmrelay._tcp`) and the iOS app can find it without a
+  manually entered URL.
 - Pushes the basic ContentState fields used by the Lock Screen widget:
   track / artist / album / isPlaying / startedAt / endsAt / groupMemberCount.
 - Album art is **not** delivered via push yet (`albumArtThumbnail = nil`)
@@ -41,23 +44,24 @@ external transport once Phase 1 is verified.
 
 ## Quick start (QNAP + Portainer)
 
-1. **Pick an always-on Sonos speaker IP** from the official Sonos app
-   (Settings → System → About) — say `192.168.50.251`.
-2. **Copy `.env.example` → `.env`** and set `SONOS_SEED_IP`. Leave the APNs
-   keys blank for now; the relay starts in *dry-run* mode.
-3. **Deploy via Portainer** — Stacks → Add stack, paste the contents of
+1. **Copy `.env.example` → `.env`**. Leave `SONOS_SEED_IP` empty for SSDP
+   auto-discovery. Leave `APNS_KEY_ID` blank for now; the relay starts in
+   *dry-run* mode until a `.p8` key is mounted.
+2. **Deploy via Portainer** — Stacks → Add stack, paste the contents of
    `docker-compose.yml`, attach `.env` under "Environment variables", deploy.
    The stack pulls `forgejo.charmmmz.xyz/charm/charm-for-sonos/nas-relay:latest` and
    `forgejo.charmmmz.xyz/charm/hue-edk-sidecar:latest` by default.
    If either Forgejo package is private, log in first with a Forgejo token that
    can read packages. Override `NAS_RELAY_IMAGE` or `HUE_EDK_SIDECAR_IMAGE` in
    `.env` if you publish either image under a different package path.
-4. **Verify**:
+3. **Verify**:
    ```bash
    curl http://<qnap-ip>:8787/api/health
    ```
-   Should return JSON with at least one entry under `groups[]`. The first
-   sample takes a few seconds while the relay enumerates speakers.
+   Should return JSON with `sonos.discoveryStatus: "ready"` and at least one
+   entry under `groups[]`. The first sample takes a few seconds while the relay
+   enumerates speakers. If your network blocks multicast discovery, set
+   `SONOS_SEED_IP` to any always-on speaker IP and restart the stack.
    On the NAS itself, the Hue EDK sidecar should also answer:
    ```bash
    curl http://127.0.0.1:8788/health
@@ -66,6 +70,10 @@ external transport once Phase 1 is verified.
    expected to work from another LAN device. If relay health refuses the
    connection, the iOS app will treat NAS sync as unavailable and keep using
    phone-side Hue sync.
+4. **Open the iOS app settings**. Leave the Relay URL field blank. The app
+   browses for `_charmrelay._tcp` and uses the first healthy relay it finds.
+   Enter a manual URL only for cross-subnet networks, tunnels, or Bonjour
+   discovery failures.
 5. **Watch logs** (Portainer → Containers → relay → Logs). Play / pause
    / change track on Sonos and you should see lines like:
    ```
@@ -78,8 +86,9 @@ external transport once Phase 1 is verified.
 1. Apple Developer Portal → Certificates → Keys → Create a new "Apple Push
    Notifications service (APNs)" key. Download the `.p8` file (one-time —
    you cannot re-download).
-2. Note the **Key ID** (10-char string shown next to the key) and the
-   **Team ID** (top right of any developer portal page).
+2. Note the **Key ID** (10-char string shown next to the key). `APNS_TEAM_ID`
+   already defaults to `3MSS7DJGVR` for this app; change it only if you build
+   under a different Apple Developer team.
 3. Drop the `.p8` into the mounted volume:
    ```bash
    ssh admin@<qnap>
@@ -89,11 +98,17 @@ external transport once Phase 1 is verified.
 4. Update `.env`:
    ```
    APNS_KEY_ID=ABCDEF1234
-   APNS_TEAM_ID=XXXXXXXXXX
-   APNS_PRODUCTION=false   # leave false until you ship via TestFlight
+   APNS_TEAM_ID=3MSS7DJGVR
+   APNS_PRODUCTION=false   # Xcode debug/sandbox APNs
    ```
 5. Restart the stack. Relay log will print `APNs provider ready` instead of
-   `running in DRY-RUN mode`.
+   `running in DRY-RUN mode`. `/api/health` also reports `apns.mode: "ready"`
+   when the key is usable, or `apns.mode: "dry-run"` with missing fields when
+   setup is incomplete.
+
+Set `APNS_PRODUCTION=true` for TestFlight or App Store builds. Keep it
+`false` for Xcode-installed debug builds because those use APNs sandbox
+tokens.
 
 The bundle ID defaults to `com.charm.SonosWidget` (matches your iOS
 project); change `APNS_BUNDLE_ID` if you renamed it. The APNs topic is
@@ -104,7 +119,7 @@ requires for Live Activity pushes.
 
 | Method | Path                                  | Body / Params                                                   | Description                                              |
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
-| GET    | `/api/health`                         | —                                                               | Liveness + current group snapshots                       |
+| GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
 | GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
 | DELETE | `/api/register-activity/:token`       | path: `:token`                                                  | Called by iOS when the Live Activity ends                |
@@ -201,6 +216,7 @@ nas-relay/
     ├── cs2GameState.ts     # CS2 GSI state cache and event emitter
     ├── cs2Routes.ts        # /api/cs2/*
     ├── cs2Types.ts         # CS2 GSI payload models
+    ├── bonjour.ts          # mDNS/Bonjour advertisement for iOS relay discovery
     ├── hueAmbienceService.ts # Sonos snapshots → Hue ambience runtime
     ├── hueClient.ts        # Hue CLIP v2 client
     ├── hueConfigStore.ts   # disk-backed Hue config

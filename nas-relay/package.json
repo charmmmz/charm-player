@@ -13,6 +13,7 @@
   "dependencies": {
     "@parse/node-apn": "^8.1.0",
     "@svrooij/sonos": "^2.5.0",
+    "bonjour-service": "^1.4.1",
     "express": "^4.21.0",
     "jpeg-js": "^0.4.4",
     "node-dtls-client": "^2.0.2",

@@ -58,7 +58,9 @@ Screenshots will live here once added. Good slots to capture:
 
 - Sonos Cloud sign-in for remote control and cloud-powered music search/browse.
 - LAN-first command routing with Cloud fallback where Sonos exposes an equivalent operation.
-- Optional NAS relay for Live Activity push updates when the iOS app is suspended.
+- Optional NAS relay for Live Activity push updates when the iOS app is suspended;
+  the relay auto-discovers Sonos on the LAN and the app can auto-discover the
+  relay through Bonjour.
 - Optional FastAPI NAS agent for LLM-assisted relay control.
 
 ## Architecture
@@ -125,7 +127,12 @@ The app probes reachability and can fall back from LAN to Cloud when you leave t
 When the iOS app is not running, Live Activities only update if the system delivers push updates. The `nas-relay/` service subscribes to Sonos UPnP events on your LAN and forwards Live Activity pushes through APNs.
 
 - Full design, environment variables, Docker/Portainer flow, and API docs: [nas-relay/README.md](nas-relay/README.md)
-- The iOS app stores a relay base URL in App Group settings.
+- By default the relay uses SSDP to find Sonos and publishes `_charmrelay._tcp`;
+  the iOS app can find it with the Relay URL field left blank.
+- Enter a manual relay URL only for cross-subnet networks, tunnels, or Bonjour
+  discovery failures.
+- APNs `.p8` setup is required for real suspended Live Activity updates. Without
+  it, the relay runs in dry-run mode and still exposes health/discovery status.
 - `RelayManager` probes health and registers push tokens when a Live Activity uses the relay path.
 
 ## Optional: Relay + LLM Agent Stack
@@ -133,7 +140,7 @@ When the iOS app is not running, Live Activities only update if the system deliv
 Run both `nas-relay` and `nas-agent` with host networking:
 
 1. Copy [`.env.stack.example`](.env.stack.example) to `.env` at the repo root. Do not commit `.env`.
-2. Set `INTERNAL_API_TOKEN`, `SONOS_SEED_IP`, `OPENAI_API_KEY`, `AGENT_USER_TOKEN`, and APNs variables as needed.
+2. Set `INTERNAL_API_TOKEN`, `OPENAI_API_KEY`, `AGENT_USER_TOKEN`, and APNs variables as needed. Leave `SONOS_SEED_IP` blank unless SSDP discovery is blocked on your network.
 3. Run `docker compose up -d --build`.
 
 The agent listens on `AGENT_PORT`, defaulting to `8790`. In the app, open Settings -> NAS Agent, enter that URL, and use the same `AGENT_USER_TOKEN`.

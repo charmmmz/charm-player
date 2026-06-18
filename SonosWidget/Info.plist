@@ -43,6 +43,7 @@
 	<array>
 		<string>_sonos._tcp</string>
 		<string>_hue._tcp</string>
+		<string>_charmrelay._tcp</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>

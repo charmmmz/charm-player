@@ -26,6 +26,35 @@ export interface ApnsResult {
   unregistered: string[]; // tokens APNs reported as gone (410)
 }
 
+export interface ApnsStatus {
+  mode: 'ready' | 'dry-run';
+  environment: 'sandbox' | 'production';
+  bundleId: string;
+  keyIdConfigured: boolean;
+  teamIdConfigured: boolean;
+  keyFilePresent: boolean;
+  missing: string[];
+}
+
+export function apnsStatusFromConfig(config: ApnsConfig, keyFilePresent: boolean): ApnsStatus {
+  const keyIdConfigured = config.keyId.trim().length > 0;
+  const teamIdConfigured = config.teamId.trim().length > 0;
+  const missing: string[] = [];
+  if (!keyIdConfigured) missing.push('APNS_KEY_ID');
+  if (!teamIdConfigured) missing.push('APNS_TEAM_ID');
+  if (!keyFilePresent) missing.push('apns.p8');
+
+  return {
+    mode: missing.length === 0 ? 'ready' : 'dry-run',
+    environment: config.production ? 'production' : 'sandbox',
+    bundleId: config.bundleId,
+    keyIdConfigured,
+    teamIdConfigured,
+    keyFilePresent,
+    missing,
+  };
+}
+
 /// Wraps `@parse/node-apn`. When the `.p8` key isn't present yet (Apple
 /// Developer enrollment still pending), we go into "dry-run" mode and only
 /// log the payload we *would* have sent — useful for validating the data
@@ -35,34 +64,29 @@ export class ApnsClient {
   private readonly log: Logger;
   private readonly config: ApnsConfig;
   private readonly dryRun: boolean;
+  private readonly apnsStatus: ApnsStatus;
 
-  private constructor(config: ApnsConfig, dryRun: boolean, log: Logger) {
+  private constructor(config: ApnsConfig, status: ApnsStatus, log: Logger) {
     this.config = config;
-    this.dryRun = dryRun;
+    this.apnsStatus = status;
+    this.dryRun = status.mode === 'dry-run';
     this.log = log.child({ module: 'apns' });
   }
 
   static async create(config: ApnsConfig, log: Logger): Promise<ApnsClient> {
     const childLog = log.child({ module: 'apns' });
+    const keyFilePresent = await fileExists(config.keyPath);
+    const status = apnsStatusFromConfig(config, keyFilePresent);
 
-    if (!config.keyId || !config.teamId) {
+    if (status.missing.length > 0) {
       childLog.warn(
-        'APNS_KEY_ID / APNS_TEAM_ID not set — running in DRY-RUN mode (logs payloads only).',
+        { missing: status.missing, keyPath: config.keyPath },
+        'APNs configuration incomplete — running in DRY-RUN mode (logs payloads only).',
       );
-      return new ApnsClient(config, true, log);
+      return new ApnsClient(config, status, log);
     }
 
-    try {
-      await fs.access(config.keyPath);
-    } catch {
-      childLog.warn(
-        { keyPath: config.keyPath },
-        'APNs .p8 not found — running in DRY-RUN mode (logs payloads only).',
-      );
-      return new ApnsClient(config, true, log);
-    }
-
-    const client = new ApnsClient(config, false, log);
+    const client = new ApnsClient(config, status, log);
     client.provider = new apn.Provider({
       token: {
         key: config.keyPath,
@@ -76,6 +100,10 @@ export class ApnsClient {
       'APNs provider ready',
     );
     return client;
+  }
+
+  status(): ApnsStatus {
+    return this.apnsStatus;
   }
 
   /// Push an `update` event to a list of Live Activity push tokens.
@@ -177,6 +205,15 @@ export class ApnsClient {
 
   shutdown(): void {
     this.provider?.shutdown();
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await fs.access(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

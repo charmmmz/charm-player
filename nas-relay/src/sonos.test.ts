@@ -123,6 +123,94 @@ test('bridge debounces snapshot refreshes when the Sonos library emits event bur
   bridge.stop();
 });
 
+test('bridge starts with SSDP discovery when no Sonos seed IP is configured', async () => {
+  const bridge = testBridge();
+  const calls: string[] = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  device.Coordinator = device;
+  (bridge as unknown as {
+    manager: {
+      Devices: unknown[];
+      InitializeWithDiscovery: (timeoutSeconds: number) => Promise<boolean>;
+      InitializeFromDevice: (seedIp: string) => Promise<boolean>;
+      CancelSubscription: () => void;
+    };
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).manager = {
+    Devices: [device],
+    InitializeWithDiscovery: async timeoutSeconds => {
+      calls.push(`auto:${timeoutSeconds}`);
+      return true;
+    },
+    InitializeFromDevice: async seedIp => {
+      calls.push(`seed:${seedIp}`);
+      return true;
+    },
+    CancelSubscription: () => undefined,
+  };
+  (bridge as unknown as {
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).refreshSnapshot = async () => undefined;
+
+  try {
+    await bridge.start();
+
+    assert.deepEqual(calls, ['auto:10']);
+    assert.equal(bridge.discovery.mode, 'auto');
+    assert.equal(bridge.discovery.status, 'ready');
+  } finally {
+    bridge.stop();
+  }
+});
+
+test('bridge starts from configured Sonos seed IP when provided', async () => {
+  const bridge = testBridge();
+  const calls: string[] = [];
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  device.Coordinator = device;
+  (bridge as unknown as {
+    manager: {
+      Devices: unknown[];
+      InitializeWithDiscovery: (timeoutSeconds: number) => Promise<boolean>;
+      InitializeFromDevice: (seedIp: string) => Promise<boolean>;
+      CancelSubscription: () => void;
+    };
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).manager = {
+    Devices: [device],
+    InitializeWithDiscovery: async timeoutSeconds => {
+      calls.push(`auto:${timeoutSeconds}`);
+      return true;
+    },
+    InitializeFromDevice: async seedIp => {
+      calls.push(`seed:${seedIp}`);
+      return true;
+    },
+    CancelSubscription: () => undefined,
+  };
+  (bridge as unknown as {
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).refreshSnapshot = async () => undefined;
+
+  try {
+    await bridge.start('192.168.50.25');
+
+    assert.deepEqual(calls, ['seed:192.168.50.25']);
+    assert.equal(bridge.discovery.mode, 'seed');
+    assert.equal(bridge.discovery.status, 'ready');
+  } finally {
+    bridge.stop();
+  }
+});
+
 test('bridge ignores stale snapshot refreshes that complete after a newer refresh', async () => {
   const bridge = testBridge();
   const staleTransport = deferred<{ CurrentTransportState: string }>();

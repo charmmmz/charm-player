@@ -650,7 +650,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var relaySection: some View {
         Section {
-            TextField("http://192.168.50.10:8787", text: $relayURLDraft)
+            TextField("Auto-discover, or enter http://192.168.50.10:8787", text: $relayURLDraft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -673,15 +673,13 @@ struct SettingsView: View {
             } label: {
                 Label("Test Connection", systemImage: "antenna.radiowaves.left.and.right")
             }
-            .disabled(relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } header: {
             Text("Live Activity Relay")
         } footer: {
             Text("""
-                 Optional. When a NAS service from `nas-relay/` is reachable, \
-                 the Lock Screen Live Activity stays fresh even while this \
-                 app is fully suspended (push notifications). Leave blank to \
-                 use the on-device update path that runs while the app is alive.
+                 Optional. Leave blank to auto-discover `nas-relay/` on your \
+                 local network. Enter a URL only when Bonjour is unavailable, \
+                 the relay is on another subnet, or you use a tunnel.
                  """)
         }
     }
@@ -697,7 +695,7 @@ struct SettingsView: View {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(5)
                 }
             }
         }
@@ -734,11 +732,69 @@ struct SettingsView: View {
 
     private var relayStatusDetail: String? {
         switch relay.status {
-        case .disabled:                return "Enter a URL to enable APNs-driven Live Activity updates."
-        case .probing:                 return nil
-        case .connected:               return "Live Activity will update via the relay even when the app is suspended."
-        case .unreachable(let reason): return reason
+        case .disabled:
+            return "Leave the URL blank to search for a relay on this network."
+        case .probing:
+            return relay.urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Searching for NAS Relay on the local network…"
+                : nil
+        case .connected:
+            return [
+                relayActiveURLSummary,
+                relayAPNsStatusSummary,
+                relaySonosDiscoverySummary
+            ]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        case .unreachable(let reason):
+            return reason
         }
+    }
+
+    private var relayActiveURLSummary: String? {
+        guard let active = relay.activeURLString else { return nil }
+        return relay.isUsingDiscoveredURL
+            ? "Auto-discovered \(active)"
+            : "Manual URL \(active)"
+    }
+
+    private var relayAPNsStatusSummary: String? {
+        guard let apns = relay.relayAPNs else { return nil }
+        let environment = switch apns.environment {
+        case .production: "Production"
+        case .sandbox: "Sandbox"
+        case .unknown: "Unknown environment"
+        }
+
+        switch apns.mode {
+        case .ready:
+            return "APNs ready · \(environment)"
+        case .dryRun:
+            let missing = apns.missing.isEmpty ? "configuration missing" : apns.missing.joined(separator: ", ")
+            return "APNs dry-run · \(missing)"
+        case .unknown:
+            return "APNs status unknown · \(environment)"
+        }
+    }
+
+    private var relaySonosDiscoverySummary: String? {
+        guard let sonos = relay.relaySonos else { return nil }
+        let mode = switch sonos.discoveryMode {
+        case .auto: "Auto Sonos discovery"
+        case .seed: "Seed IP Sonos discovery"
+        case .unknown: "Sonos discovery"
+        }
+        let status = switch sonos.discoveryStatus {
+        case .idle: "idle"
+        case .starting: "starting"
+        case .ready: "ready"
+        case .failed: "failed"
+        case .unknown: "unknown"
+        }
+        if let error = sonos.discoveryError, !error.isEmpty {
+            return "\(mode) · \(status) · \(error)"
+        }
+        return "\(mode) · \(status)"
     }
 
     // MARK: - NAS Agent

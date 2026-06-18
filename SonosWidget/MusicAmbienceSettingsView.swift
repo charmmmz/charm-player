@@ -220,7 +220,7 @@ struct MusicAmbienceSettingsView: View {
             return "NAS Relay sync failed: \(reason)"
         case .idle:
             if relay.url == nil {
-                return "Set a NAS Relay URL below, then sync this Hue setup so Docker can run the light effect."
+                return "Start NAS Relay on this network, then sync this Hue setup so Docker can run the light effect."
             }
             return "Sync sends the Hue app key and assignments to your local NAS Relay."
         }
