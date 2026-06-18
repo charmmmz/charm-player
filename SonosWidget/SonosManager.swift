@@ -97,6 +97,7 @@ final class SonosManager {
     var isShuffling: Bool = false
     var repeatMode: RepeatMode = .off
     var queue: [QueueItem] = []
+    private var queueReorderStatusByItemID: [String: QueueReorderStatus] = [:]
     var connectionState: ConnectionState = .disconnected
 
     /// Soundbar TV-mode EQ flags. Sonos exposes these as `RenderingControl`
@@ -202,6 +203,7 @@ final class SonosManager {
     /// through. `.unknown` means we haven't probed yet or the speaker is
     /// totally unreachable.
     enum TransportBackend: Equatable { case unknown, lan, cloud }
+    enum QueueReorderStatus: Equatable { case syncing, confirmed }
 
     /// Current routing decision. Exposed so UI can show a "Remote" pill / gray
     /// out LAN-only controls when on cloud.
@@ -993,6 +995,7 @@ final class SonosManager {
     private var dominantColorCache: [String: Color] = [:]
     private var queueLoaded = false
     private var prefetchTask: Task<Void, Never>?
+    @ObservationIgnored private var queueReorderGeneration = 0
 
     // MARK: - Queue
 
@@ -1000,13 +1003,28 @@ final class SonosManager {
         guard let ip = playbackIP else { return }
         do {
             let result = try await SonosAPI.getQueue(ip: ip)
-            queue = result.items
-            queueUpdateID = result.updateID
-            queueLoaded = true
-            schedulePrefetch()
+            applyQueueResult(result)
         } catch {
             if queue.isEmpty { errorMessage = error.localizedDescription }
         }
+    }
+
+    func queueReorderStatus(for item: QueueItem) -> QueueReorderStatus? {
+        queueReorderStatusByItemID[item.id]
+    }
+
+    private func applyQueueResult(_ result: QueueResult) {
+        queue = QueueReorderPolicy.confirmedQueue(result.items, preservingIDsFrom: queue)
+        queueUpdateID = result.updateID
+        queueLoaded = true
+        pruneQueueReorderStatuses()
+        schedulePrefetch()
+    }
+
+    private func pruneQueueReorderStatuses() {
+        guard !queueReorderStatusByItemID.isEmpty else { return }
+        let visibleIDs = Set(queue.map(\.id))
+        queueReorderStatusByItemID = queueReorderStatusByItemID.filter { visibleIDs.contains($0.key) }
     }
 
     private func schedulePrefetch() {
@@ -1111,9 +1129,19 @@ final class SonosManager {
     func moveQueueItem(from source: IndexSet, to destination: Int) {
         guard let ip = playbackIP else { return }
         guard let fromIndex = source.first else { return }
+        guard queue.indices.contains(fromIndex) else { return }
+        let previousQueue = queue
+        let movedItemIDs = source.sorted().compactMap { index in
+            queue.indices.contains(index) ? queue[index].id : nil
+        }
         let sonosFrom = fromIndex + 1
-        let sonosDest = destination > fromIndex ? destination + 1 : destination + 1
-        queue.move(fromOffsets: source, toOffset: destination)
+        let sonosDest = destination + 1
+        let reorderedQueue = QueueReorderPolicy.reordered(queue, from: source, to: destination)
+        guard reorderedQueue.map(\.id) != queue.map(\.id) else { return }
+        queue = reorderedQueue
+        queueReorderGeneration += 1
+        let generation = queueReorderGeneration
+        setQueueReorderStatus(.syncing, for: movedItemIDs)
 
         let capturedUpdateID = queueUpdateID
         Task {
@@ -1121,8 +1149,43 @@ final class SonosManager {
                 try await SonosAPI.reorderTracksInQueue(ip: ip, startIndex: sonosFrom,
                                                          numTracks: 1, insertBefore: sonosDest,
                                                          updateID: capturedUpdateID)
-                await loadQueue()
-            } catch { errorMessage = error.localizedDescription }
+                let result = try await SonosAPI.getQueue(ip: ip)
+                guard generation == queueReorderGeneration else { return }
+                applyQueueResult(result)
+                showQueueReorderConfirmation(for: movedItemIDs, generation: generation)
+            } catch {
+                guard generation == queueReorderGeneration else { return }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    queue = previousQueue
+                    setQueueReorderStatus(nil, for: movedItemIDs)
+                }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func setQueueReorderStatus(_ status: QueueReorderStatus?, for itemIDs: [String]) {
+        guard !itemIDs.isEmpty else { return }
+        for id in itemIDs {
+            if let status {
+                queueReorderStatusByItemID[id] = status
+            } else {
+                queueReorderStatusByItemID.removeValue(forKey: id)
+            }
+        }
+    }
+
+    private func showQueueReorderConfirmation(for itemIDs: [String], generation: Int) {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            setQueueReorderStatus(.confirmed, for: itemIDs)
+        }
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(650))
+            guard generation == queueReorderGeneration else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                setQueueReorderStatus(nil, for: itemIDs)
+            }
         }
     }
 

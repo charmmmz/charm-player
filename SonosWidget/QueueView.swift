@@ -112,6 +112,7 @@ struct QueueView: View {
 
     func queueRow(_ item: QueueItem, isNowPlaying: Bool) -> some View {
         let accent = manager.albumArtDominantColor ?? .accentColor
+        let reorderStatus = manager.queueReorderStatus(for: item)
 
         return HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 1.5)
@@ -140,13 +141,46 @@ struct QueueView: View {
             }
 
             Spacer()
+
+            queueSyncIndicator(status: reorderStatus, accent: accent)
+        }
+        .background {
+            if reorderStatus != nil {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(accent.opacity(reorderStatus == .syncing ? 0.10 : 0.16))
+                    .transition(.opacity)
+            }
         }
         .scaleEffect(isNowPlaying ? 1.05 : 1.0, anchor: .leading)
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: isNowPlaying)
+        .animation(.easeInOut(duration: 0.18), value: reorderStatus)
         .contentShape(Rectangle())
         .onTapGesture {
             Task { await manager.playTrackInQueue(item) }
         }
+    }
+
+    @ViewBuilder
+    private func queueSyncIndicator(status: SonosManager.QueueReorderStatus?, accent: Color) -> some View {
+        ZStack {
+            switch status {
+            case .syncing:
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.72)
+                    .tint(accent)
+                    .accessibilityLabel("Updating queue order")
+            case .confirmed:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .accessibilityLabel("Queue order updated")
+            case nil:
+                Color.clear
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(width: 18, height: 18)
     }
 }
 
