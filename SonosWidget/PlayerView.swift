@@ -1778,7 +1778,8 @@ struct NowPlayingOverlay: View {
                 title: item.albumName ?? manager.trackInfo?.album ?? "",
                 artist: manager.trackInfo?.artist ?? "",
                 artURL: nowPlayingInfo?.images?.tile1x1,
-                cloudServiceId: serviceId, accountId: accountId)
+                cloudServiceId: serviceId, accountId: accountId,
+                preserveArtworkSize: true)
         }
         // Same fallback as `artistBrowseItem`: in a live broadcast we have
         // the album name from broadcast metadata even if the per-track
@@ -1812,7 +1813,8 @@ struct NowPlayingOverlay: View {
             artist: artistName,
             artURL: manager.trackInfo?.albumArtURL,
             cloudServiceId: ids.cloudSid,
-            accountId: ids.accountId)
+            accountId: ids.accountId,
+            preserveArtworkSize: true)
     }
 
     private var liveStreamCloudIds: (cloudSid: String, accountId: String)? {

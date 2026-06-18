@@ -58,6 +58,38 @@ final class CloudBrowseItemFactoryTests: XCTestCase {
         )
     }
 
+    func testAlbumItemPreservesExistingArtworkSizeWhenRequested() {
+        let artworkURL = "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/1200x1200bb.jpg"
+
+        let item = makeFactory().albumItem(
+            objectId: "album:123",
+            title: "Freudian",
+            artist: "Daniel Caesar",
+            artURL: artworkURL,
+            cloudServiceId: "52231",
+            accountId: "2",
+            preserveArtworkSize: true
+        )
+
+        XCTAssertEqual(item.albumArtURL, artworkURL)
+    }
+
+    func testAlbumItemNormalizesArtworkByDefault() {
+        let item = makeFactory().albumItem(
+            objectId: "album:123",
+            title: "Freudian",
+            artist: "Daniel Caesar",
+            artURL: "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/1200x1200bb.jpg",
+            cloudServiceId: "52231",
+            accountId: "2"
+        )
+
+        XCTAssertEqual(
+            item.albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/aa/bb/cc/album.jpg/400x400bb.jpg"
+        )
+    }
+
     func testCloudFavoriteItemInfersTypeAndNormalizesArtwork() throws {
         let favorite = try decodeCloudFavorite(
             """

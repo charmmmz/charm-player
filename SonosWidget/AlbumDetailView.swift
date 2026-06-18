@@ -95,6 +95,7 @@ struct AlbumDetailView: View {
         guard let urlStr = coverURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled, coverURL == urlStr else { return }
             let img = UIImage(data: data)
             coverImage = img
             if let uiColor = img?.dominantUIColor() {
@@ -103,6 +104,7 @@ struct AlbumDetailView: View {
                 themeColor = color.opacity(0.55)
             }
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled { return }
             SonosLog.error(.albumDetail, "Cover image load failed: \(error)")
         }
     }
@@ -189,11 +191,14 @@ struct AlbumDetailView: View {
     }
 
     private var headerArtworkImage: some View {
-        AsyncImage(url: URL(string: coverURL ?? "")) { phase in
-            if let img = phase.image {
-                img.resizable().aspectRatio(contentMode: .fit)
+        Group {
+            if let img = coverImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
             } else {
-                RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(.secondarySystemBackground))
                     .aspectRatio(1, contentMode: .fit)
                     .overlay {
                         Image(systemName: "opticaldisc")

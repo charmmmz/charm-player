@@ -124,12 +124,14 @@ struct ArtistDetailView: View {
         guard let urlStr = headerImageURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled, headerImageURL == urlStr else { return }
             let img = UIImage(data: data)
             headerImage = img
             if let color = img?.dominantColor() {
                 themeColor = color
             }
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled { return }
             SonosLog.error(.artistDetail, "Header image load failed: \(error)")
         }
     }
@@ -239,19 +241,10 @@ struct ArtistDetailView: View {
 
     @ViewBuilder
     private var artistAvatar: some View {
-        if let url = headerImageURL {
-            AsyncImage(url: URL(string: url)) { phase in
-                if let img = phase.image {
-                    img.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    Circle().fill(.quaternary)
-                        .overlay {
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.tertiary)
-                        }
-                }
-            }
+        if let img = headerImage {
+            Image(uiImage: img)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
         } else {
             Circle().fill(.quaternary)
                 .overlay {
@@ -426,7 +419,8 @@ struct ArtistDetailView: View {
         return searchManager.makeAlbumItem(
             objectId: objectId, title: title, artist: artistName,
             artURL: item.images?.tile1x1,
-            cloudServiceId: serviceId, accountId: accountId)
+            cloudServiceId: serviceId, accountId: accountId,
+            preserveArtworkSize: true)
     }
 
     // MARK: - Toast
@@ -638,7 +632,8 @@ struct ArtistDetailView: View {
                 artist: res.artists?.first?.name ?? artistItem.title,
                 artURL: artURL,
                 cloudServiceId: serviceId,
-                accountId: accountId)
+                accountId: accountId,
+                preserveArtworkSize: true)
         }
     }
 

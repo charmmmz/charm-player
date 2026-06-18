@@ -741,25 +741,29 @@ final class SearchManager {
     /// Build an artist BrowseItem suitable for navigation, "Add to Sonos
     /// Favorites", and `isFavorited` matching.
     func makeArtistItem(objectId: String, name: String, artURL: String? = nil,
-                        cloudServiceId: String, accountId: String) -> BrowseItem {
+                        cloudServiceId: String, accountId: String,
+                        preserveArtworkSize: Bool = false) -> BrowseItem {
         cloudItemFactory.artistItem(
             objectId: objectId,
             name: name,
             artURL: artURL,
             cloudServiceId: cloudServiceId,
-            accountId: accountId)
+            accountId: accountId,
+            preserveArtworkSize: preserveArtworkSize)
     }
 
     func makeAlbumItem(objectId: String, title: String, artist: String,
                        artURL: String? = nil,
-                       cloudServiceId: String, accountId: String) -> BrowseItem {
+                       cloudServiceId: String, accountId: String,
+                       preserveArtworkSize: Bool = false) -> BrowseItem {
         cloudItemFactory.albumItem(
             objectId: objectId,
             title: title,
             artist: artist,
             artURL: artURL,
             cloudServiceId: cloudServiceId,
-            accountId: accountId)
+            accountId: accountId,
+            preserveArtworkSize: preserveArtworkSize)
     }
 
     func makePlaylistItem(objectId: String, title: String, artist: String = "",
@@ -3168,7 +3172,10 @@ final class SearchManager {
     /// `x-rincon-cpcontainer:…?sid=…&sn=…` form. `addToFavorites` and navigation
     /// into detail views need that resolved shape or the heart action fails
     /// (`guard` on `uri`) even though the entry is a valid favorite.
-    func browseItemWithResolvedFavoriteURI(_ item: BrowseItem) -> BrowseItem? {
+    func browseItemWithResolvedFavoriteURI(
+        _ item: BrowseItem,
+        preserveArtworkSize: Bool = false
+    ) -> BrowseItem? {
         if item.playbackDescriptor.directURI != nil { return item }
         guard let ids = parseCloudIds(from: item) else { return nil }
         let typeString: String? = item.cloudType ?? favoriteCategoryAsCloudType(item)
@@ -3180,12 +3187,14 @@ final class SearchManager {
         case .artist:
             return makeArtistItem(
                 objectId: oid, name: item.title, artURL: item.albumArtURL,
-                cloudServiceId: cloudSid, accountId: aid)
+                cloudServiceId: cloudSid, accountId: aid,
+                preserveArtworkSize: preserveArtworkSize)
         case .album:
             return makeAlbumItem(
                 objectId: oid, title: item.title, artist: item.artist,
                 artURL: item.albumArtURL,
-                cloudServiceId: cloudSid, accountId: aid)
+                cloudServiceId: cloudSid, accountId: aid,
+                preserveArtworkSize: preserveArtworkSize)
         case .playlist:
             return makePlaylistItem(
                 objectId: oid, title: item.title, artist: item.artist,

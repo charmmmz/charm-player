@@ -45,7 +45,8 @@ struct CloudBrowseItemFactory: Sendable {
         name: String,
         artURL: String? = nil,
         cloudServiceId: String,
-        accountId: String
+        accountId: String,
+        preserveArtworkSize: Bool = false
     ) -> BrowseItem {
         item(
             type: .artist,
@@ -56,7 +57,8 @@ struct CloudBrowseItemFactory: Sendable {
             artURL: artURL,
             mimeType: nil,
             cloudServiceId: cloudServiceId,
-            accountId: accountId
+            accountId: accountId,
+            preserveArtworkSize: preserveArtworkSize
         )
     }
 
@@ -66,7 +68,8 @@ struct CloudBrowseItemFactory: Sendable {
         artist: String,
         artURL: String? = nil,
         cloudServiceId: String,
-        accountId: String
+        accountId: String,
+        preserveArtworkSize: Bool = false
     ) -> BrowseItem {
         item(
             type: .album,
@@ -77,7 +80,8 @@ struct CloudBrowseItemFactory: Sendable {
             artURL: artURL,
             mimeType: nil,
             cloudServiceId: cloudServiceId,
-            accountId: accountId
+            accountId: accountId,
+            preserveArtworkSize: preserveArtworkSize
         )
     }
 
@@ -155,14 +159,18 @@ struct CloudBrowseItemFactory: Sendable {
         artURL: String?,
         mimeType: String?,
         cloudServiceId: String,
-        accountId: String
+        accountId: String,
+        preserveArtworkSize: Bool = false
     ) -> BrowseItem {
         BrowseItem(
             id: objectId,
             title: title,
             artist: artist,
             album: album,
-            albumArtURL: normalizedArtworkURLString(artURL),
+            albumArtURL: normalizedArtworkURLString(
+                artURL,
+                preserveExistingSize: preserveArtworkSize
+            ),
             uri: playableURI(
                 objectId: objectId,
                 serviceId: cloudServiceId,
@@ -401,8 +409,15 @@ struct CloudBrowseItemFactory: Sendable {
         return item
     }
 
-    func normalizedArtworkURLString(_ value: String?) -> String? {
-        ArtworkURLNormalizer.loadableURLString(from: value, shortSidePixels: 400)
+    func normalizedArtworkURLString(
+        _ value: String?,
+        preserveExistingSize: Bool = false
+    ) -> String? {
+        ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            shortSidePixels: preserveExistingSize ? nil : 400,
+            preserveExistingAppleArtworkSize: preserveExistingSize
+        )
     }
 
     private func albumTrackContainerType(_ resourceType: String?) -> CloudObjectType {

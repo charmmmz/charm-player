@@ -525,13 +525,17 @@ struct SearchView: View {
         if item.cloudType == "ALBUM" {
             // Cloud `listFavorites` rows and shortcut favorites can omit a top-level
             // playable URI; resolve the same way as add-to-favorites.
-            return searchManager.browseItemWithResolvedFavoriteURI(item) ?? item
+            return searchManager.browseItemWithResolvedFavoriteURI(
+                item,
+                preserveArtworkSize: true
+            ) ?? item
         }
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         var nav = searchManager.makeAlbumItem(
             objectId: ids.objectId, title: item.title, artist: item.artist,
             artURL: item.albumArtURL,
-            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId)
+            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
+            preserveArtworkSize: true)
         // Preserve the Sonos browse URI as a safety net (it's known to work for
         // this specific favorite); fall back to the factory-built URI if absent.
         if let original = item.uri { nav.uri = original }
@@ -541,7 +545,10 @@ struct SearchView: View {
     /// Build a BrowseItem suitable for ArtistDetailView from a Favorite.
     private func artistNavItem(for item: BrowseItem) -> BrowseItem? {
         if item.cloudType == "ARTIST" {
-            return searchManager.browseItemWithResolvedFavoriteURI(item) ?? item
+            return searchManager.browseItemWithResolvedFavoriteURI(
+                item,
+                preserveArtworkSize: true
+            ) ?? item
         }
         guard let ids = searchManager.parseCloudIds(from: item) else {
             SonosLog.debug(.navItem, "artistNavItem parseCloudIds failed for '\(item.title)' uri=\(item.uri ?? "nil") resMD=\(item.resMD?.prefix(200) ?? "nil")")
@@ -549,7 +556,8 @@ struct SearchView: View {
         }
         return searchManager.makeArtistItem(
             objectId: ids.objectId, name: item.title, artURL: item.albumArtURL,
-            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId)
+            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
+            preserveArtworkSize: true)
     }
 
     private func playlistNavItem(for item: BrowseItem) -> BrowseItem? {
@@ -1532,25 +1540,33 @@ struct FavoriteCategoryDetailView: View {
 
     private func albumNavItem(for item: BrowseItem) -> BrowseItem? {
         if item.cloudType == "ALBUM" {
-            return searchManager.browseItemWithResolvedFavoriteURI(item) ?? item
+            return searchManager.browseItemWithResolvedFavoriteURI(
+                item,
+                preserveArtworkSize: true
+            ) ?? item
         }
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         var nav = searchManager.makeAlbumItem(
             objectId: ids.objectId, title: item.title, artist: item.artist,
             artURL: item.albumArtURL,
-            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId)
+            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
+            preserveArtworkSize: true)
         if let original = item.uri { nav.uri = original }
         return nav
     }
 
     private func artistNavItem(for item: BrowseItem) -> BrowseItem? {
         if item.cloudType == "ARTIST" {
-            return searchManager.browseItemWithResolvedFavoriteURI(item) ?? item
+            return searchManager.browseItemWithResolvedFavoriteURI(
+                item,
+                preserveArtworkSize: true
+            ) ?? item
         }
         guard let ids = searchManager.parseCloudIds(from: item) else { return nil }
         return searchManager.makeArtistItem(
             objectId: ids.objectId, name: item.title, artURL: item.albumArtURL,
-            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId)
+            cloudServiceId: ids.cloudServiceId, accountId: ids.accountId,
+            preserveArtworkSize: true)
     }
 
     private func playlistNavItem(for item: BrowseItem) -> BrowseItem? {
