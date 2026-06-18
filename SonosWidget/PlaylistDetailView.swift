@@ -14,6 +14,7 @@ struct PlaylistDetailView: View {
     @State private var toastMessage: String?
     @State private var isFavorited = false
     @State private var coverImage: UIImage?
+    @State private var loadedCoverImageURL: String?
     @State private var themeColor: Color?
     @State private var isOpeningAppleMusicLink = false
     private static let playlistFetchLimit = 1000
@@ -25,6 +26,16 @@ struct PlaylistDetailView: View {
             entryArtworkURL: playlistItem.preferredDetailArtworkURL,
             responseArtworkURL: response?.images?.tile1x1
         )
+    }
+    private var displayedCoverImage: UIImage? {
+        guard DetailArtworkImageLoadPolicy.shouldKeepDisplayingLoadedImage(
+            hasLoadedImage: coverImage != nil,
+            selectedURL: coverURL,
+            loadedURL: loadedCoverImageURL
+        ) else {
+            return nil
+        }
+        return coverImage
     }
     private var tracks: [SonosCloudAPI.AlbumTrackItem] {
         let base = response?.tracks?.items ?? response?.section?.items ?? []
@@ -72,7 +83,7 @@ struct PlaylistDetailView: View {
 
     @ViewBuilder
     private var playlistBackground: some View {
-        if let img = coverImage {
+        if let img = displayedCoverImage {
             ZStack {
                 Image(uiImage: img)
                     .resizable()
@@ -92,12 +103,22 @@ struct PlaylistDetailView: View {
         guard let urlStr = coverURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            let img = UIImage(data: data)
+            guard !Task.isCancelled,
+                  DetailArtworkImageLoadPolicy.shouldCommitLoadedImage(
+                    requestedURL: urlStr,
+                    selectedURL: coverURL
+                  ) else { return }
+            guard let img = UIImage(data: data) else {
+                SonosLog.error(.playlistDetail, "Cover image decode failed for \(SonosLog.playbackLinkValue(urlStr, maxLength: 640))")
+                return
+            }
             coverImage = img
-            if let color = img?.dominantColor() {
+            loadedCoverImageURL = urlStr
+            if let color = img.dominantColor() {
                 themeColor = color
             }
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled { return }
             SonosLog.error(.playlistDetail, "Cover image load failed: \(error)")
         }
     }
@@ -203,9 +224,11 @@ struct PlaylistDetailView: View {
     }
 
     private var headerArtworkImage: some View {
-        AsyncImage(url: URL(string: coverURL ?? "")) { phase in
-            if let img = phase.image {
-                img.resizable().aspectRatio(contentMode: .fit)
+        Group {
+            if let img = displayedCoverImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
             } else {
                 RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground))
                     .aspectRatio(1, contentMode: .fit)

@@ -17,6 +17,7 @@ struct ArtistDetailView: View {
     @State private var toastMessage: String?
     @State private var isFavorited = false
     @State private var headerImage: UIImage?
+    @State private var loadedHeaderImageURL: String?
     @State private var resolvedArtistImageURL: String?
     @State private var themeColor: Color?
     @State private var isOpeningAppleMusicLink = false
@@ -28,6 +29,16 @@ struct ArtistDetailView: View {
             responseArtworkURL: response?.images?.tile1x1,
             fallbackArtworkURL: resolvedArtistImageURL
         )
+    }
+    private var displayedHeaderImage: UIImage? {
+        guard DetailArtworkImageLoadPolicy.shouldKeepDisplayingLoadedImage(
+            hasLoadedImage: headerImage != nil,
+            selectedURL: headerImageURL,
+            loadedURL: loadedHeaderImageURL
+        ) else {
+            return nil
+        }
+        return headerImage
     }
     private var streamingProviderName: String? {
         if let provider = response?.providerInfo?.name, !provider.isEmpty {
@@ -104,7 +115,7 @@ struct ArtistDetailView: View {
 
     @ViewBuilder
     private var artistBackground: some View {
-        if let img = headerImage {
+        if let img = displayedHeaderImage {
             ZStack {
                 Image(uiImage: img)
                     .resizable()
@@ -124,10 +135,18 @@ struct ArtistDetailView: View {
         guard let urlStr = headerImageURL, let url = URL(string: urlStr) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            guard !Task.isCancelled, headerImageURL == urlStr else { return }
-            let img = UIImage(data: data)
+            guard !Task.isCancelled,
+                  DetailArtworkImageLoadPolicy.shouldCommitLoadedImage(
+                    requestedURL: urlStr,
+                    selectedURL: headerImageURL
+                  ) else { return }
+            guard let img = UIImage(data: data) else {
+                SonosLog.error(.artistDetail, "Header image decode failed for \(SonosLog.playbackLinkValue(urlStr, maxLength: 640))")
+                return
+            }
             headerImage = img
-            if let color = img?.dominantColor() {
+            loadedHeaderImageURL = urlStr
+            if let color = img.dominantColor() {
                 themeColor = color
             }
         } catch {
@@ -242,7 +261,7 @@ struct ArtistDetailView: View {
 
     @ViewBuilder
     private var artistAvatar: some View {
-        if let img = headerImage {
+        if let img = displayedHeaderImage {
             Image(uiImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
