@@ -162,6 +162,11 @@ private struct QueueArtView: View {
            let cached = manager.queueImage(for: urlStr) {
             Image(uiImage: cached)
                 .resizable().aspectRatio(contentMode: .fill)
+        } else if let urlStr,
+                  let url = URL(string: urlStr),
+                  let cached = RemoteArtworkImageLoader.shared.cachedImage(for: url) {
+            Image(uiImage: cached)
+                .resizable().aspectRatio(contentMode: .fill)
         } else if let urlStr, let url = URL(string: urlStr) {
             RemoteArtworkImageView(url: url, contentMode: .fill) { _ in
                 placeholder

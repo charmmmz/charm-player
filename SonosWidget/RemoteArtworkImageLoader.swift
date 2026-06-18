@@ -142,6 +142,42 @@ final class RemoteArtworkImageLoader {
         memoryCache.object(forKey: cacheKey(for: url))
     }
 
+    func prefetch(
+        urls: [URL],
+        limit: Int = PlaybackArtworkPrewarmPolicy.defaultLimit,
+        maxConcurrent: Int = 6
+    ) async {
+        guard limit > 0, maxConcurrent > 0 else { return }
+        var seen = Set<String>()
+        let candidates = urls.compactMap { url -> URL? in
+            let key = cacheKey(for: url) as String
+            guard seen.insert(key).inserted,
+                  memoryCache.object(forKey: key as NSString) == nil else {
+                return nil
+            }
+            return url
+        }.prefix(limit)
+        guard !candidates.isEmpty else { return }
+
+        let ordered = Array(candidates)
+        await withTaskGroup(of: Void.self) { group in
+            var index = 0
+
+            func addNext() {
+                guard index < ordered.count else { return }
+                let url = ordered[index]
+                index += 1
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    _ = try? await self.image(for: url)
+                }
+            }
+
+            for _ in 0..<min(maxConcurrent, ordered.count) { addNext() }
+            for await _ in group { addNext() }
+        }
+    }
+
     func image(for url: URL) async throws -> UIImage {
         let key = cacheKey(for: url)
         if let cached = memoryCache.object(forKey: key) {

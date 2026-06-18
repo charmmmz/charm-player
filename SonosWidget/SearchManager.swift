@@ -192,6 +192,7 @@ final class SearchManager {
     private var speakerIP: String?
     private var searchTask: Task<Void, Never>?
     @ObservationIgnored var localServicePlaylistArtworkLookupOverride: ((BrowseItem) async -> String?)?
+    @ObservationIgnored var playbackArtworkPrewarmOverride: (([URL]) async -> Void)?
     /// The query string that produced the most recent `searchResults` /
     /// `serviceDetailResults`. Readable from views so they can react when a
     /// new search commits (e.g. to re-fetch the selected service tab).
@@ -434,6 +435,100 @@ final class SearchManager {
         ArtworkURLNormalizer.loadableURLString(
             from: value,
             preserveExistingAppleArtworkSize: true)
+    }
+
+    func prewarmPlaybackArtwork(items: [BrowseItem]) async {
+        await prewarmPlaybackArtwork(
+            urls: PlaybackArtworkPrewarmPolicy.urls(from: items)
+        )
+    }
+
+    private func schedulePlaybackArtworkPrewarm(
+        for item: BrowseItem,
+        includeContainerTracks: Bool = true
+    ) {
+        let itemSnapshot = item
+        Task { [weak self] in
+            guard let self else { return }
+            await self.prewarmPlaybackArtwork(items: [itemSnapshot])
+            guard includeContainerTracks else { return }
+            await self.prewarmContainerPlaybackArtwork(for: itemSnapshot)
+        }
+    }
+
+    private func schedulePlaybackArtworkPrewarm(for items: [BrowseItem]) {
+        let itemSnapshot = items
+        Task { [weak self] in
+            await self?.prewarmPlaybackArtwork(items: itemSnapshot)
+        }
+    }
+
+    private func prewarmPlaybackArtwork(urls: [URL]) async {
+        guard !urls.isEmpty else { return }
+        if let playbackArtworkPrewarmOverride {
+            await playbackArtworkPrewarmOverride(urls)
+        } else {
+            await RemoteArtworkImageLoader.shared.prefetch(urls: urls)
+        }
+        SonosLog.debug(
+            .playbackLink,
+            "Playback artwork prewarm urls=\(urls.count) " +
+                "first=\(SonosLog.playbackLinkValue(urls.first?.absoluteString, maxLength: 240))")
+    }
+
+    private func prewarmContainerPlaybackArtwork(for item: BrowseItem) async {
+        guard item.isContainer else { return }
+        guard ["ALBUM", "PLAYLIST", "COLLECTION"].contains(item.cloudType ?? "") else { return }
+        guard let ids = parseCloudIds(from: item),
+              let token = await SonosAuth.shared.validAccessToken(),
+              let householdId = SonosAuth.shared.householdId else {
+            return
+        }
+
+        do {
+            let response: SonosCloudAPI.AlbumBrowseResponse
+            switch item.cloudType {
+            case "ALBUM":
+                response = try await SonosCloudAPI.browseAlbum(
+                    token: token,
+                    householdId: householdId,
+                    serviceId: ids.cloudServiceId,
+                    accountId: ids.accountId,
+                    albumId: ids.objectId,
+                    count: PlaybackArtworkPrewarmPolicy.defaultLimit)
+            case "COLLECTION":
+                response = try await SonosCloudAPI.browseContainer(
+                    token: token,
+                    householdId: householdId,
+                    serviceId: ids.cloudServiceId,
+                    accountId: ids.accountId,
+                    containerId: ids.objectId,
+                    count: PlaybackArtworkPrewarmPolicy.defaultLimit)
+            default:
+                response = try await SonosCloudAPI.browsePlaylist(
+                    token: token,
+                    householdId: householdId,
+                    serviceId: ids.cloudServiceId,
+                    accountId: ids.accountId,
+                    playlistId: ids.objectId,
+                    count: PlaybackArtworkPrewarmPolicy.defaultLimit)
+            }
+
+            let tracks = response.tracks?.items ?? response.section?.items ?? []
+            let urls = PlaybackArtworkPrewarmPolicy.urls(
+                from: tracks.map { $0.images?.tile1x1 },
+                limit: PlaybackArtworkPrewarmPolicy.defaultLimit)
+            await prewarmPlaybackArtwork(urls: urls)
+            SonosLog.debug(
+                .playbackLink,
+                "Playback container artwork prewarm title='\(item.title)' " +
+                    "cloudType=\(item.cloudType ?? "nil") tracks=\(tracks.count) urls=\(urls.count)")
+        } catch {
+            SonosLog.debug(
+                .playbackLink,
+                "Playback container artwork prewarm skipped title='\(item.title)' " +
+                    "cloudType=\(item.cloudType ?? "nil") error=\(error)")
+        }
     }
 
     func setServiceEnabled(serviceId: String, enabled: Bool) {
@@ -1279,6 +1374,8 @@ final class SearchManager {
         guard let item = await resolveLocalAppleMusicBrowseItem(playable, manager: manager) else {
             return false
         }
+
+        schedulePlaybackArtworkPrewarm(for: item)
 
         if playable.kind == .station {
             guard let ids = parseCloudIds(from: item) else {
@@ -2574,6 +2671,7 @@ final class SearchManager {
         let queueItems = queueableItems.compactMap {
             $0.playbackDescriptor.queuePayload(metadata: playbackMetadata(for: $0))
         }
+        schedulePlaybackArtworkPrewarm(for: queueableItems)
         SonosLog.debug(
             .playbackLink,
             "playNow displayed-tracks start title='\(displayTitle)' count=\(queueItems.count) " +
@@ -2627,6 +2725,7 @@ final class SearchManager {
         if recordRecentlyPlayed {
             pushRecentlyPlayed(item)
         }
+        schedulePlaybackArtworkPrewarm(for: item)
         let activeSpeaker = lockedTarget ?? manager.selectedSpeaker
         let activeBackend = manager.transportBackend
         let activeCloudGroupId = manager.currentCloudGroupId
@@ -2796,6 +2895,7 @@ final class SearchManager {
 
     @discardableResult
     func playNext(item: BrowseItem, manager: SonosManager) async -> Bool {
+        schedulePlaybackArtworkPrewarm(for: item)
         // Queue insertion is LAN-only (Cloud Control API has no per-track
         // queue API). Show a friendly message instead of a stale timeout.
         if manager.isRemoteMode {
@@ -3135,6 +3235,7 @@ final class SearchManager {
 
     @discardableResult
     func addToQueue(item: BrowseItem, manager: SonosManager) async -> Bool {
+        schedulePlaybackArtworkPrewarm(for: item)
         if manager.isRemoteMode {
             errorMessage = SonosControlError
                 .unsupportedInCloudMode(feature: "Adding to the queue")
