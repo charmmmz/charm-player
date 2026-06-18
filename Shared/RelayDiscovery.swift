@@ -23,7 +23,9 @@ final class RelayDiscovery {
     }
 
     nonisolated static func relayURL(host: String, port: Int) -> URL? {
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHost = normalizedBonjourHost(
+            host.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         guard !trimmedHost.isEmpty, port > 0, port <= UInt16.max else {
             return nil
         }
@@ -33,6 +35,18 @@ final class RelayDiscovery {
         components.host = trimmedHost
         components.port = port
         return components.url
+    }
+
+    private nonisolated static func normalizedBonjourHost(_ host: String) -> String {
+        let hostWithoutScope = host.split(separator: "%", maxSplits: 1).first.map(String.init) ?? host
+        let rootlessHost = hostWithoutScope.hasSuffix(".")
+            ? String(hostWithoutScope.dropLast())
+            : hostWithoutScope
+        guard !rootlessHost.isEmpty else { return rootlessHost }
+        if rootlessHost.contains(".") || rootlessHost.contains(":") {
+            return rootlessHost
+        }
+        return "\(rootlessHost).local"
     }
 
     func start() {
@@ -97,9 +111,7 @@ final class RelayDiscovery {
               case .hostPort(let host, let port) = endpoint
         else { return }
 
-        let rawHost = "\(host)"
-        let hostWithoutScope = rawHost.split(separator: "%", maxSplits: 1).first.map(String.init) ?? rawHost
-        guard let url = Self.relayURL(host: hostWithoutScope, port: Int(port.rawValue)),
+        guard let url = Self.relayURL(host: "\(host)", port: Int(port.rawValue)),
               seenURLs.insert(url).inserted
         else { return }
 

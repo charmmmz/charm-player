@@ -37,5 +37,12 @@ final class RelayDiscoveryTests: XCTestCase {
         XCTAssertEqual(url.host, "192.168.50.10")
         XCTAssertEqual(url.port, 8787)
     }
-}
 
+    func testRelayURLConvertsBonjourRootDotHostnameToLocalName() throws {
+        let url = try XCTUnwrap(
+            RelayDiscovery.relayURL(host: "IMPRESSIVE-NAS.", port: 8787)
+        )
+
+        XCTAssertEqual(url.absoluteString, "http://IMPRESSIVE-NAS.local:8787")
+    }
+}
