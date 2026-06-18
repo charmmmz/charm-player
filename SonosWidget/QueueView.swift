@@ -141,13 +141,11 @@ struct QueueView: View {
             }
 
             Spacer()
-
-            queueSyncIndicator(status: reorderStatus, accent: accent)
         }
         .background {
-            if reorderStatus != nil {
+            if reorderStatus == .confirmed {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(accent.opacity(reorderStatus == .syncing ? 0.10 : 0.16))
+                    .fill(accent.opacity(0.16))
                     .padding(.horizontal, -12)
                     .padding(.vertical, -9)
                     .transition(.opacity)
@@ -161,29 +159,6 @@ struct QueueView: View {
         .onTapGesture {
             Task { await manager.playTrackInQueue(item) }
         }
-    }
-
-    @ViewBuilder
-    private func queueSyncIndicator(status: SonosManager.QueueReorderStatus?, accent: Color) -> some View {
-        ZStack {
-            switch status {
-            case .syncing:
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.72)
-                    .tint(accent)
-                    .accessibilityLabel("Updating queue order")
-            case .confirmed:
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(accent)
-                    .accessibilityLabel("Queue order updated")
-            case nil:
-                Color.clear
-                    .accessibilityHidden(true)
-            }
-        }
-        .frame(width: 18, height: 18)
     }
 }
 

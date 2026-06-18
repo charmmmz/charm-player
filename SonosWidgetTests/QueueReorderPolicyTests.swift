@@ -19,6 +19,40 @@ final class QueueReorderPolicyTests: XCTestCase {
         XCTAssertEqual(reordered.map(\.trackNumber), [1, 2, 3])
     }
 
+    func testPlayNextMovesLaterItemImmediatelyAfterNowPlaying() {
+        let queue = [
+            makeItem(id: "current", trackNumber: 1, title: "Current", uri: "x-sonos-http:current"),
+            makeItem(id: "middle", trackNumber: 2, title: "Middle", uri: "x-sonos-http:middle"),
+            makeItem(id: "later", trackNumber: 3, title: "Later", uri: "x-sonos-http:later")
+        ]
+
+        let reordered = QueueReorderPolicy.playingNextQueue(
+            queue,
+            itemID: "later",
+            afterCurrentItemID: "current"
+        )
+
+        XCTAssertEqual(reordered.map(\.id), ["current", "later", "middle"])
+        XCTAssertEqual(reordered.map(\.trackNumber), [1, 2, 3])
+    }
+
+    func testPlayNextMovesEarlierItemImmediatelyAfterNowPlaying() {
+        let queue = [
+            makeItem(id: "earlier", trackNumber: 1, title: "Earlier", uri: "x-sonos-http:earlier"),
+            makeItem(id: "current", trackNumber: 2, title: "Current", uri: "x-sonos-http:current"),
+            makeItem(id: "later", trackNumber: 3, title: "Later", uri: "x-sonos-http:later")
+        ]
+
+        let reordered = QueueReorderPolicy.playingNextQueue(
+            queue,
+            itemID: "earlier",
+            afterCurrentItemID: "current"
+        )
+
+        XCTAssertEqual(reordered.map(\.id), ["current", "earlier", "later"])
+        XCTAssertEqual(reordered.map(\.trackNumber), [1, 2, 3])
+    }
+
     func testConfirmedRemoteQueuePreservesExistingIDsForSameTracks() {
         let local = [
             makeItem(id: "local-b", trackNumber: 1, title: "B", uri: "x-sonos-http:b"),

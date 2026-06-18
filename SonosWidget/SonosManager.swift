@@ -1191,17 +1191,47 @@ final class SonosManager {
 
     func playQueueItemNext(_ item: QueueItem) async {
         guard let ip = playbackIP else { return }
+        guard let sourceIndex = queue.firstIndex(where: { $0.id == item.id }) else { return }
         let currentIndex = queue.firstIndex(where: {
             $0.title == trackInfo?.title && $0.artist == trackInfo?.artist
         }) ?? 0
+        guard queue.indices.contains(currentIndex) else { return }
+
+        let previousQueue = queue
+        let movedItemIDs = [queue[sourceIndex].id]
         let targetPosition = currentIndex + 2 // Sonos uses 1-based, insert after current
-        let sonosFrom = item.trackNumber
+        let sonosFrom = queue[sourceIndex].trackNumber
+        let reorderedQueue = QueueReorderPolicy.playingNextQueue(
+            queue,
+            itemID: queue[sourceIndex].id,
+            afterCurrentItemID: queue[currentIndex].id
+        )
+        guard reorderedQueue.map(\.id) != queue.map(\.id) else { return }
+
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            queue = reorderedQueue
+        }
+        queueReorderGeneration += 1
+        let generation = queueReorderGeneration
+        setQueueReorderStatus(.syncing, for: movedItemIDs)
+        let capturedUpdateID = queueUpdateID
+
         do {
             try await SonosAPI.reorderTracksInQueue(ip: ip, startIndex: sonosFrom,
                                                      numTracks: 1, insertBefore: targetPosition,
-                                                     updateID: queueUpdateID)
-            await loadQueue()
-        } catch { errorMessage = error.localizedDescription }
+                                                     updateID: capturedUpdateID)
+            let result = try await SonosAPI.getQueue(ip: ip)
+            guard generation == queueReorderGeneration else { return }
+            applyQueueResult(result)
+            showQueueReorderConfirmation(for: movedItemIDs, generation: generation)
+        } catch {
+            guard generation == queueReorderGeneration else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                queue = previousQueue
+                setQueueReorderStatus(nil, for: movedItemIDs)
+            }
+            errorMessage = error.localizedDescription
+        }
     }
 
     @discardableResult

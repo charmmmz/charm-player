@@ -5,6 +5,18 @@ nonisolated enum QueueReorderPolicy {
         normalizedTrackNumbers(moving(queue, from: source, to: destination))
     }
 
+    static func playingNextQueue(_ queue: [QueueItem],
+                                 itemID: String,
+                                 afterCurrentItemID currentItemID: String) -> [QueueItem] {
+        guard let itemIndex = queue.firstIndex(where: { $0.id == itemID }),
+              let currentIndex = queue.firstIndex(where: { $0.id == currentItemID }),
+              itemIndex != currentIndex else {
+            return normalizedTrackNumbers(queue)
+        }
+
+        return reordered(queue, from: IndexSet(integer: itemIndex), to: currentIndex + 1)
+    }
+
     static func confirmedQueue(_ remoteQueue: [QueueItem], preservingIDsFrom currentQueue: [QueueItem]) -> [QueueItem] {
         let preservedIDs = stableIDsByFingerprint(from: currentQueue)
         var remoteOccurrences: [String: Int] = [:]
