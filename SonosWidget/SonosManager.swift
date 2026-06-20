@@ -1021,7 +1021,22 @@ final class SonosManager {
                 "Queue artwork registry replaced count=\(resolvedArtwork.replacementCount) " +
                     "queue=\(result.items.count)")
         }
-        queue = QueueReorderPolicy.confirmedQueue(resolvedArtwork.items, preservingIDsFrom: queue)
+        var cacheReplacementCount = 0
+        let cacheResolvedItems = resolvedArtwork.items.map { item -> QueueItem in
+            guard Self.isAppleMusicQueueItem(item) else { return item }
+            let next = PlaybackArtworkURLCache.shared.resolvedQueueItem(item, service: .appleMusic)
+            if next.albumArtURL != item.albumArtURL {
+                cacheReplacementCount += 1
+            }
+            return next
+        }
+        if cacheReplacementCount > 0 {
+            SonosLog.debug(
+                .nowPlaying,
+                "Queue artwork persistent cache replaced count=\(cacheReplacementCount) " +
+                    "queue=\(result.items.count)")
+        }
+        queue = QueueReorderPolicy.confirmedQueue(cacheResolvedItems, preservingIDsFrom: queue)
         queueUpdateID = result.updateID
         queueLoaded = true
         pruneQueueReorderStatuses()
@@ -1898,6 +1913,7 @@ final class SonosManager {
                 cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
             }
             trackInfo = incomingTrackInfo
+            await resolveCurrentAppleMusicArtworkIfNeeded()
             volume = groupVolume
             if let idx = currentGroupStatusIndex() {
                 groupStatuses[idx].volume = groupVolume
@@ -1914,10 +1930,7 @@ final class SonosManager {
             syncCurrentGroupStatusFromPlaybackState()
 
             if let queueSnapshot {
-                queue = queueSnapshot.items
-                queueUpdateID = queueSnapshot.updateID
-                queueLoaded = true
-                schedulePrefetch()
+                applyQueueResult(queueSnapshot)
             }
 
             consecutiveFailures = 0
@@ -1987,6 +2000,7 @@ final class SonosManager {
                 info.audioQuality = mapped
             }
             trackInfo = info
+            await resolveCurrentAppleMusicArtworkIfNeeded()
 
             positionSeconds = positionSec
             durationSeconds = durationSec
@@ -2065,6 +2079,7 @@ final class SonosManager {
                 cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
             }
             trackInfo = incomingTrackInfo
+            await resolveCurrentAppleMusicArtworkIfNeeded()
             positionSeconds = incomingTrackInfo.positionSeconds
             durationSeconds = incomingTrackInfo.durationSeconds
             positionFetchedAt = Date()
@@ -2166,6 +2181,7 @@ final class SonosManager {
                 info.audioQuality = mapped
             }
             trackInfo = info
+            await resolveCurrentAppleMusicArtworkIfNeeded()
 
             positionSeconds = positionSec
             durationSeconds = durationSec
@@ -3677,6 +3693,73 @@ final class SonosManager {
         ]
         parts.append(contentsOf: extra)
         SonosLog.info(.sonosCloud, parts.joined(separator: " "))
+    }
+
+    private static func isAppleMusicQueueItem(_ item: QueueItem) -> Bool {
+        let candidates = [item.uri, item.albumArtURL, item.metaXML]
+        if candidates.compactMap({ $0 }).contains(where: {
+            PlaybackSource.from(trackURI: $0) == .appleMusic || $0.localizedCaseInsensitiveContains("sid=204")
+        }) {
+            return true
+        }
+        return false
+    }
+
+    private func resolveCurrentAppleMusicArtworkIfNeeded() async {
+        guard let info = trackInfo,
+              info.source == .appleMusic else {
+            return
+        }
+        let currentURLString = info.albumArtURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let needsFallback = currentURLString.isEmpty || QueueArtPrefetchPolicy.isLocalSonosArtworkURL(currentURLString)
+        guard needsFallback else {
+            SonosLog.debug(
+                .nowPlaying,
+                "Current artwork fallback skipped reason=public_artwork " +
+                    "url=\(SonosLog.playbackLinkValue(currentURLString, maxLength: 240))")
+            return
+        }
+
+        let originalTrackIdentity = AlbumArtTrackIdentity.make(from: info)
+        let catalogID = SonosAppleMusicTrackResolver.storeID(fromTrackURI: info.trackURI)
+        let request = PlaybackArtworkRequest(
+            service: .appleMusic,
+            kind: .song,
+            catalogID: catalogID,
+            title: info.title,
+            artist: info.artist,
+            album: info.album,
+            currentArtworkURLString: info.albumArtURL,
+            identity: .trackInfo(info),
+            countryCode: Self.defaultArtworkCountryCode
+        )
+
+        SonosLog.debug(
+            .nowPlaying,
+            "Current artwork fallback start title='\(SonosLog.playbackLinkValue(info.title, maxLength: 120))' " +
+                "artist='\(SonosLog.playbackLinkValue(info.artist, maxLength: 120))' " +
+                "catalogID=\(SonosLog.playbackLinkValue(catalogID, maxLength: 120)) " +
+                "current=\(SonosLog.playbackLinkValue(info.albumArtURL, maxLength: 240))")
+
+        guard let resolution = await AppleMusicPlaybackArtworkResolver.shared.resolve(request: request) else {
+            SonosLog.debug(.nowPlaying, "Current artwork fallback miss")
+            return
+        }
+
+        guard AlbumArtTrackIdentity.make(from: trackInfo) == originalTrackIdentity else {
+            SonosLog.debug(.nowPlaying, "Current artwork fallback stale result source=\(resolution.source.rawValue)")
+            return
+        }
+
+        trackInfo?.albumArtURL = resolution.urlString
+        SonosLog.debug(
+            .nowPlaying,
+            "Current artwork fallback hit source=\(resolution.source.rawValue) " +
+                "url=\(SonosLog.playbackLinkValue(resolution.urlString, maxLength: 240))")
+    }
+
+    private static var defaultArtworkCountryCode: String {
+        Locale.current.region?.identifier ?? "US"
     }
 
     private func loadAlbumArt() async {

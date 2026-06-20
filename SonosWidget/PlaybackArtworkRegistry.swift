@@ -67,6 +67,28 @@ final class PlaybackArtworkRegistry {
         return nil
     }
 
+    func artworkURLString(for identity: PlaybackArtworkIdentity) -> String? {
+        for publicKey in identity.lookupKeys {
+            let key: LookupKey
+            switch publicKey {
+            case .object(let value):
+                key = .object(value)
+            case .track(let title, let artist, let album):
+                key = .track(title: title, artist: artist, album: album)
+            case .album(let artist, let album):
+                key = .album(artist: artist, album: album)
+            }
+
+            guard let entry = entries[key],
+                  !entry.isAmbiguous,
+                  let urlString = entry.urlString else {
+                continue
+            }
+            return urlString
+        }
+        return nil
+    }
+
     private func remember(_ urlString: String, for key: LookupKey) {
         let cacheKey = ArtworkURLNormalizer.artworkCacheKey(from: urlString) ?? urlString
         guard let existing = entries[key] else {

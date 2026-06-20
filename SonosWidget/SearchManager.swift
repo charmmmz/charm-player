@@ -452,6 +452,14 @@ final class SearchManager {
 
     func prewarmPlaybackArtwork(items: [BrowseItem]) async {
         PlaybackArtworkRegistry.shared.register(items: items)
+        let appleMusicItems = items.filter(isAppleMusicPlaybackArtworkItem)
+        if !appleMusicItems.isEmpty {
+            PlaybackArtworkURLCache.shared.register(
+                items: appleMusicItems,
+                service: .appleMusic,
+                source: .sonosCloud
+            )
+        }
         submitArtworkHintsToRelay(items)
         await prewarmPlaybackArtwork(
             urls: PlaybackArtworkPrewarmPolicy.urls(from: items)
@@ -548,6 +556,14 @@ final class SearchManager {
                     fallbackAccountId: ids.accountId)
             }
             PlaybackArtworkRegistry.shared.register(items: trackItems)
+            let appleMusicTrackItems = trackItems.filter(isAppleMusicPlaybackArtworkItem)
+            if !appleMusicTrackItems.isEmpty {
+                PlaybackArtworkURLCache.shared.register(
+                    items: appleMusicTrackItems,
+                    service: .appleMusic,
+                    source: .sonosCloud
+                )
+            }
             submitArtworkHintsToRelay(trackItems)
             let urls = PlaybackArtworkPrewarmPolicy.urls(
                 from: trackItems,
@@ -3541,6 +3557,20 @@ final class SearchManager {
             return PlaybackSource.from(serviceName: service.name) == .appleMusic
         }
 
+        return false
+    }
+
+    private func isAppleMusicPlaybackArtworkItem(_ item: BrowseItem) -> Bool {
+        if isAppleMusicItem(item) { return true }
+        if let uri = item.uri,
+           PlaybackSource.from(trackURI: uri) == .appleMusic {
+            return true
+        }
+        if let serviceId = item.serviceId,
+           let service = musicServices.first(where: { $0.id == serviceId }),
+           PlaybackSource.from(serviceName: service.name) == .appleMusic {
+            return true
+        }
         return false
     }
 
