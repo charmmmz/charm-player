@@ -1,0 +1,95 @@
+import XCTest
+@testable import SonosWidget
+
+final class DiagnosticLogModelTests: XCTestCase {
+    func testParsesInfoLine() {
+        let entry = DiagnosticLogEntry.parse(
+            line: "2026-06-21T01:02:03Z [Playback] Artwork cache hit source=musicKit",
+            id: 7
+        )
+
+        XCTAssertEqual(entry?.id, 7)
+        XCTAssertEqual(entry?.timestampText, "2026-06-21T01:02:03Z")
+        XCTAssertEqual(entry?.category, "Playback")
+        XCTAssertEqual(entry?.level, .info)
+        XCTAssertEqual(entry?.message, "Artwork cache hit source=musicKit")
+    }
+
+    func testParsesErrorLine() {
+        let entry = DiagnosticLogEntry.parse(
+            line: "2026-06-21T01:02:03Z [Relay] ERROR: Probe failed status=500",
+            id: 1
+        )
+
+        XCTAssertEqual(entry?.category, "Relay")
+        XCTAssertEqual(entry?.level, .error)
+        XCTAssertEqual(entry?.message, "Probe failed status=500")
+    }
+
+    func testSkipsDiagnosticHeadersAndBlankLines() {
+        XCTAssertNil(DiagnosticLogEntry.parse(line: "", id: 0))
+        XCTAssertNil(DiagnosticLogEntry.parse(line: "SonosWidget diagnostics", id: 1))
+        XCTAssertNil(DiagnosticLogEntry.parse(line: "SonosWidget DEBUG diagnostics", id: 2))
+    }
+
+    func testFilterMatchesCategorySearchAndErrorsOnly() {
+        let playback = DiagnosticLogEntry(
+            id: 1,
+            timestampText: "2026-06-21T01:02:03Z",
+            category: "Playback",
+            level: .info,
+            message: "Artwork cache hit source=musicKit",
+            rawLine: "raw playback"
+        )
+        let relay = DiagnosticLogEntry(
+            id: 2,
+            timestampText: "2026-06-21T01:02:04Z",
+            category: "Relay",
+            level: .error,
+            message: "Probe failed",
+            rawLine: "raw relay"
+        )
+
+        var filter = DiagnosticLogFilter(
+            selectedCategories: ["Playback"],
+            searchText: "musicKit",
+            showsErrorsOnly: false
+        )
+        XCTAssertTrue(filter.includes(playback))
+        XCTAssertFalse(filter.includes(relay))
+
+        filter.searchText = ""
+        filter.showsErrorsOnly = true
+        XCTAssertFalse(filter.includes(playback))
+
+        filter.selectedCategories = ["Relay"]
+        XCTAssertTrue(filter.includes(relay))
+    }
+
+    func testStoreLoadsAndClearsDiagnosticFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiagnosticLogModelTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileURL = directory.appendingPathComponent("sonos-diagnostics.log")
+        try """
+        SonosWidget diagnostics
+        2026-06-21T01:02:03Z [Playback] Artwork cache hit
+        2026-06-21T01:02:04Z [Relay] ERROR: Probe failed
+
+        """.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = DiagnosticLogStore(fileURLProvider: { fileURL })
+
+        store.refresh()
+
+        XCTAssertEqual(store.entries.map(\.category), ["Playback", "Relay"])
+        XCTAssertEqual(store.availableCategories, ["Playback", "Relay"])
+
+        store.clear()
+
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+}

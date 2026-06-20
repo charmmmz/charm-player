@@ -7,13 +7,14 @@ final class SettingsHubDestinationTests: XCTestCase {
             .sonos,
             .hueAmbience,
             .hubSetup,
+            .diagnostics,
         ])
     }
 
     func testPrimaryDestinationsDescribeConsolidatedGroups() {
         XCTAssertEqual(
             SettingsHubDestination.primary.map(\.title),
-            ["Sonos", "Hue Ambience", "Hub Setup"]
+            ["Sonos", "Hue Ambience", "Hub Setup", "Diagnostics"]
         )
         XCTAssertEqual(
             SettingsHubDestination.primary.map(\.subtitle),
@@ -21,11 +22,17 @@ final class SettingsHubDestinationTests: XCTestCase {
                 "Account, speakers, and music services",
                 "Music and game lighting",
                 "Hue Bridge, NAS Relay, and NAS Agent",
+                "Logs and troubleshooting",
             ]
         )
         XCTAssertEqual(
             SettingsHubDestination.primary.map(\.systemImage),
-            ["hifispeaker.2.fill", "sparkles", "externaldrive.connected.to.line.below"]
+            [
+                "hifispeaker.2.fill",
+                "sparkles",
+                "externaldrive.connected.to.line.below",
+                "doc.text.magnifyingglass",
+            ]
         )
     }
 }

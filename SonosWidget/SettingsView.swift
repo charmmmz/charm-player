@@ -114,6 +114,10 @@ struct SettingsView: View {
                 relaySection
                 agentSection
             }
+        case .diagnostics:
+            settingsDetailForm(title: destination.title) {
+                DiagnosticLogView()
+            }
         }
     }
 
@@ -142,6 +146,8 @@ struct SettingsView: View {
             return musicAmbienceStatusSummary
         case .hubSetup:
             return "\(hueBridgeStatusSummary) · Activity \(liveActivityStyle.displayName) · Relay \(relayStatusTitle)"
+        case .diagnostics:
+            return "Local logs · category filters"
         }
     }
 

@@ -11,12 +11,13 @@ import Foundation
 ///     Use for verbose request/response traces, internal fallback decisions,
 ///     and diagnostic banners that would otherwise spam the console.
 ///
-/// Every call site picks a `Category` so filtering in Xcode console is easy
-/// (search e.g. `[Playback]` to see all playback logs).
+/// Every call site picks a `Category` so filtering in Xcode console or the
+/// in-app diagnostics viewer is easy (search e.g. `[Playback]` to see all
+/// playback logs).
 enum SonosLog {
     /// All log categories used across the app. Add new cases here rather
     /// than inventing bare-string prefixes at call sites.
-    enum Category: String {
+    enum Category: String, CaseIterable {
         case search         = "Search"
         case playback       = "Playback"
         case station        = "Station"
@@ -87,7 +88,6 @@ enum SonosLog {
     }
 
     private nonisolated static func writeDiagnosticLine(_ line: String, category: Category) {
-        #if DEBUG
         guard diagnosticCategories.contains(category),
               let fileURL = diagnosticFileURL(),
               let data = "\(diagnosticTimestamp()) \(line)\n".data(using: .utf8) else {
@@ -102,7 +102,7 @@ enum SonosLog {
                 )
 
                 if !FileManager.default.fileExists(atPath: fileURL.path) {
-                    let header = "SonosWidget DEBUG diagnostics\n"
+                    let header = "SonosWidget diagnostics\n"
                     try header.write(to: fileURL, atomically: true, encoding: .utf8)
                 }
 
@@ -110,34 +110,32 @@ enum SonosLog {
                 handle.seekToEndOfFile()
                 handle.write(data)
                 try? handle.close()
+                trimDiagnosticFileIfNeeded(fileURL)
             } catch {
                 // Diagnostics must never affect app behavior.
             }
         }
-        #endif
     }
 
-    #if DEBUG
-    private nonisolated static let diagnosticCategories: Set<Category> = [
-        .albumDetail,
-        .artistDetail,
-        .cloudAPI,
-        .cloudSearch,
-        .localService,
-        .navItem,
-        .networkAudit,
-        .nowPlaying,
-        .playbackLink,
-        .playback,
-        .playlistDetail,
-        .relay,
-        .station,
-        .soap
-    ]
+    private nonisolated static let diagnosticCategories = Set(Category.allCases)
     private nonisolated static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
+    private nonisolated static let diagnosticAppGroupID = "group.com.charm.SonosWidget"
+    private nonisolated static let diagnosticMaxBytes = 1_048_576
+    private nonisolated static let diagnosticMaxLines = 2_000
+
+    nonisolated static func diagnosticLogFileURL() -> URL? {
+        diagnosticFileURL()
+    }
 
     private nonisolated static func diagnosticFileURL() -> URL? {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        if let appGroupURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: diagnosticAppGroupID
+        ) {
+            return appGroupURL
+                .appendingPathComponent("Logs", isDirectory: true)
+                .appendingPathComponent("sonos-diagnostics.log")
+        }
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
             .first?
             .appendingPathComponent("sonos-diagnostics.log")
     }
@@ -145,7 +143,37 @@ enum SonosLog {
     private nonisolated static func diagnosticTimestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
     }
-    #endif
+
+    private nonisolated static func trimDiagnosticFileIfNeeded(_ fileURL: URL) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let size = attributes[.size] as? NSNumber,
+              size.intValue > diagnosticMaxBytes,
+              let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            return
+        }
+
+        let bodyLines = text
+            .components(separatedBy: .newlines)
+            .filter { !$0.isEmpty && !$0.hasPrefix("SonosWidget") }
+            .suffix(diagnosticMaxLines)
+
+        var keptLines = Array(bodyLines)
+        var trimmed = diagnosticText(from: keptLines)
+        while trimmed.utf8.count > diagnosticMaxBytes, keptLines.count > 1 {
+            keptLines.removeFirst()
+            trimmed = diagnosticText(from: keptLines)
+        }
+
+        try? trimmed.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    private nonisolated static func diagnosticText(from bodyLines: [String]) -> String {
+        let body = bodyLines.joined(separator: "\n")
+        guard !body.isEmpty else {
+            return "SonosWidget diagnostics\n"
+        }
+        return "SonosWidget diagnostics\n\(body)\n"
+    }
 
     private nonisolated static func firstXMLAttribute(
         named attribute: String,
