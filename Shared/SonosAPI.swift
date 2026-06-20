@@ -169,9 +169,36 @@ struct SonosQueuedURI: Equatable, Sendable {
     var metadata: String
 }
 
+struct SonosQueueReplacementPlaybackPlan: Equatable, Sendable {
+    var first: SonosQueuedURI
+    var remaining: [SonosQueuedURI]
+
+    init?(items: [SonosQueuedURI]) {
+        guard let first = items.first else { return nil }
+        self.first = first
+        self.remaining = Array(items.dropFirst())
+    }
+
+    var totalCount: Int {
+        1 + remaining.count
+    }
+}
+
+struct SonosQueueBatchAddError: Error, CustomStringConvertible {
+    var underlying: Error
+    var failedChunkStart: Int
+    var remainingItems: [SonosQueuedURI]
+
+    var description: String {
+        "SonosQueueBatchAddError(failedChunkStart=\(failedChunkStart), " +
+            "remainingCount=\(remainingItems.count), underlying=\(underlying))"
+    }
+}
+
 enum SonosAPI {
 
     nonisolated static let port = 1400
+    private nonisolated static let addMultipleURIsToQueueChunkSize = 16
     private nonisolated static let avTransport = "/MediaRenderer/AVTransport/Control"
     private nonisolated static let renderingControl = "/MediaRenderer/RenderingControl/Control"
     private nonisolated static let groupRenderingControl = "/MediaRenderer/GroupRenderingControl/Control"
@@ -590,12 +617,15 @@ enum SonosAPI {
                 "firstURI=\(SonosLog.playbackLinkValue(items.first?.uri)) " +
                 "lastURI=\(SonosLog.playbackLinkValue(items.last?.uri)) " +
                 "containerMetadata=\(SonosLog.playbackMetadataSummary(containerMetadata))")
-        for body in addMultipleURIsToQueueBodies(
-            items: items,
-            containerURI: containerURI,
-            containerMetadata: containerMetadata,
-            position: position,
-            asNext: asNext) {
+        for start in stride(from: 0, to: items.count, by: addMultipleURIsToQueueChunkSize) {
+            let end = min(start + addMultipleURIsToQueueChunkSize, items.count)
+            let chunk = Array(items[start..<end])
+            let body = addMultipleURIsToQueueBody(
+                items: chunk,
+                containerURI: containerURI,
+                containerMetadata: containerMetadata,
+                position: position,
+                asNext: asNext)
             do {
                 _ = try await soap(
                     ip: ip,
@@ -607,10 +637,20 @@ enum SonosAPI {
                 SonosLog.error(
                     .playbackLink,
                     "SOAP AddMultipleURIsToQueue failed host=\(ip) count=\(items.count) " +
+                        "chunkStart=\(start) chunkCount=\(chunk.count) " +
                         "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
-                        "error=\(error) firstURI=\(SonosLog.playbackLinkValue(items.first?.uri))")
-                throw error
+                        "error=\(error) firstURI=\(SonosLog.playbackLinkValue(chunk.first?.uri))")
+                throw SonosQueueBatchAddError(
+                    underlying: error,
+                    failedChunkStart: start,
+                    remainingItems: addMultipleURIsToQueueFallbackItems(
+                        items: items,
+                        failedChunkStart: start))
             }
+            SonosLog.debug(
+                .playbackLink,
+                "SOAP AddMultipleURIsToQueue chunk success host=\(ip) " +
+                    "chunkStart=\(start) chunkCount=\(chunk.count)")
         }
         SonosLog.debug(
             .playbackLink,
@@ -624,8 +664,8 @@ enum SonosAPI {
                                                          position: Int = 0,
                                                          asNext: Bool = false) -> [String] {
         guard !items.isEmpty else { return [] }
-        return stride(from: 0, to: items.count, by: 16).map { start in
-            let chunk = Array(items[start..<min(start + 16, items.count)])
+        return stride(from: 0, to: items.count, by: addMultipleURIsToQueueChunkSize).map { start in
+            let chunk = Array(items[start..<min(start + addMultipleURIsToQueueChunkSize, items.count)])
             return addMultipleURIsToQueueBody(
                 items: chunk,
                 containerURI: containerURI,
@@ -635,12 +675,18 @@ enum SonosAPI {
         }
     }
 
+    nonisolated static func addMultipleURIsToQueueFallbackItems(items: [SonosQueuedURI],
+                                                                failedChunkStart: Int) -> [SonosQueuedURI] {
+        guard items.indices.contains(failedChunkStart) else { return items }
+        return Array(items[failedChunkStart...])
+    }
+
     private nonisolated static func addMultipleURIsToQueueBody(items: [SonosQueuedURI],
                                                                containerURI: String,
                                                                containerMetadata: String,
                                                                position: Int,
                                                                asNext: Bool) -> String {
-        let enqueuedURIs = items.map(\.uri).joined(separator: " ")
+        let enqueuedURIs = items.map { addMultipleURIsToQueueURIArgument($0.uri) }.joined(separator: " ")
         let enqueuedMetadata = items.map(\.metadata).joined(separator: " ")
         return "<InstanceID>0</InstanceID>" +
             "<UpdateID>0</UpdateID>" +
@@ -651,6 +697,10 @@ enum SonosAPI {
             "<ContainerMetaData>\(escapeXML(containerMetadata))</ContainerMetaData>" +
             "<DesiredFirstTrackNumberEnqueued>\(position)</DesiredFirstTrackNumberEnqueued>" +
             "<EnqueueAsNext>\(asNext ? 1 : 0)</EnqueueAsNext>"
+    }
+
+    private nonisolated static func addMultipleURIsToQueueURIArgument(_ uri: String) -> String {
+        uri.replacingOccurrences(of: " ", with: "%20")
     }
 
     nonisolated static func removeAllTracksFromQueue(ip: String) async throws {

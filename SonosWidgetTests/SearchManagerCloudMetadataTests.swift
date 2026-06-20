@@ -614,4 +614,51 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
         XCTAssertTrue(bodies[0].contains("<DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued>"))
         XCTAssertTrue(bodies[0].contains("<EnqueueAsNext>0</EnqueueAsNext>"))
     }
+
+    func testAddMultipleURIsToQueueBodiesPercentEncodesLiteralSpacesInURIs() {
+        let items = [
+            SonosQueuedURI(
+                uri: "x-rincon-cpcontainer:1006206c playlist%3apl.new?sid=204&flags=8300&sn=2",
+                metadata: "<DIDL-Lite><item id=\"playlist\" /></DIDL-Lite>")
+        ]
+
+        let bodies = SonosAPI.addMultipleURIsToQueueBodies(items: items)
+
+        XCTAssertEqual(bodies.count, 1)
+        XCTAssertTrue(
+            bodies[0].contains(
+                "<EnqueuedURIs>x-rincon-cpcontainer:1006206c%20playlist%3apl.new?sid=204&amp;flags=8300&amp;sn=2</EnqueuedURIs>"))
+        XCTAssertFalse(bodies[0].contains("1006206c playlist%3apl.new"))
+    }
+
+    func testAddMultipleURIsToQueueFallbackItemsSkipCompletedChunks() {
+        let items = (1...20).map { index in
+            SonosQueuedURI(
+                uri: "x-sonos-http:track\(index)?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"\(index)\" /></DIDL-Lite>")
+        }
+
+        let fallbackItems = SonosAPI.addMultipleURIsToQueueFallbackItems(
+            items: items,
+            failedChunkStart: 16)
+
+        XCTAssertEqual(fallbackItems.map(\.uri), Array(items[16...]).map(\.uri))
+    }
+
+    func testQueueReplacementPlaybackPlanSplitsFirstItemForImmediatePlayback() {
+        let items = (1...3).map { index in
+            SonosQueuedURI(
+                uri: "x-sonos-http:track\(index)?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"\(index)\" /></DIDL-Lite>")
+        }
+
+        let plan = SonosQueueReplacementPlaybackPlan(items: items)
+
+        XCTAssertEqual(plan?.first.uri, items[0].uri)
+        XCTAssertEqual(plan?.remaining.map(\.uri), [items[1].uri, items[2].uri])
+    }
+
+    func testQueueReplacementPlaybackPlanRejectsEmptyQueue() {
+        XCTAssertNil(SonosQueueReplacementPlaybackPlan(items: []))
+    }
 }
