@@ -2,6 +2,10 @@ import XCTest
 @testable import SonosWidget
 
 final class PlaybackArtworkURLCacheTests: XCTestCase {
+    func testSharedCacheUsesSmallBoundedPersistentStore() {
+        XCTAssertLessThanOrEqual(PlaybackArtworkURLCache.shared.maxEntries, 1_500)
+    }
+
     func testPersistsRegisteredAppleMusicArtworkAcrossInstances() {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -117,9 +121,31 @@ final class PlaybackArtworkURLCacheTests: XCTestCase {
         now = Date(timeIntervalSince1970: 1_030)
         cache.register(items: [objectOnlyItem(id: "song:3", url: "https://cdn.example.com/3.jpg")], service: .appleMusic, source: .musicKitDirect)
 
-        XCTAssertNil(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:2"), service: .appleMusic).albumArtURL)
-        XCTAssertEqual(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:1"), service: .appleMusic).albumArtURL, "https://cdn.example.com/1.jpg")
+        XCTAssertNil(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:1"), service: .appleMusic).albumArtURL)
+        XCTAssertEqual(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:2"), service: .appleMusic).albumArtURL, "https://cdn.example.com/2.jpg")
         XCTAssertEqual(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:3"), service: .appleMusic).albumArtURL, "https://cdn.example.com/3.jpg")
+    }
+
+    func testPrunesOversizedPersistentStoreWhenLoaded() {
+        var now = Date(timeIntervalSince1970: 1_000)
+        let (writer, defaults, suiteName) = makeCache(now: { now }, maxEntries: 10)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        writer.register(items: [objectOnlyItem(id: "song:1", url: "https://cdn.example.com/1.jpg")], service: .appleMusic, source: .musicKitDirect)
+        now = Date(timeIntervalSince1970: 1_010)
+        writer.register(items: [objectOnlyItem(id: "song:2", url: "https://cdn.example.com/2.jpg")], service: .appleMusic, source: .musicKitDirect)
+        now = Date(timeIntervalSince1970: 1_020)
+        writer.register(items: [objectOnlyItem(id: "song:3", url: "https://cdn.example.com/3.jpg")], service: .appleMusic, source: .musicKitDirect)
+
+        let reader = PlaybackArtworkURLCache(
+            defaults: defaults,
+            now: { now },
+            ttlBySource: writer.ttlBySource,
+            maxEntries: 2
+        )
+
+        XCTAssertNil(reader.resolvedQueueItem(objectOnlyQueueItem(id: "song:1"), service: .appleMusic).albumArtURL)
+        XCTAssertEqual(reader.resolvedQueueItem(objectOnlyQueueItem(id: "song:2"), service: .appleMusic).albumArtURL, "https://cdn.example.com/2.jpg")
+        XCTAssertEqual(reader.resolvedQueueItem(objectOnlyQueueItem(id: "song:3"), service: .appleMusic).albumArtURL, "https://cdn.example.com/3.jpg")
     }
 
     func testSkipsLocalSonosArtworkURLs() {
@@ -184,6 +210,121 @@ final class PlaybackArtworkURLCacheTests: XCTestCase {
         XCTAssertEqual(resolved.albumArtURL, secondLocalArtworkURL)
     }
 
+    func testCacheHitDoesNotRewritePersistentStore() {
+        var now = Date(timeIntervalSince1970: 1_000)
+        let (cache, defaults, suiteName) = makeCache(now: { now })
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        cache.register(
+            items: [objectOnlyItem(id: "song:123", url: "https://cdn.example.com/123.jpg")],
+            service: .appleMusic,
+            source: .musicKitDirect
+        )
+        let beforeHit = defaults.data(forKey: "PlaybackArtworkURLCache.v1")
+
+        now = Date(timeIntervalSince1970: 1_030)
+        XCTAssertEqual(
+            cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:123"), service: .appleMusic).albumArtURL,
+            "https://cdn.example.com/123.jpg"
+        )
+
+        XCTAssertEqual(defaults.data(forKey: "PlaybackArtworkURLCache.v1"), beforeHit)
+    }
+
+    func testStoreURLStringDoesNotRewriteUnchangedEntries() {
+        var now = Date(timeIntervalSince1970: 1_000)
+        let (cache, defaults, suiteName) = makeCache(now: { now })
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let identity = PlaybackArtworkIdentity.metadata(
+            objectIDs: ["song:123"],
+            title: "Song",
+            artist: "Artist",
+            album: "Album"
+        )
+
+        cache.storeURLString(
+            "https://cdn.example.com/123.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: identity
+        )
+        let beforeSecondStore = defaults.data(forKey: "PlaybackArtworkURLCache.v1")
+
+        now = Date(timeIntervalSince1970: 2_000)
+        cache.storeURLString(
+            "https://cdn.example.com/123.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: identity
+        )
+
+        XCTAssertEqual(defaults.data(forKey: "PlaybackArtworkURLCache.v1"), beforeSecondStore)
+    }
+
+    func testCacheReusesDecodedEntriesForRepeatedLookups() {
+        let suiteName = "PlaybackArtworkURLCacheTests.\(UUID().uuidString)"
+        let defaults = CountingUserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let cache = PlaybackArtworkURLCache(
+            defaults: defaults,
+            ttlBySource: [.musicKitDirect: 60],
+            maxEntries: 256
+        )
+        cache.register(
+            items: [objectOnlyItem(id: "song:123", url: "https://cdn.example.com/123.jpg")],
+            service: .appleMusic,
+            source: .musicKitDirect
+        )
+        defaults.dataReadCount = 0
+
+        XCTAssertNotNil(cache.cachedURL(for: .metadata(objectIDs: ["song:123"], title: "", artist: "", album: ""), service: .appleMusic))
+        XCTAssertNotNil(cache.cachedURL(for: .metadata(objectIDs: ["song:123"], title: "", artist: "", album: ""), service: .appleMusic))
+
+        XCTAssertEqual(defaults.dataReadCount, 0)
+    }
+
+    func testDoesNotPersistVolatileQueueObjectIDs() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let queueItem = QueueItem(
+            id: "0",
+            objectID: "Q:0/2",
+            trackNumber: 2,
+            title: "Song",
+            artist: "Artist",
+            album: "Album",
+            albumArtURL: "http://192.168.50.249:1400/getaa?s=1",
+            uri: nil,
+            metaXML: """
+            <DIDL-Lite><item id="Q:0/2"><res>x-sonosapi-hls-static:song%3a123?sid=204&amp;flags=8232&amp;sn=2</res></item></DIDL-Lite>
+            """
+        )
+
+        cache.storeURLString(
+            "https://cdn.example.com/123.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: .queueItem(queueItem)
+        )
+
+        let stored = defaults.data(forKey: "PlaybackArtworkURLCache.v1")
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        XCTAssertFalse(stored.contains("q:0/2"))
+        XCTAssertNil(
+            cache.cachedURL(
+                for: .metadata(objectIDs: ["Q:0/2"], title: "", artist: "", album: ""),
+                service: .appleMusic
+            )
+        )
+        XCTAssertEqual(
+            cache.cachedURL(
+                for: .metadata(objectIDs: ["song:123"], title: "Song", artist: "Artist", album: "Album"),
+                service: .appleMusic
+            )?.urlString,
+            "https://cdn.example.com/123.jpg"
+        )
+    }
+
     private func makeCache(
         now: @escaping () -> Date = Date.init,
         maxEntries: Int = 256
@@ -234,5 +375,14 @@ final class PlaybackArtworkURLCacheTests: XCTestCase {
             uri: "x-sonos-http:\(id.replacingOccurrences(of: ":", with: "%3a")).mp4?sid=204&flags=8232&sn=2",
             metaXML: nil
         )
+    }
+}
+
+private final class CountingUserDefaults: UserDefaults {
+    var dataReadCount = 0
+
+    override func data(forKey defaultName: String) -> Data? {
+        dataReadCount += 1
+        return super.data(forKey: defaultName)
     }
 }

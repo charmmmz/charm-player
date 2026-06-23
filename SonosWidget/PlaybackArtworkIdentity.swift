@@ -197,9 +197,13 @@ nonisolated struct PlaybackArtworkIdentity: Sendable {
             candidate.removeFirst("1004206c".count)
         }
 
-        return candidate
+        let normalized = candidate
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        if normalized.hasPrefix("q:") {
+            return ""
+        }
+        return normalized
     }
 
     private static func firstXMLAttribute(named name: String, in xml: String) -> String? {

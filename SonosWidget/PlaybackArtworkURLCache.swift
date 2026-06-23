@@ -19,18 +19,24 @@ struct PlaybackArtworkURLCache {
         var isAmbiguous: Bool
     }
 
+    private final class StorageBox {
+        let lock = NSLock()
+        var entries: [String: Entry]?
+    }
+
     let defaults: UserDefaults
     let now: () -> Date
     let ttlBySource: [PlaybackArtworkResolutionSource: TimeInterval]
     let maxEntries: Int
 
     private let storeKey = "PlaybackArtworkURLCache.v1"
+    private let storageBox = StorageBox()
 
     init(
         defaults: UserDefaults,
         now: @escaping () -> Date = Date.init,
         ttlBySource: [PlaybackArtworkResolutionSource: TimeInterval] = Self.defaultTTLBySource,
-        maxEntries: Int = 10_000
+        maxEntries: Int = 1_500
     ) {
         self.defaults = defaults
         self.now = now
@@ -76,8 +82,10 @@ struct PlaybackArtworkURLCache {
             )
         }
 
-        prune(entries: &entries)
-        store(entries)
+        let prunedCount = prune(entries: &entries)
+        if storedCount > 0 || prunedCount > 0 {
+            store(entries)
+        }
 
         if storedCount > 0 || skippedCount > 0 {
             SonosLog.debug(
@@ -103,19 +111,21 @@ struct PlaybackArtworkURLCache {
         }
 
         var entries = entries()
-        let storedCount = remember(
+        let changedCount = remember(
             normalized,
             source: source,
             service: service,
             lookupKeys: identity.lookupKeys,
             entries: &entries
         )
-        prune(entries: &entries)
-        store(entries)
+        let prunedCount = prune(entries: &entries)
+        if changedCount > 0 || prunedCount > 0 {
+            store(entries)
+        }
         SonosLog.debug(
             .playbackLink,
             "Playback artwork URL cache store service=\(service.rawValue) source=\(source.rawValue) " +
-                "storedKeys=\(storedCount) entries=\(entries.count) " +
+                "storedKeys=\(changedCount) entries=\(entries.count) " +
                 "url=\(SonosLog.playbackLinkValue(normalized, maxLength: 240))")
     }
 
@@ -127,31 +137,34 @@ struct PlaybackArtworkURLCache {
         guard !lookupKeys.isEmpty else { return nil }
 
         var current = entries()
-        let nowSeconds = now().timeIntervalSince1970
+        var removedStale = false
         for key in lookupKeys {
             let storageKey = key.storageKey(service: service)
-            guard var entry = current[storageKey],
+            guard let entry = current[storageKey],
                   !entry.isAmbiguous,
                   let urlString = entry.urlString else {
                 continue
             }
             guard isFresh(entry), canonicalArtworkURLString(urlString) != nil else {
                 current.removeValue(forKey: storageKey)
-                store(current)
+                removedStale = true
                 SonosLog.debug(
                     .playbackLink,
                     "Playback artwork URL cache stale service=\(service.rawValue) source=\(entry.source.rawValue) key=\(storageKey)")
                 continue
             }
-            entry.lastAccessedAt = nowSeconds
-            current[storageKey] = entry
-            store(current)
+            if removedStale {
+                store(current)
+            }
             SonosLog.debug(
                 .playbackLink,
                 "Playback artwork URL cache hit service=\(service.rawValue) source=\(entry.source.rawValue) key=\(storageKey)")
             return CachedURL(urlString: urlString, source: entry.source)
         }
 
+        if removedStale {
+            store(current)
+        }
         SonosLog.debug(
             .playbackLink,
             "Playback artwork URL cache miss service=\(service.rawValue) keys=\(lookupKeys.count)")
@@ -196,7 +209,7 @@ struct PlaybackArtworkURLCache {
     ) -> Int {
         let nowSeconds = now().timeIntervalSince1970
         let cacheKey = ArtworkURLNormalizer.artworkCacheKey(from: urlString) ?? urlString
-        var storedCount = 0
+        var changedCount = 0
 
         for lookupKey in lookupKeys {
             let storageKey = lookupKey.storageKey(service: service)
@@ -209,11 +222,16 @@ struct PlaybackArtworkURLCache {
                     lastAccessedAt: nowSeconds,
                     isAmbiguous: false
                 )
-                storedCount += 1
+                changedCount += 1
                 continue
             }
 
             guard existing.cacheKey != cacheKey else {
+                guard existing.urlString != urlString
+                        || existing.source != source
+                        || existing.isAmbiguous else {
+                    continue
+                }
                 entries[storageKey] = Entry(
                     urlString: urlString,
                     cacheKey: cacheKey,
@@ -222,9 +240,11 @@ struct PlaybackArtworkURLCache {
                     lastAccessedAt: nowSeconds,
                     isAmbiguous: false
                 )
+                changedCount += 1
                 continue
             }
 
+            guard !existing.isAmbiguous else { continue }
             entries[storageKey] = Entry(
                 urlString: nil,
                 cacheKey: existing.cacheKey,
@@ -233,16 +253,17 @@ struct PlaybackArtworkURLCache {
                 lastAccessedAt: nowSeconds,
                 isAmbiguous: true
             )
+            changedCount += 1
             SonosLog.debug(
                 .playbackLink,
                 "Playback artwork URL cache ambiguous service=\(service.rawValue) key=\(storageKey)")
         }
 
-        return storedCount
+        return changedCount
     }
 
-    private func prune(entries: inout [String: Entry]) {
-        guard entries.count > maxEntries else { return }
+    private func prune(entries: inout [String: Entry]) -> Int {
+        guard entries.count > maxEntries else { return 0 }
         let overflow = entries.count - maxEntries
         let keysToRemove = entries
             .sorted {
@@ -256,21 +277,45 @@ struct PlaybackArtworkURLCache {
         for key in keysToRemove {
             entries.removeValue(forKey: key)
         }
+        let removedCount = keysToRemove.count
         SonosLog.debug(
             .playbackLink,
-            "Playback artwork URL cache pruned removed=\(keysToRemove.count) entries=\(entries.count) max=\(maxEntries)")
+            "Playback artwork URL cache pruned removed=\(removedCount) entries=\(entries.count) max=\(maxEntries)")
+        return removedCount
     }
 
     private func entries() -> [String: Entry] {
+        storageBox.lock.lock()
+        if let cached = storageBox.entries {
+            storageBox.lock.unlock()
+            return cached
+        }
+        storageBox.lock.unlock()
+
         guard let data = defaults.data(forKey: storeKey),
               let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) else {
+            storageBox.lock.lock()
+            storageBox.entries = [:]
+            storageBox.lock.unlock()
             return [:]
         }
-        return decoded
+        var loaded = decoded
+        let prunedCount = prune(entries: &loaded)
+        if prunedCount > 0 {
+            store(loaded)
+        } else {
+            storageBox.lock.lock()
+            storageBox.entries = loaded
+            storageBox.lock.unlock()
+        }
+        return loaded
     }
 
     private func store(_ entries: [String: Entry]) {
         guard let data = try? JSONEncoder().encode(entries) else { return }
+        storageBox.lock.lock()
+        storageBox.entries = entries
+        storageBox.lock.unlock()
         defaults.set(data, forKey: storeKey)
     }
 
