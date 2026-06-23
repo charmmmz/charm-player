@@ -496,6 +496,7 @@ test('bridge snapshots TV audio format from HTAudioIn instead of music quality m
         };
       },
     },
+    artworkResolver: null,
   });
   const device = playbackDevice({
     Host: '192.168.50.25',
@@ -623,6 +624,51 @@ test('bridge snapshots audio quality from Sonos track metadata', async () => {
   assert.equal(snapshot?.audioQualityLabel, 'Lossless');
 });
 
+test('bridge resolves snapshot artwork before emitting', async () => {
+  const calls: unknown[] = [];
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: {
+      resolve: async input => {
+        calls.push(input);
+        return {
+          source: 'itunesLookup',
+          url: 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
+          catalogID: '1440857781',
+        };
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const firstCall = calls[0] as {
+    title?: string;
+    artist?: string;
+    album?: string;
+    trackUri?: string;
+    albumArtUri?: string | null;
+    playbackSourceRaw?: string | null;
+  };
+  assert.equal(firstCall.title, 'Call On Me');
+  assert.equal(firstCall.artist, 'Daniel Caesar');
+  assert.equal(firstCall.album, 'Son of Spergy');
+  assert.equal(firstCall.trackUri, 'x-sonos-http:song%3a1839352407.mp4?sid=204&flags=8232&sn=2');
+  assert.equal(firstCall.albumArtUri?.includes('/getaa'), true);
+  assert.equal(firstCall.playbackSourceRaw, 'appleMusic');
+  assert.equal(
+    bridge.current('192.168.50.25')?.albumArtUri,
+    'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
+  );
+});
+
 test('local Control API playback metadata maps lossless and immersive quality labels', () => {
   assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
     service: { name: 'Apple Music' },
@@ -729,6 +775,7 @@ test('local Control API playback quality maps immersive tracks to Dolby Atmos', 
         sampleRate: 48_000,
       }),
     },
+    artworkResolver: null,
   });
   const device = playbackDevice({
     Host: '192.168.50.25',
@@ -750,6 +797,7 @@ test('bridge logs local Control API quality diagnostics when no label is availab
     localControl: {
       playbackQuality: async () => null,
     },
+    artworkResolver: null,
   });
   const device = playbackDevice({
     Host: '192.168.50.25',
@@ -927,7 +975,7 @@ function playbackDevice(
 }
 
 function testBridge(): SonosBridge {
-  return new SonosBridge(pino({ enabled: false }), { localControl: null });
+  return new SonosBridge(pino({ enabled: false }), { localControl: null, artworkResolver: null });
 }
 
 function captureLogger(): { logger: pino.Logger; lines: string[] } {

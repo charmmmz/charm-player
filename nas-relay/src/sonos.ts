@@ -3,6 +3,10 @@ import { EventEmitter } from 'node:events';
 import https from 'node:https';
 import type { Logger } from 'pino';
 import type { ArtworkHintStore } from './artworkHints.js';
+import {
+  createSonosArtworkResolver,
+  type SonosArtworkResolver,
+} from './sonosArtworkResolver.js';
 import type { SonosGroupSnapshot } from './types.js';
 
 export type SonosSnapshotChangeTrigger =
@@ -40,6 +44,7 @@ export interface SonosLocalControlClient {
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
   artworkHints?: ArtworkHintStore | null;
+  artworkResolver?: SonosArtworkResolver | null;
   transitionSettleRefreshMs?: number;
   eventRefreshDebounceMs?: number;
 }
@@ -202,6 +207,7 @@ export class SonosBridge extends EventEmitter {
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
   private readonly artworkHints: ArtworkHintStore | null;
+  private readonly artworkResolver: SonosArtworkResolver | null;
   private readonly transitionSettleRefreshMs: number;
   private readonly eventRefreshDebounceMs: number;
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
@@ -220,6 +226,9 @@ export class SonosBridge extends EventEmitter {
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
     this.artworkHints = options.artworkHints ?? null;
+    this.artworkResolver = options.artworkResolver === undefined
+      ? createSonosArtworkResolver({ artworkHints: this.artworkHints })
+      : options.artworkResolver;
     this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
     this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
   }
@@ -547,27 +556,45 @@ export class SonosBridge extends EventEmitter {
         album = previousSnapshot.album;
         albumArtUri = previousSnapshot.albumArtUri ?? albumArtUri;
       }
-      const hintedAlbumArtUri = this.artworkHints?.resolve({
-        title: trackTitle,
-        artist,
-        album,
-        objectIds: [trackUri],
-        currentArtworkUrl: albumArtUri,
-      }) ?? null;
-      if (hintedAlbumArtUri) {
-        this.log.debug(
-          {
-            groupId: resolvedGroupId,
-            trigger,
-            title: trackTitle,
-            artist,
-            album,
-            previousAlbumArtUri: summarizeAlbumArtUri(albumArtUri),
-            hintedAlbumArtUri: summarizeAlbumArtUri(hintedAlbumArtUri),
-          },
-          'snapshot album art hint applied',
-        );
-        albumArtUri = hintedAlbumArtUri;
+      if (this.artworkResolver) {
+        const artworkResolution = await this.artworkResolver.resolve({
+          title: trackTitle,
+          artist,
+          album,
+          trackUri,
+          albumArtUri,
+          playbackSourceRaw,
+        });
+        if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+
+        if (artworkResolution.url && artworkResolution.url !== albumArtUri) {
+          this.log.debug(
+            {
+              groupId: resolvedGroupId,
+              trigger,
+              source: artworkResolution.source,
+              catalogID: artworkResolution.catalogID ?? null,
+              title: trackTitle,
+              artist,
+              album,
+              previousAlbumArtUri: summarizeAlbumArtUri(albumArtUri),
+              resolvedAlbumArtUri: summarizeAlbumArtUri(artworkResolution.url),
+            },
+            'snapshot album art resolver applied',
+          );
+          albumArtUri = artworkResolution.url;
+        } else {
+          this.log.debug(
+            {
+              groupId: resolvedGroupId,
+              trigger,
+              source: artworkResolution.source,
+              catalogID: artworkResolution.catalogID ?? null,
+              albumArtUri: summarizeAlbumArtUri(albumArtUri),
+            },
+            'snapshot album art resolver kept current artwork',
+          );
+        }
       }
       if (liveStream) {
         this.log.info(
