@@ -220,3 +220,81 @@ final class DiagnosticLogStore {
         }
     }
 }
+
+struct DiagnosticLogExportResult: Equatable {
+    let sourceURL: URL
+    let exportURL: URL
+    let byteCount: Int
+}
+
+enum DiagnosticLogExportError: Error, Equatable, LocalizedError {
+    case sourceUnavailable
+    case documentsDirectoryUnavailable
+    case sourceMissing(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .sourceUnavailable:
+            return "Diagnostic log file is unavailable."
+        case .documentsDirectoryUnavailable:
+            return "Documents directory is unavailable."
+        case .sourceMissing(let url):
+            return "Diagnostic log file does not exist: \(url.lastPathComponent)"
+        }
+    }
+}
+
+struct DiagnosticLogExporter {
+    static let exportFileName = "sonos-diagnostics-export.log"
+
+    var sourceURLProvider: () -> URL?
+    var documentsDirectoryProvider: () -> URL?
+    var flushPendingWrites: () -> Void
+    var fileManager: FileManager
+
+    init(
+        sourceURLProvider: @escaping () -> URL? = SonosLog.diagnosticLogFileURL,
+        documentsDirectoryProvider: @escaping () -> URL? = {
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        },
+        flushPendingWrites: @escaping () -> Void = SonosLog.flushDiagnosticWrites,
+        fileManager: FileManager = .default
+    ) {
+        self.sourceURLProvider = sourceURLProvider
+        self.documentsDirectoryProvider = documentsDirectoryProvider
+        self.flushPendingWrites = flushPendingWrites
+        self.fileManager = fileManager
+    }
+
+    func export() throws -> DiagnosticLogExportResult {
+        guard let sourceURL = sourceURLProvider() else {
+            throw DiagnosticLogExportError.sourceUnavailable
+        }
+        guard let documentsDirectory = documentsDirectoryProvider() else {
+            throw DiagnosticLogExportError.documentsDirectoryUnavailable
+        }
+        flushPendingWrites()
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            throw DiagnosticLogExportError.sourceMissing(sourceURL)
+        }
+
+        try fileManager.createDirectory(
+            at: documentsDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let exportURL = documentsDirectory.appendingPathComponent(Self.exportFileName)
+        if fileManager.fileExists(atPath: exportURL.path) {
+            try fileManager.removeItem(at: exportURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: exportURL)
+
+        let byteCount = (try? fileManager.attributesOfItem(atPath: exportURL.path)[.size] as? NSNumber)?
+            .intValue ?? 0
+        return DiagnosticLogExportResult(
+            sourceURL: sourceURL,
+            exportURL: exportURL,
+            byteCount: byteCount
+        )
+    }
+}

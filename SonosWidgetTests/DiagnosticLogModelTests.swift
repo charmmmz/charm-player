@@ -92,4 +92,96 @@ final class DiagnosticLogModelTests: XCTestCase {
         XCTAssertTrue(store.entries.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
+
+    func testExporterCopiesCurrentDiagnosticLogToDocuments() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiagnosticLogExporterTests-\(UUID().uuidString)", isDirectory: true)
+        let sourceDirectory = directory.appendingPathComponent("AppGroup", isDirectory: true)
+        let documentsDirectory = directory.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let sourceURL = sourceDirectory.appendingPathComponent("sonos-diagnostics.log")
+        let text = """
+        SonosWidget diagnostics
+        2026-06-21T01:02:03Z [Playback] Export me
+
+        """
+        try text.write(to: sourceURL, atomically: true, encoding: .utf8)
+
+        let exporter = DiagnosticLogExporter(
+            sourceURLProvider: { sourceURL },
+            documentsDirectoryProvider: { documentsDirectory }
+        )
+
+        let result = try exporter.export()
+
+        XCTAssertEqual(result.sourceURL, sourceURL)
+        XCTAssertEqual(result.exportURL, documentsDirectory.appendingPathComponent("sonos-diagnostics-export.log"))
+        XCTAssertEqual(result.byteCount, text.data(using: .utf8)?.count)
+        XCTAssertEqual(try String(contentsOf: result.exportURL, encoding: .utf8), text)
+    }
+
+    func testExporterReplacesExistingExportFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiagnosticLogExporterTests-\(UUID().uuidString)", isDirectory: true)
+        let sourceDirectory = directory.appendingPathComponent("AppGroup", isDirectory: true)
+        let documentsDirectory = directory.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: documentsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let sourceURL = sourceDirectory.appendingPathComponent("sonos-diagnostics.log")
+        let exportURL = documentsDirectory.appendingPathComponent("sonos-diagnostics-export.log")
+        try "fresh log".write(to: sourceURL, atomically: true, encoding: .utf8)
+        try "stale log".write(to: exportURL, atomically: true, encoding: .utf8)
+
+        let exporter = DiagnosticLogExporter(
+            sourceURLProvider: { sourceURL },
+            documentsDirectoryProvider: { documentsDirectory }
+        )
+
+        _ = try exporter.export()
+
+        XCTAssertEqual(try String(contentsOf: exportURL, encoding: .utf8), "fresh log")
+    }
+
+    func testExporterFlushesPendingWritesBeforeCopying() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiagnosticLogExporterTests-\(UUID().uuidString)", isDirectory: true)
+        let sourceDirectory = directory.appendingPathComponent("AppGroup", isDirectory: true)
+        let documentsDirectory = directory.appendingPathComponent("Documents", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let sourceURL = sourceDirectory.appendingPathComponent("sonos-diagnostics.log")
+        let exporter = DiagnosticLogExporter(
+            sourceURLProvider: { sourceURL },
+            documentsDirectoryProvider: { documentsDirectory },
+            flushPendingWrites: {
+                try? FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+                try? "flushed log".write(to: sourceURL, atomically: true, encoding: .utf8)
+            }
+        )
+
+        let result = try exporter.export()
+
+        XCTAssertEqual(try String(contentsOf: result.exportURL, encoding: .utf8), "flushed log")
+    }
+
+    func testExporterReportsMissingSourceFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiagnosticLogExporterTests-\(UUID().uuidString)", isDirectory: true)
+        let missingSourceURL = directory.appendingPathComponent("missing.log")
+        let documentsDirectory = directory.appendingPathComponent("Documents", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let exporter = DiagnosticLogExporter(
+            sourceURLProvider: { missingSourceURL },
+            documentsDirectoryProvider: { documentsDirectory }
+        )
+
+        XCTAssertThrowsError(try exporter.export()) { error in
+            XCTAssertEqual(error as? DiagnosticLogExportError, .sourceMissing(missingSourceURL))
+        }
+    }
 }

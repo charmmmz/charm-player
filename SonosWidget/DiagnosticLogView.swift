@@ -6,6 +6,7 @@ struct DiagnosticLogView: View {
     @State private var filter = DiagnosticLogFilter()
     @State private var isConfirmingClear = false
     @State private var didCopyVisibleLogs = false
+    @State private var exportStatus: DiagnosticLogExportStatus?
 
     private var visibleEntries: [DiagnosticLogEntry] {
         store.filteredEntries(using: filter)
@@ -41,6 +42,13 @@ struct DiagnosticLogView: View {
                 }
                 .accessibilityLabel("Copy Visible Logs")
                 .disabled(visibleEntries.isEmpty)
+
+                Button {
+                    exportDiagnosticLog()
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .accessibilityLabel("Export Pullable Log")
 
                 Button(role: .destructive) {
                     isConfirmingClear = true
@@ -78,6 +86,11 @@ struct DiagnosticLogView: View {
                 Label("Copied visible logs", systemImage: "checkmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
+            }
+            if let exportStatus {
+                Label(exportStatus.message, systemImage: exportStatus.systemImage)
+                    .font(.caption)
+                    .foregroundStyle(exportStatus.tint)
             }
         } header: {
             Text("Summary")
@@ -173,6 +186,56 @@ struct DiagnosticLogView: View {
             .map(\.rawLine)
             .joined(separator: "\n")
         didCopyVisibleLogs = true
+    }
+
+    private func exportDiagnosticLog() {
+        do {
+            let result = try DiagnosticLogExporter().export()
+            let message = "Exported \(result.exportURL.lastPathComponent) (\(formattedByteCount(result.byteCount)))"
+            exportStatus = .success(message)
+            SonosLog.info(
+                .localService,
+                "Diagnostic log export success source=\(result.sourceURL.path) " +
+                    "destination=\(result.exportURL.path) bytes=\(result.byteCount)")
+        } catch {
+            let message = error.localizedDescription
+            exportStatus = .failure(message)
+            SonosLog.error(.localService, "Diagnostic log export failed: \(error)")
+        }
+    }
+
+    private func formattedByteCount(_ byteCount: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+    }
+}
+
+private enum DiagnosticLogExportStatus: Equatable {
+    case success(String)
+    case failure(String)
+
+    var message: String {
+        switch self {
+        case .success(let message), .failure(let message):
+            return message
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .success:
+            return "checkmark.circle.fill"
+        case .failure:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .success:
+            return .green
+        case .failure:
+            return .orange
+        }
     }
 }
 

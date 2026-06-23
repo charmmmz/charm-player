@@ -118,13 +118,25 @@ enum SonosLog {
     }
 
     private nonisolated static let diagnosticCategories = Set(Category.allCases)
-    private nonisolated static let diagnosticQueue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
+    private nonisolated static let diagnosticQueueKey = DispatchSpecificKey<Void>()
+    private nonisolated static let diagnosticQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "com.charm.SonosWidget.diagnostics")
+        queue.setSpecific(key: diagnosticQueueKey, value: ())
+        return queue
+    }()
     private nonisolated static let diagnosticAppGroupID = "group.com.charm.SonosWidget"
     private nonisolated static let diagnosticMaxBytes = 1_048_576
     private nonisolated static let diagnosticMaxLines = 2_000
 
     nonisolated static func diagnosticLogFileURL() -> URL? {
         diagnosticFileURL()
+    }
+
+    nonisolated static func flushDiagnosticWrites() {
+        if DispatchQueue.getSpecific(key: diagnosticQueueKey) != nil {
+            return
+        }
+        diagnosticQueue.sync {}
     }
 
     private nonisolated static func diagnosticFileURL() -> URL? {
