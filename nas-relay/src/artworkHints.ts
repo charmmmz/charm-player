@@ -87,7 +87,7 @@ export function createArtworkHintsRouter(store: ArtworkHintStore, log: Logger): 
     }
 
     const result = store.remember(hints.slice(0, 500));
-    log.debug({ accepted: result.accepted, rejected: result.rejected }, 'artwork hints stored');
+    log.info({ accepted: result.accepted, rejected: result.rejected }, 'artwork hints stored');
     res.json({ ok: true, ...result });
   });
 

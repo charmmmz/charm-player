@@ -122,3 +122,54 @@ test('artwork hints route stores valid hints', async () => {
     });
   }
 });
+
+test('artwork hints route logs accepted and rejected counts at info level', async () => {
+  const app = express();
+  const store = new ArtworkHintStore();
+  const { logger, lines } = captureLogger();
+  app.use(express.json());
+  app.use('/api', createArtworkHintsRouter(store, logger));
+
+  const server = app.listen(0);
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  assert(address && typeof address === 'object');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/artwork-hints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hints: [
+          {
+            title: 'Blue Train',
+            artist: 'John Coltrane',
+            album: 'Blue Train',
+            artworkUrl: 'https://cdn.example.com/blue-train.jpg',
+          },
+        ],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(lines.some(line =>
+      line.includes('"msg":"artwork hints stored"')
+      && line.includes('"accepted":1')
+      && line.includes('"rejected":0')
+    ), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+  }
+});
+
+function captureLogger(): { logger: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  const destination = {
+    write: (line: string) => {
+      lines.push(line);
+    },
+  };
+  return { logger: pino({ level: 'info' }, destination), lines };
+}

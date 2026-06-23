@@ -669,6 +669,36 @@ test('bridge resolves snapshot artwork before emitting', async () => {
   );
 });
 
+test('bridge logs snapshot artwork resolver source at info level', async () => {
+  const { logger, lines } = captureLogger();
+  const bridge = new SonosBridge(logger, {
+    localControl: null,
+    artworkResolver: {
+      resolve: async () => ({
+        source: 'itunesLookup',
+        url: 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
+        catalogID: '1440857781',
+      }),
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  assert.equal(lines.some(line =>
+    line.includes('"msg":"snapshot album art resolver applied"')
+    && line.includes('"source":"itunesLookup"')
+    && line.includes('"catalogID":"1440857781"')
+    && line.includes('"resolvedAlbumArtUri":"https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg"')
+  ), true);
+});
+
 test('local Control API playback metadata maps lossless and immersive quality labels', () => {
   assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
     service: { name: 'Apple Music' },
