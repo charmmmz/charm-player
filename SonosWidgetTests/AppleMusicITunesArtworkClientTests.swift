@@ -124,4 +124,58 @@ final class AppleMusicITunesArtworkClientTests: XCTestCase {
             "Moon Daniel Caesar Freudian"
         )
     }
+
+    func testSearchSongCatalogIDUsesBestMatchingTrackIDWithoutRequiringArtwork() async throws {
+        var requestedURLs: [URL] = []
+        let client = AppleMusicITunesArtworkClient { request in
+            requestedURLs.append(try XCTUnwrap(request.url))
+            return (
+                Data(
+                    """
+                    {
+                      "resultCount": 2,
+                      "results": [
+                        {
+                          "wrapperType": "track",
+                          "trackId": 111,
+                          "trackName": "Neon",
+                          "artistName": "Different Artist",
+                          "collectionName": "Other"
+                        },
+                        {
+                          "wrapperType": "track",
+                          "trackId": 1440857781,
+                          "trackName": "Neon",
+                          "artistName": "John Mayer",
+                          "collectionName": "Where the Light Is"
+                        }
+                      ]
+                    }
+                    """.utf8
+                ),
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+            )
+        }
+
+        let catalogID = try await client.searchSongCatalogID(
+            title: "Neon",
+            artist: "John Mayer",
+            album: "Where the Light Is",
+            countryCode: "US"
+        )
+
+        XCTAssertEqual(catalogID, "1440857781")
+        let requested = try XCTUnwrap(requestedURLs.first)
+        let components = try XCTUnwrap(URLComponents(url: requested, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "entity" })?.value, "song")
+        XCTAssertEqual(
+            components.queryItems?.first(where: { $0.name == "term" })?.value,
+            "Neon John Mayer Where the Light Is"
+        )
+    }
 }

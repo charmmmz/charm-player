@@ -29,6 +29,17 @@ let stationRetryDelayMs: Int = 2000
 /// freshly-set track has propagated to the position-info endpoint.
 let playbackSettleDelayMs: Int = 1500
 
+enum ReplaceQueueBackgroundFillCancellationPolicy {
+    enum Transport {
+        case localUPnP
+        case cloud
+    }
+
+    static func shouldCancelBeforeForegroundPlayback(transport: Transport) -> Bool {
+        transport == .localUPnP
+    }
+}
+
 struct HandoffResult: Equatable {
     let matchedTitle: String
     let targetName: String
@@ -208,6 +219,7 @@ final class SearchManager {
     private(set) var hasLoadedBrowseContent = false
     private var lastBrowseLoadKey: String?
     private var lastBrowseLoadedAt: Date?
+    private let appleMusicLibraryTrackPlaybackResolver: AppleMusicLibraryTrackPlaybackResolver
 
     var hasBrowseDisplayContent: Bool {
         hasLoadedBrowseContent || !favorites.isEmpty || !playlists.isEmpty || !radio.isEmpty || !recentlyPlayed.isEmpty
@@ -220,7 +232,10 @@ final class SearchManager {
         )
     }
 
-    init() {
+    init(
+        appleMusicLibraryTrackPlaybackResolver: AppleMusicLibraryTrackPlaybackResolver = AppleMusicLibraryTrackPlaybackResolver()
+    ) {
+        self.appleMusicLibraryTrackPlaybackResolver = appleMusicLibraryTrackPlaybackResolver
         restoreCachedAccounts()
         restoreRecentlyPlayed()
         restoreSidMapping()
@@ -453,16 +468,30 @@ final class SearchManager {
     }
 
     func prewarmPlaybackArtwork(items: [BrowseItem]) async {
-        PlaybackArtworkRegistry.shared.register(items: items)
-        let appleMusicItems = items.filter(isAppleMusicPlaybackArtworkItem)
-        if !appleMusicItems.isEmpty {
-            PlaybackArtworkURLCache.shared.register(
-                items: appleMusicItems,
-                service: .appleMusic,
-                source: .sonosCloud
-            )
+        if PlaybackArtworkCachingPolicy.isRegistryEnabled {
+            PlaybackArtworkRegistry.shared.register(items: items)
         }
-        submitArtworkHintsToRelay(items)
+        if PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled {
+            let appleMusicItems = items.filter(isAppleMusicPlaybackArtworkItem)
+            if !appleMusicItems.isEmpty {
+                PlaybackArtworkURLCache.shared.register(
+                    items: appleMusicItems,
+                    service: .appleMusic,
+                    source: .sonosCloud
+                )
+            }
+        }
+        if PlaybackArtworkCachingPolicy.isArtworkHintsEnabled {
+            submitArtworkHintsToRelay(items)
+        }
+        guard PlaybackArtworkCachingPolicy.isPrewarmEnabled else {
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork prewarm skipped reason=cache_disabled registry=\(PlaybackArtworkCachingPolicy.isRegistryEnabled) " +
+                    "urlCache=\(PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled) " +
+                    "hints=\(PlaybackArtworkCachingPolicy.isArtworkHintsEnabled) items=\(items.count)")
+            return
+        }
         await prewarmPlaybackArtwork(
             urls: PlaybackArtworkPrewarmPolicy.urls(from: items)
         )
@@ -480,6 +509,10 @@ final class SearchManager {
         for item: BrowseItem,
         includeContainerTracks: Bool = true
     ) {
+        guard PlaybackArtworkCachingPolicy.isPrewarmEnabled
+                || PlaybackArtworkCachingPolicy.isRegistryEnabled
+                || PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled
+                || PlaybackArtworkCachingPolicy.isArtworkHintsEnabled else { return }
         let itemSnapshot = item
         Task { [weak self] in
             guard let self else { return }
@@ -490,6 +523,10 @@ final class SearchManager {
     }
 
     private func schedulePlaybackArtworkPrewarm(for items: [BrowseItem]) {
+        guard PlaybackArtworkCachingPolicy.isPrewarmEnabled
+                || PlaybackArtworkCachingPolicy.isRegistryEnabled
+                || PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled
+                || PlaybackArtworkCachingPolicy.isArtworkHintsEnabled else { return }
         let itemSnapshot = items
         Task { [weak self] in
             await self?.prewarmPlaybackArtwork(items: itemSnapshot)
@@ -510,6 +547,7 @@ final class SearchManager {
     }
 
     private func prewarmContainerPlaybackArtwork(for item: BrowseItem) async {
+        guard PlaybackArtworkCachingPolicy.isPrewarmEnabled else { return }
         guard item.isContainer else { return }
         guard ["ALBUM", "PLAYLIST", "COLLECTION"].contains(item.cloudType ?? "") else { return }
         guard let ids = parseCloudIds(from: item),
@@ -1981,25 +2019,14 @@ final class SearchManager {
             }
 
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
-            do {
-                try await SonosAPI.addMultipleURIsToQueue(ip: ip, items: queueItems)
-            } catch {
-                let fallbackItems = batchQueueFallbackItems(
-                    from: queueItems,
-                    after: error,
-                    context: "Forward album")
-                SonosLog.error(
-                    .playback,
-                    "Forward album batch queue failed, falling back " +
-                        "retryCount=\(fallbackItems.count): \(error)")
-                for item in fallbackItems {
-                    try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
-                    _ = try await SonosAPI.addURIToQueue(
-                        ip: ip,
-                        uri: item.uri,
-                        metadata: item.metadata)
-                }
+            for item in queueItems {
+                try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
+                _ = try await SonosAPI.addURIToQueue(
+                    ip: ip,
+                    uri: item.uri,
+                    metadata: item.metadata)
             }
+            SonosLog.info(.playback, "Forward album queue singleItem add finished count=\(queueItems.count)")
 
             try ensureForwardHandoffTargetStillSelected(selectedSpeaker, manager: manager)
             try await SonosAPI.setAVTransportToQueue(
@@ -2064,13 +2091,24 @@ final class SearchManager {
         return batchError.remainingItems
     }
 
+    private func cancelReplaceQueueBackgroundFill(reason: String) {
+        let hadTask = replaceQueueFillTask != nil
+        replaceQueueFillTask?.cancel()
+        replaceQueueFillTask = nil
+        replaceQueueFillGeneration += 1
+        if hadTask {
+            SonosLog.info(
+                .playback,
+                "replaceQueue backgroundFill cancel reason='\(reason)' generation=\(replaceQueueFillGeneration)")
+        }
+    }
+
     private func replaceQueueAndPlayAudioFirst(ip: String,
                                                speakerUUID: String,
                                                plan: SonosQueueReplacementPlaybackPlan,
                                                manager: SonosManager,
                                                context: String) async throws {
-        replaceQueueFillTask?.cancel()
-        replaceQueueFillGeneration += 1
+        cancelReplaceQueueBackgroundFill(reason: "\(context) audioFirst start")
         let generation = replaceQueueFillGeneration
 
         SonosLog.info(
@@ -2116,22 +2154,35 @@ final class SearchManager {
             "\(context) replaceQueue step=play-first " +
                 "ms=\(Int(Date().timeIntervalSince(playStart) * 1000))")
 
+        let fillPlayMode = try? await SonosAPI.getPlayMode(ip: ip)
+        let reshuffleBackgroundBatches = fillPlayMode?.shuffle == true
+        if reshuffleBackgroundBatches {
+            SonosLog.info(
+                .playback,
+                "\(context) replaceQueue backgroundFill shuffle enabled batchSize=" +
+                    "\(SonosQueueReplacementPlaybackPlan.defaultBackgroundBatchSize)")
+        }
+
         startReplaceQueueBackgroundFill(
             ip: ip,
             speakerUUID: speakerUUID,
-            items: plan.remaining,
+            batches: plan.remainingBatches(),
             manager: manager,
             generation: generation,
+            reshuffleAfterEachBatch: reshuffleBackgroundBatches,
+            repeatMode: fillPlayMode?.repeat ?? .off,
             context: context)
     }
 
     private func startReplaceQueueBackgroundFill(ip: String,
                                                  speakerUUID: String,
-                                                 items: [SonosQueuedURI],
+                                                 batches: [[SonosQueuedURI]],
                                                  manager: SonosManager,
                                                  generation: Int,
+                                                 reshuffleAfterEachBatch: Bool,
+                                                 repeatMode: RepeatMode,
                                                  context: String) {
-        guard !items.isEmpty else {
+        guard !batches.isEmpty else {
             SonosLog.info(.playback, "\(context) replaceQueue backgroundFill skipped empty")
             replaceQueueFillTask = nil
             return
@@ -2143,18 +2194,22 @@ final class SearchManager {
             await self.fillReplaceQueueInBackground(
                 ip: ip,
                 speakerUUID: speakerUUID,
-                items: items,
+                batches: batches,
                 manager: manager,
                 generation: generation,
+                reshuffleAfterEachBatch: reshuffleAfterEachBatch,
+                repeatMode: repeatMode,
                 context: context)
         }
     }
 
     private func fillReplaceQueueInBackground(ip: String,
                                               speakerUUID: String,
-                                              items: [SonosQueuedURI],
+                                              batches: [[SonosQueuedURI]],
                                               manager: SonosManager,
                                               generation: Int,
+                                              reshuffleAfterEachBatch: Bool,
+                                              repeatMode: RepeatMode,
                                               context: String) async {
         guard isReplaceQueueBackgroundFillCurrent(
             ip: ip,
@@ -2168,53 +2223,86 @@ final class SearchManager {
 
         SonosLog.info(
             .playback,
-            "\(context) replaceQueue backgroundFill start count=\(items.count) generation=\(generation)")
+            "\(context) replaceQueue backgroundFill start batches=\(batches.count) " +
+                "count=\(batches.reduce(0) { $0 + $1.count }) " +
+                "batchSize=\(SonosQueueReplacementPlaybackPlan.defaultBackgroundBatchSize) " +
+                "reshuffle=\(reshuffleAfterEachBatch) generation=\(generation)")
 
-        do {
-            try await SonosAPI.addMultipleURIsToQueue(ip: ip, items: items)
-            SonosLog.info(
-                .playback,
-                "\(context) replaceQueue backgroundFill bulk success count=\(items.count)")
-        } catch {
-            let fallbackItems = batchQueueFallbackItems(
-                from: items,
-                after: error,
-                context: "\(context) backgroundFill")
-            SonosLog.error(
-                .playback,
-                "\(context) replaceQueue backgroundFill bulk failed, falling back " +
-                    "retryCount=\(fallbackItems.count): \(error)")
-            var addedCount = 0
-            for item in fallbackItems {
-                guard isReplaceQueueBackgroundFillCurrent(
+        for (batchIndex, batch) in batches.enumerated() {
+            guard isReplaceQueueBackgroundFillCurrent(
+                ip: ip,
+                generation: generation,
+                speakerUUID: speakerUUID,
+                manager: manager
+            ) else {
+                SonosLog.info(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill cancelled before batch " +
+                        "\(batchIndex + 1)/\(batches.count)")
+                return
+            }
+
+            if SonosQueueReplacementPlaybackPlan.defaultBackgroundBatchSize <= 1 {
+                let addedCount = await addReplaceQueueFallbackItems(
                     ip: ip,
-                    generation: generation,
+                    items: batch,
+                    originalBatchSize: batch.count,
+                    batchIndex: batchIndex,
+                    batchCount: batches.count,
                     speakerUUID: speakerUUID,
-                    manager: manager
-                ) else {
+                    generation: generation,
+                    manager: manager,
+                    context: context)
+                if addedCount == nil { return }
+            } else {
+                do {
+                    try await SonosAPI.addMultipleURIsToQueue(
+                        ip: ip,
+                        items: batch,
+                        chunkSize: SonosQueueReplacementPlaybackPlan.defaultBackgroundBatchSize)
                     SonosLog.info(
                         .playback,
-                        "\(context) replaceQueue backgroundFill cancelled during fallback " +
-                            "added=\(addedCount)")
-                    return
-                }
-                do {
-                    _ = try await SonosAPI.addURIToQueue(
+                        "\(context) replaceQueue backgroundFill batch success " +
+                            "batch=\(batchIndex + 1)/\(batches.count) count=\(batch.count)")
+                } catch {
+                    let fallbackItems = batchQueueFallbackItems(
+                        from: batch,
+                        after: error,
+                        context: "\(context) backgroundFill batch \(batchIndex + 1)")
+                    SonosLog.error(
+                        .playback,
+                        "\(context) replaceQueue backgroundFill batch failed, falling back " +
+                            "batch=\(batchIndex + 1)/\(batches.count) retryCount=\(fallbackItems.count): \(error)")
+                    let addedCount = await addReplaceQueueFallbackItems(
                         ip: ip,
-                        uri: item.uri,
-                        metadata: item.metadata)
-                    addedCount += 1
+                        items: fallbackItems,
+                        originalBatchSize: batch.count,
+                        batchIndex: batchIndex,
+                        batchCount: batches.count,
+                        speakerUUID: speakerUUID,
+                        generation: generation,
+                        manager: manager,
+                        context: context)
+                    if addedCount == nil {
+                        return
+                    }
+                }
+            }
+
+            if reshuffleAfterEachBatch {
+                do {
+                    try await SonosAPI.setPlayMode(ip: ip, shuffle: true, repeat: repeatMode)
+                    SonosLog.info(
+                        .playback,
+                        "\(context) replaceQueue backgroundFill reshuffle " +
+                            "batch=\(batchIndex + 1)/\(batches.count)")
                 } catch {
                     SonosLog.error(
                         .playback,
-                        "\(context) replaceQueue backgroundFill fallback item failed " +
-                            "uri=\(SonosLog.playbackLinkValue(item.uri)) error=\(error)")
+                        "\(context) replaceQueue backgroundFill reshuffle failed " +
+                            "batch=\(batchIndex + 1)/\(batches.count) error=\(error)")
                 }
             }
-            SonosLog.info(
-                .playback,
-                "\(context) replaceQueue backgroundFill fallback finished " +
-                    "added=\(addedCount)/\(fallbackItems.count)")
         }
 
         guard isReplaceQueueBackgroundFillCurrent(
@@ -2227,6 +2315,104 @@ final class SearchManager {
             return
         }
         await manager.loadQueue()
+    }
+
+    private func addReplaceQueueFallbackItems(ip: String,
+                                              items: [SonosQueuedURI],
+                                              originalBatchSize: Int,
+                                              batchIndex: Int,
+                                              batchCount: Int,
+                                              speakerUUID: String,
+                                              generation: Int,
+                                              manager: SonosManager,
+                                              context: String) async -> Int? {
+        var remainingItems = items
+        var addedCount = 0
+
+        for retryBatchSize in SonosQueueReplacementPlaybackPlan.fallbackBatchSizes(
+            afterFailedBatchSize: originalBatchSize
+        ) where remainingItems.count > 1 {
+            guard isReplaceQueueBackgroundFillCurrent(
+                ip: ip,
+                generation: generation,
+                speakerUUID: speakerUUID,
+                manager: manager
+            ) else {
+                SonosLog.info(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill cancelled during retryBatch " +
+                        "batch=\(batchIndex + 1)/\(batchCount) added=\(addedCount)")
+                return nil
+            }
+
+            let retryCount = remainingItems.count
+            do {
+                try await SonosAPI.addMultipleURIsToQueue(
+                    ip: ip,
+                    items: remainingItems,
+                    chunkSize: retryBatchSize)
+                addedCount += retryCount
+                SonosLog.info(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill retryBatch success " +
+                        "batch=\(batchIndex + 1)/\(batchCount) " +
+                        "chunkSize=\(retryBatchSize) added=\(retryCount)")
+                remainingItems.removeAll()
+                break
+            } catch let error as SonosQueueBatchAddError {
+                let succeededCount = max(0, retryCount - error.remainingItems.count)
+                addedCount += succeededCount
+                remainingItems = error.remainingItems
+                SonosLog.error(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill retryBatch failed " +
+                        "batch=\(batchIndex + 1)/\(batchCount) " +
+                        "chunkSize=\(retryBatchSize) succeeded=\(succeededCount) " +
+                        "remaining=\(remainingItems.count) error=\(error)")
+            } catch {
+                SonosLog.error(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill retryBatch failed " +
+                        "batch=\(batchIndex + 1)/\(batchCount) " +
+                        "chunkSize=\(retryBatchSize) remaining=\(remainingItems.count) error=\(error)")
+            }
+        }
+
+        let singleFallbackCount = remainingItems.count
+        for item in remainingItems {
+            guard isReplaceQueueBackgroundFillCurrent(
+                ip: ip,
+                generation: generation,
+                speakerUUID: speakerUUID,
+                manager: manager
+            ) else {
+                SonosLog.info(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill cancelled during singleItem fallback " +
+                        "batch=\(batchIndex + 1)/\(batchCount) added=\(addedCount)")
+                return nil
+            }
+            do {
+                _ = try await SonosAPI.addURIToQueue(
+                    ip: ip,
+                    uri: item.uri,
+                    metadata: item.metadata)
+                addedCount += 1
+            } catch {
+                SonosLog.error(
+                    .playback,
+                    "\(context) replaceQueue backgroundFill singleItem fallback failed " +
+                        "batch=\(batchIndex + 1)/\(batchCount) " +
+                        "uri=\(SonosLog.playbackLinkValue(item.uri)) error=\(error)")
+            }
+        }
+
+        SonosLog.info(
+            .playback,
+            "\(context) replaceQueue backgroundFill fallback finished " +
+                "batch=\(batchIndex + 1)/\(batchCount) added=\(addedCount)/\(items.count) " +
+                "singleFallbackCount=\(singleFallbackCount)")
+        return addedCount
     }
 
     private func isReplaceQueueBackgroundFillCurrent(ip: String,
@@ -2948,14 +3134,15 @@ final class SearchManager {
 
         let ip = speaker.playbackIP
         let speakerUUID = speaker.id
-        let queueItems = queueableItems.compactMap {
+        let playbackItems = await appleMusicLibraryTrackPlaybackResolver.resolvedItems(queueableItems)
+        let queueItems = playbackItems.compactMap {
             $0.playbackDescriptor.queuePayload(metadata: playbackMetadata(for: $0))
         }
         guard let replacementPlan = SonosQueueReplacementPlaybackPlan(items: queueItems) else {
             errorMessage = LocalServiceSonosPlaybackError.noPlayableCatalogID.localizedDescription
             return false
         }
-        schedulePlaybackArtworkPrewarm(for: queueableItems)
+        schedulePlaybackArtworkPrewarm(for: playbackItems)
         SonosLog.debug(
             .playbackLink,
             "playNow displayed-tracks start title='\(displayTitle)' count=\(queueItems.count) " +
@@ -2963,7 +3150,7 @@ final class SearchManager {
                 "lastURI=\(SonosLog.playbackLinkValue(queueItems.last?.uri)) " +
                 "firstMetadata=\(queueItems.first.map { SonosLog.playbackMetadataSummary($0.metadata) } ?? "nil")")
 
-        if let first = queueableItems.first {
+        if let first = playbackItems.first {
             pushRecentlyPlayed(first)
         }
 
@@ -3089,6 +3276,10 @@ final class SearchManager {
             guard let uuid = activeSpeaker?.id else {
                 SonosLog.error(.playback, "playNow: no speaker UUID")
                 return false
+            }
+
+            if ReplaceQueueBackgroundFillCancellationPolicy.shouldCancelBeforeForegroundPlayback(transport: .localUPnP) {
+                cancelReplaceQueueBackgroundFill(reason: "playNow '\(item.title)' foreground")
             }
 
             let isRadio = uri.contains("x-sonosapi-radio:")

@@ -5,7 +5,7 @@ import UIKit
 /// Disk eviction is LRU: every read touches the file's modification date so
 /// frequently-accessed images (e.g. the currently playing song) are never
 /// evicted ahead of images that haven't been viewed.
-final class QueueArtDiskCache {
+nonisolated final class QueueArtDiskCache {
     static let shared = QueueArtDiskCache()
 
     private let cacheDir: URL

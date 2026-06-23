@@ -220,7 +220,8 @@ struct CloudBrowseItemFactory: Sendable {
             let trackId = trackURIObjectId(objectId: objectId, cloudServiceId: cloudServiceId)
             let (scheme, fileExtension, flags) = trackURIComponents(
                 localSid: localSid,
-                mimeType: mimeType
+                mimeType: mimeType,
+                isAppleMusic: appleMusicCloudServiceIds.contains(cloudServiceId)
             )
             return SonosPlayableURIBuilder.serviceURI(
                 scheme: scheme,
@@ -521,12 +522,19 @@ struct CloudBrowseItemFactory: Sendable {
         return objectId
     }
 
-    private func trackURIComponents(localSid: Int, mimeType: String?) -> (String, String, Int) {
+    private func trackURIComponents(
+        localSid: Int,
+        mimeType: String?,
+        isAppleMusic: Bool
+    ) -> (String, String, Int) {
         switch localSid {
         case 12:
             return ("x-sonos-spotify", "", 8224)
         default:
             let (fileExtension, flags) = Self.extensionAndFlags(for: mimeType)
+            if isAppleMusic, flags == 0 {
+                return ("x-sonos-http", ".mp4", 8232)
+            }
             return ("x-sonos-http", fileExtension, flags)
         }
     }

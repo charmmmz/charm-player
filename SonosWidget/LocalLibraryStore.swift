@@ -471,7 +471,18 @@ final class LocalLibraryStore {
             if didStart { return }
         }
 
-        if let fallbackKind,
+        let shouldAttemptCatalogFallback = LocalServicePlaybackFallbackPolicy.shouldAttemptCatalogFallback(
+            primaryKind: playable?.kind,
+            fallbackKind: fallbackKind)
+        if !shouldAttemptCatalogFallback, let fallbackKind, let fallbackTitle {
+            SonosLog.info(
+                .playback,
+                "LocalService catalog fallback skipped primaryKind=\(playable?.kind.cloudType ?? "nil") " +
+                    "fallbackKind=\(fallbackKind.cloudType) title='\(fallbackTitle)' reason=primary-playlist")
+        }
+
+        if shouldAttemptCatalogFallback,
+           let fallbackKind,
            let fallbackTitle,
            let catalogPlayable = await catalogFallbackPlayable(
             kind: fallbackKind,
@@ -611,7 +622,18 @@ final class LocalLibraryStore {
             }
         }
 
-        if let fallbackKind,
+        let shouldAttemptCatalogFallback = LocalServicePlaybackFallbackPolicy.shouldAttemptCatalogFallback(
+            primaryKind: playable?.kind,
+            fallbackKind: fallbackKind)
+        if !shouldAttemptCatalogFallback, let fallbackKind, let fallbackTitle {
+            SonosLog.info(
+                .playbackLink,
+                "LocalService queue catalog fallback skipped primaryKind=\(playable?.kind.cloudType ?? "nil") " +
+                    "fallbackKind=\(fallbackKind.cloudType) title='\(fallbackTitle)' reason=primary-playlist")
+        }
+
+        if shouldAttemptCatalogFallback,
+           let fallbackKind,
            let fallbackTitle,
            let catalogPlayable = await catalogFallbackPlayable(
             kind: fallbackKind,

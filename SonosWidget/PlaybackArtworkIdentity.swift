@@ -126,8 +126,12 @@ nonisolated struct PlaybackArtworkIdentity: Sendable {
     }
 
     private static func objectIDsFromArtworkURL(_ value: String?) -> [String] {
-        guard let value, let url = URL(string: value) else { return [] }
-        var ids = objectIDsFromRawValue(value)
+        guard let value,
+              QueueArtPrefetchPolicy.isLocalSonosArtworkURL(value),
+              let url = URL(string: value) else {
+            return []
+        }
+        var ids: [String] = []
         if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
            let objectValue = components.queryItems?.first(where: { $0.name == "u" })?.value {
             ids.append(contentsOf: objectIDsFromRawValue(objectValue))
@@ -163,6 +167,9 @@ nonisolated struct PlaybackArtworkIdentity: Sendable {
     private static func cleanedObjectID(_ value: String) -> String {
         var candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !candidate.isEmpty else { return "" }
+        if QueueArtPrefetchPolicy.isLocalSonosArtworkURL(candidate) {
+            return ""
+        }
 
         if let queryIndex = candidate.firstIndex(of: "?") {
             candidate = String(candidate[..<queryIndex])

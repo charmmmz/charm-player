@@ -108,12 +108,7 @@ struct AppleMusicPlaybackArtworkResolver {
                 "current=\(artworkState(request.currentArtworkURLString))")
 
         if let existing = normalizedPublicArtworkURLString(request.currentArtworkURLString) {
-            cache.storeURLString(
-                existing,
-                service: request.service,
-                source: .existingPublic,
-                identity: request.identity
-            )
+            store(existing, source: .existingPublic, request: request)
             SonosLog.debug(
                 .playbackLink,
                 "Playback artwork resolver hit stage=existing_public " +
@@ -121,28 +116,31 @@ struct AppleMusicPlaybackArtworkResolver {
             return PlaybackArtworkResolution(urlString: existing, source: .existingPublic)
         }
 
-        if let cached = cache.cachedURL(for: request.identity, service: request.service) {
-            SonosLog.debug(
-                .playbackLink,
-                "Playback artwork resolver hit stage=persistent_cache source=\(cached.source.rawValue) " +
-                    "url=\(SonosLog.playbackLinkValue(cached.urlString, maxLength: 240))")
-            return PlaybackArtworkResolution(urlString: cached.urlString, source: .persistentCache)
+        if PlaybackArtworkCachingPolicy.isRegistryEnabled {
+            if let registryURL = normalizedPublicArtworkURLString(await registryLookup(request)) {
+                store(registryURL, source: .registry, request: request)
+                SonosLog.debug(
+                    .playbackLink,
+                    "Playback artwork resolver hit stage=registry " +
+                        "url=\(SonosLog.playbackLinkValue(registryURL, maxLength: 240))")
+                return PlaybackArtworkResolution(urlString: registryURL, source: .registry)
+            }
+            SonosLog.debug(.playbackLink, "Playback artwork resolver miss stage=registry")
+        } else {
+            SonosLog.debug(.playbackLink, "Playback artwork resolver skip stage=registry reason=cache_disabled")
         }
 
-        if let registryURL = normalizedPublicArtworkURLString(await registryLookup(request)) {
-            cache.storeURLString(
-                registryURL,
-                service: request.service,
-                source: .registry,
-                identity: request.identity
-            )
-            SonosLog.debug(
-                .playbackLink,
-                "Playback artwork resolver hit stage=registry " +
-                    "url=\(SonosLog.playbackLinkValue(registryURL, maxLength: 240))")
-            return PlaybackArtworkResolution(urlString: registryURL, source: .registry)
+        if PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled {
+            if let cached = cache.cachedURL(for: request.identity, service: request.service) {
+                SonosLog.debug(
+                    .playbackLink,
+                    "Playback artwork resolver hit stage=persistent_cache source=\(cached.source.rawValue) " +
+                        "url=\(SonosLog.playbackLinkValue(cached.urlString, maxLength: 240))")
+                return PlaybackArtworkResolution(urlString: cached.urlString, source: .persistentCache)
+            }
+        } else {
+            SonosLog.debug(.playbackLink, "Playback artwork resolver skip stage=persistent_cache reason=cache_disabled")
         }
-        SonosLog.debug(.playbackLink, "Playback artwork resolver miss stage=registry")
 
         if musicKitIsAuthorized() {
             if let direct = await musicKitDirectArtworkURL(request) {
@@ -269,6 +267,12 @@ struct AppleMusicPlaybackArtworkResolver {
         source: PlaybackArtworkResolutionSource,
         request: PlaybackArtworkRequest
     ) {
+        guard PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled else {
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork resolver store skipped source=\(source.rawValue) reason=cache_disabled")
+            return
+        }
         cache.storeURLString(
             urlString,
             service: request.service,

@@ -170,6 +170,9 @@ struct SonosQueuedURI: Equatable, Sendable {
 }
 
 struct SonosQueueReplacementPlaybackPlan: Equatable, Sendable {
+    static let defaultBackgroundBatchSize = 16
+    static let fallbackBackgroundBatchSizes: [Int] = []
+
     var first: SonosQueuedURI
     var remaining: [SonosQueuedURI]
 
@@ -181,6 +184,18 @@ struct SonosQueueReplacementPlaybackPlan: Equatable, Sendable {
 
     var totalCount: Int {
         1 + remaining.count
+    }
+
+    func remainingBatches(maxBatchSize: Int = Self.defaultBackgroundBatchSize) -> [[SonosQueuedURI]] {
+        let batchSize = max(1, maxBatchSize)
+        guard !remaining.isEmpty else { return [] }
+        return stride(from: 0, to: remaining.count, by: batchSize).map { start in
+            Array(remaining[start..<min(start + batchSize, remaining.count)])
+        }
+    }
+
+    static func fallbackBatchSizes(afterFailedBatchSize failedBatchSize: Int) -> [Int] {
+        fallbackBackgroundBatchSizes.filter { $0 < failedBatchSize }
     }
 }
 
@@ -607,18 +622,22 @@ enum SonosAPI {
                                                    containerURI: String = "",
                                                    containerMetadata: String = "",
                                                    position: Int = 0,
-                                                   asNext: Bool = false) async throws {
+                                                   asNext: Bool = false,
+                                                   chunkSize: Int = addMultipleURIsToQueueChunkSize) async throws {
         let startedAt = Date()
+        let chunkSize = normalizedAddMultipleURIsChunkSize(chunkSize)
         SonosLog.debug(
             .playbackLink,
             "SOAP AddMultipleURIsToQueue request host=\(ip) count=\(items.count) " +
+                "chunkSize=\(chunkSize) " +
                 "position=\(position) asNext=\(asNext) " +
                 "containerURI=\(SonosLog.playbackLinkValue(containerURI)) " +
                 "firstURI=\(SonosLog.playbackLinkValue(items.first?.uri)) " +
                 "lastURI=\(SonosLog.playbackLinkValue(items.last?.uri)) " +
-                "containerMetadata=\(SonosLog.playbackMetadataSummary(containerMetadata))")
-        for start in stride(from: 0, to: items.count, by: addMultipleURIsToQueueChunkSize) {
-            let end = min(start + addMultipleURIsToQueueChunkSize, items.count)
+                "containerMetadata=\(SonosLog.playbackMetadataSummary(containerMetadata)) " +
+                "diagnostics=\(addMultipleURIsToQueueDiagnostics(items: items))")
+        for start in stride(from: 0, to: items.count, by: chunkSize) {
+            let end = min(start + chunkSize, items.count)
             let chunk = Array(items[start..<end])
             let body = addMultipleURIsToQueueBody(
                 items: chunk,
@@ -639,7 +658,8 @@ enum SonosAPI {
                     "SOAP AddMultipleURIsToQueue failed host=\(ip) count=\(items.count) " +
                         "chunkStart=\(start) chunkCount=\(chunk.count) " +
                         "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000)) " +
-                        "error=\(error) firstURI=\(SonosLog.playbackLinkValue(chunk.first?.uri))")
+                        "error=\(error) firstURI=\(SonosLog.playbackLinkValue(chunk.first?.uri)) " +
+                        "diagnostics=\(addMultipleURIsToQueueDiagnostics(items: chunk, bodyByteCount: body.utf8.count))")
                 throw SonosQueueBatchAddError(
                     underlying: error,
                     failedChunkStart: start,
@@ -658,14 +678,67 @@ enum SonosAPI {
                 "ms=\(Int(Date().timeIntervalSince(startedAt) * 1000))")
     }
 
+    nonisolated static func addMultipleURIsToQueueDiagnostics(
+        items: [SonosQueuedURI],
+        bodyByteCount: Int? = nil
+    ) -> String {
+        var uriTypeCounts = [
+            "librarytrack": 0,
+            "song": 0,
+            "container": 0,
+            "other": 0
+        ]
+        for item in items {
+            uriTypeCounts[addMultipleURIType(item.uri), default: 0] += 1
+        }
+        let uriTypes = [
+            "librarytrack=\(uriTypeCounts["librarytrack"] ?? 0)",
+            "song=\(uriTypeCounts["song"] ?? 0)",
+            "container=\(uriTypeCounts["container"] ?? 0)",
+            "other=\(uriTypeCounts["other"] ?? 0)"
+        ].joined(separator: " ")
+
+        let flags = Dictionary(
+            grouping: items.compactMap { queryParameter("flags", in: $0.uri) },
+            by: { $0 }
+        )
+        .map { "\($0.key):\($0.value.count)" }
+        .sorted()
+        .joined(separator: ",")
+
+        let metadataBytes = items.reduce(0) { $0 + $1.metadata.utf8.count }
+        let escapedMetadataCount = items.filter {
+            $0.metadata.contains("&lt;") || $0.metadata.contains("&quot;")
+        }.count
+        let firstDecodedMetadata = decodeXMLEntities(items.first?.metadata ?? "")
+        let firstTag = firstDIDLElementTag(in: firstDecodedMetadata)
+        let firstMetadataID = diagnosticValue(firstTag.flatMap { attr("id", in: $0) })
+        let firstParentID = diagnosticValue(firstTag.flatMap { attr("parentID", in: $0) })
+
+        var parts = [
+            "uriTypes=\(uriTypes)",
+            "flags=\(flags.isEmpty ? "none" : flags)",
+            "firstMetadataID=\(firstMetadataID)",
+            "firstParentID=\(firstParentID)",
+            "escapedMetadata=\(escapedMetadataCount)",
+            "metadataBytes=\(metadataBytes)"
+        ]
+        if let bodyByteCount {
+            parts.append("bodyBytes=\(bodyByteCount)")
+        }
+        return parts.joined(separator: " ")
+    }
+
     nonisolated static func addMultipleURIsToQueueBodies(items: [SonosQueuedURI],
-                                                         containerURI: String = "",
-                                                         containerMetadata: String = "",
-                                                         position: Int = 0,
-                                                         asNext: Bool = false) -> [String] {
+                                                        containerURI: String = "",
+                                                        containerMetadata: String = "",
+                                                        position: Int = 0,
+                                                        asNext: Bool = false,
+                                                        chunkSize: Int = addMultipleURIsToQueueChunkSize) -> [String] {
         guard !items.isEmpty else { return [] }
-        return stride(from: 0, to: items.count, by: addMultipleURIsToQueueChunkSize).map { start in
-            let chunk = Array(items[start..<min(start + addMultipleURIsToQueueChunkSize, items.count)])
+        let chunkSize = normalizedAddMultipleURIsChunkSize(chunkSize)
+        return stride(from: 0, to: items.count, by: chunkSize).map { start in
+            let chunk = Array(items[start..<min(start + chunkSize, items.count)])
             return addMultipleURIsToQueueBody(
                 items: chunk,
                 containerURI: containerURI,
@@ -673,6 +746,10 @@ enum SonosAPI {
                 position: position,
                 asNext: asNext)
         }
+    }
+
+    private nonisolated static func normalizedAddMultipleURIsChunkSize(_ chunkSize: Int) -> Int {
+        max(1, chunkSize)
     }
 
     nonisolated static func addMultipleURIsToQueueFallbackItems(items: [SonosQueuedURI],
@@ -701,6 +778,36 @@ enum SonosAPI {
 
     private nonisolated static func addMultipleURIsToQueueURIArgument(_ uri: String) -> String {
         uri.replacingOccurrences(of: " ", with: "%20")
+    }
+
+    private nonisolated static func addMultipleURIType(_ uri: String) -> String {
+        let decoded = uri.removingPercentEncoding ?? uri
+        let lowercased = decoded.lowercased()
+        if lowercased.contains("librarytrack:") {
+            return "librarytrack"
+        }
+        if lowercased.contains("song:") {
+            return "song"
+        }
+        if lowercased.hasPrefix("x-rincon-cpcontainer:") {
+            return "container"
+        }
+        return "other"
+    }
+
+    private nonisolated static func firstDIDLElementTag(in metadata: String) -> String? {
+        let pattern = #"<(?:item|container)\b[^>]*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: metadata, range: NSRange(metadata.startIndex..., in: metadata)),
+              let range = Range(match.range, in: metadata) else {
+            return nil
+        }
+        return String(metadata[range])
+    }
+
+    private nonisolated static func diagnosticValue(_ value: String?) -> String {
+        guard let value else { return "nil" }
+        return value.isEmpty ? "<empty>" : value
     }
 
     nonisolated static func removeAllTracksFromQueue(ip: String) async throws {

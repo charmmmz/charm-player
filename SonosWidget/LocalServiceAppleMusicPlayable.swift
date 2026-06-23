@@ -21,6 +21,17 @@ enum LocalServiceSonosPlaybackError: LocalizedError, Equatable {
     }
 }
 
+enum LocalServicePlaybackFallbackPolicy {
+    static func shouldAttemptCatalogFallback(
+        primaryKind: LocalServiceAppleMusicPlayable.Kind?,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind?
+    ) -> Bool {
+        guard fallbackKind != nil else { return false }
+        guard primaryKind != .playlist else { return false }
+        return true
+    }
+}
+
 struct LocalServiceAppleMusicPlayable: Equatable, Identifiable, Sendable {
     enum Kind: Equatable, Sendable {
         case song

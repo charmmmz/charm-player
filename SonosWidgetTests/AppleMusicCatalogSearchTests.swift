@@ -126,6 +126,69 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertEqual(item.sonosPlayableMimeType, "audio/mp4")
     }
 
+    func testLibraryTrackPlaybackResolverConvertsAppleMusicLibraryTrackToCatalogSongURI() async {
+        var searchedTerms: [String] = []
+        let resolver = AppleMusicLibraryTrackPlaybackResolver(
+            catalogSearch: { term, _ in
+                searchedTerms.append(term)
+                return [
+                    AppleMusicCatalogSearchItem(
+                        id: "1440857781",
+                        type: .song,
+                        title: "Neon",
+                        artist: "John Mayer",
+                        album: "Where the Light Is",
+                        artworkURLString: "https://example.com/neon.jpg",
+                        duration: 245)
+                ]
+            },
+            iTunesCatalogSearch: { _, _, _, _ in nil })
+        let item = BrowseItem(
+            id: "librarytrack:i.aJGorVIS3GeMrdm",
+            title: "Neon",
+            artist: "John Mayer",
+            album: "Where the Light Is",
+            albumArtURL: nil,
+            uri: "x-sonos-http:librarytrack%3ai.aJGorVIS3GeMrdm.mp4?sid=204&flags=8232&sn=2",
+            duration: 0,
+            isContainer: false,
+            serviceId: 204,
+            cloudType: "TRACK")
+
+        let resolved = await resolver.resolvedItem(item)
+
+        XCTAssertEqual(searchedTerms, ["Neon John Mayer Where the Light Is"])
+        XCTAssertEqual(resolved.id, "song:1440857781")
+        XCTAssertEqual(resolved.uri, "x-sonos-http:song%3a1440857781.mp4?sid=204&flags=8232&sn=2")
+        XCTAssertEqual(resolved.albumArtURL, "https://example.com/neon.jpg")
+        XCTAssertEqual(resolved.duration, 245)
+    }
+
+    func testLibraryTrackPlaybackResolverFallsBackToITunesCatalogIDWhenMusicKitMisses() async {
+        let resolver = AppleMusicLibraryTrackPlaybackResolver(
+            catalogSearch: { _, _ in [] },
+            iTunesCatalogSearch: { title, artist, album, _ in
+                XCTAssertEqual(title, "Neon")
+                XCTAssertEqual(artist, "John Mayer")
+                XCTAssertEqual(album, "Where the Light Is")
+                return "1440857781"
+            })
+        let item = BrowseItem(
+            id: "librarytrack:i.aJGorVIS3GeMrdm",
+            title: "Neon",
+            artist: "John Mayer",
+            album: "Where the Light Is",
+            uri: "x-sonos-http:librarytrack%3ai.aJGorVIS3GeMrdm.mp4?sid=204&flags=8232&sn=2",
+            isContainer: false,
+            serviceId: 204,
+            cloudType: "TRACK")
+
+        let resolved = await resolver.resolvedItem(item)
+
+        XCTAssertEqual(resolved.id, "song:1440857781")
+        XCTAssertEqual(resolved.uri, "x-sonos-http:song%3a1440857781.mp4?sid=204&flags=8232&sn=2")
+    }
+
     func testContainerSearchItemsUseNamespacedSonosObjectID() {
         let item = AppleMusicCatalogSearchItem(
             id: "1440857781",

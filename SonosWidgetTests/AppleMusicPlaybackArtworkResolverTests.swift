@@ -2,7 +2,35 @@ import XCTest
 @testable import SonosWidget
 
 final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
-    func testPersistentCacheWinsBeforeNetworkFallbacks() async {
+    func testExistingPublicArtworkShortCircuitsRegistryCacheAndLookups() async {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let resolver = AppleMusicPlaybackArtworkResolver(
+            cache: cache,
+            registryLookup: { _ in XCTFail("registry should not run for public artwork"); return nil },
+            musicKitIsAuthorized: { true },
+            musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run for public artwork"); return nil },
+            musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run for public artwork"); return nil },
+            iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run for public artwork"); return nil },
+            iTunesSearch: { _ in XCTFail("iTunes search should not run for public artwork"); return nil },
+            sonosCloudArtworkLookup: { _ in XCTFail("Sonos Cloud should not run for public artwork"); return nil }
+        )
+
+        let result = await resolver.resolve(
+            request: request(
+                catalogID: "1440857781",
+                queueItem: queueItem(
+                    storeID: "1440857781",
+                    art: "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg"
+                )
+            )
+        )
+
+        XCTAssertEqual(result?.source, .existingPublic)
+        XCTAssertEqual(result?.urlString, "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg")
+    }
+
+    func testRegistryRunsBeforePersistentCache() async {
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         cache.register(
@@ -22,7 +50,47 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
         )
         let resolver = AppleMusicPlaybackArtworkResolver(
             cache: cache,
-            registryLookup: { _ in XCTFail("registry should not run after persistent cache hit"); return nil },
+            registryLookup: { _ in "https://cdn.example.com/current-detail.jpg" },
+            musicKitIsAuthorized: { true },
+            musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run after registry hit"); return nil },
+            musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run after registry hit"); return nil },
+            iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run after registry hit"); return nil },
+            iTunesSearch: { _ in XCTFail("iTunes search should not run after registry hit"); return nil },
+            sonosCloudArtworkLookup: { _ in XCTFail("Sonos Cloud should not run after registry hit"); return nil }
+        )
+
+        let result = await resolver.resolve(
+            request: request(
+                catalogID: "1440857781",
+                queueItem: queueItem(storeID: "1440857781", art: "http://192.168.50.249:1400/getaa?s=1")
+            )
+        )
+
+        XCTAssertEqual(result?.source, .registry)
+        XCTAssertEqual(result?.urlString, "https://cdn.example.com/current-detail.jpg")
+    }
+
+    func testPersistentCacheRunsBeforeMusicKitWhenRegistryMisses() async {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        cache.register(
+            items: [
+                BrowseItem(
+                    id: "song:1440857781",
+                    title: "Moon",
+                    artist: "Daniel Caesar",
+                    album: "Freudian",
+                    albumArtURL: "https://cdn.example.com/persistent.jpg",
+                    isContainer: false,
+                    cloudType: "TRACK"
+                )
+            ],
+            service: .appleMusic,
+            source: .sonosCloud
+        )
+        let resolver = AppleMusicPlaybackArtworkResolver(
+            cache: cache,
+            registryLookup: { _ in nil },
             musicKitIsAuthorized: { true },
             musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run after persistent cache hit"); return nil },
             musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run after persistent cache hit"); return nil },
@@ -39,7 +107,7 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(result?.source, .persistentCache)
-        XCTAssertEqual(result?.urlString, "https://cdn.example.com/cached.jpg")
+        XCTAssertEqual(result?.urlString, "https://cdn.example.com/persistent.jpg")
     }
 
     func testUnauthorizedMusicKitIsSkippedAndITunesLookupRuns() async {

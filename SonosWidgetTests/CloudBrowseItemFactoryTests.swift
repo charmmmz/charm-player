@@ -34,6 +34,24 @@ final class CloudBrowseItemFactoryTests: XCTestCase {
         )
     }
 
+    func testAppleMusicLibraryTrackWithoutMimeTypeDefaultsToPlayableMP4URI() {
+        let item = makeFactory().trackItem(
+            objectId: "librarytrack:i.aJGorVIS3GeMrdm",
+            title: "Neon",
+            artist: "John Mayer",
+            album: "Where the Light Is",
+            artURL: nil,
+            mimeType: nil,
+            cloudServiceId: "52231",
+            accountId: "2"
+        )
+
+        XCTAssertEqual(
+            item.uri,
+            "x-sonos-http:librarytrack%3ai.aJGorVIS3GeMrdm.mp4?sid=204&flags=8232&sn=2"
+        )
+    }
+
     func testPlaylistItemNormalizesArtworkAndKeepsContainerType() {
         let item = makeFactory().playlistItem(
             objectId: "playlist:pl.u-11zBXe4t8ZL1",

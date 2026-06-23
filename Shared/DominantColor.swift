@@ -1,7 +1,7 @@
 import UIKit
 import SwiftUI
 
-extension UIImage {
+nonisolated extension UIImage {
     /// Extracts a vibrant, high-contrast color suitable for use against dark backgrounds.
     func dominantColor() -> Color? {
         guard let (r, g, b) = extractVibrantRGB() else { return nil }

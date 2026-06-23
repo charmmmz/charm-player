@@ -12,6 +12,7 @@ struct AppleMusicITunesArtworkClient {
     private struct Result: Decodable {
         let wrapperType: String?
         let kind: String?
+        let trackId: Int?
         let trackName: String?
         let collectionName: String?
         let artistName: String?
@@ -63,6 +64,53 @@ struct AppleMusicITunesArtworkClient {
         return urlString
     }
 
+    func searchSongCatalogID(
+        title: String,
+        artist: String?,
+        album: String?,
+        countryCode: String?
+    ) async throws -> String? {
+        let term = searchTerm(kind: .song, title: title, artist: artist, album: album)
+        guard !term.isEmpty else {
+            SonosLog.debug(.playbackLink, "iTunes catalog search skipped reason=empty_term")
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "itunes.apple.com"
+        components.path = "/search"
+        components.queryItems = [
+            URLQueryItem(name: "term", value: term),
+            URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "entity", value: "song"),
+            URLQueryItem(name: "limit", value: "5"),
+            URLQueryItem(name: "country", value: normalizedCountryCode(countryCode))
+        ]
+        guard let url = components.url else { return nil }
+
+        SonosLog.debug(
+            .playbackLink,
+            "iTunes catalog search start term='\(SonosLog.playbackLinkValue(term, maxLength: 160))'")
+        let response = try await decodedResponse(from: URLRequest(url: url))
+        let catalogID = bestResult(
+            in: response.results,
+            kind: .song,
+            title: title,
+            artist: artist,
+            album: album,
+            requireArtwork: false,
+            requireTrackID: true
+        ).flatMap { result in
+            result.trackId.map(String.init)
+        }
+        SonosLog.debug(
+            .playbackLink,
+            "iTunes catalog search \(catalogID == nil ? "miss" : "hit") " +
+                "catalogID=\(SonosLog.playbackLinkValue(catalogID, maxLength: 120))")
+        return catalogID
+    }
+
     func searchArtworkURLString(
         kind: LocalServiceAppleMusicPlayable.Kind,
         title: String,
@@ -102,7 +150,9 @@ struct AppleMusicITunesArtworkClient {
             kind: kind,
             title: title,
             artist: artist,
-            album: album
+            album: album,
+            requireArtwork: true,
+            requireTrackID: false
         )
         let urlString = match.flatMap { artworkURLString(from: $0) }
         SonosLog.debug(
@@ -140,10 +190,15 @@ struct AppleMusicITunesArtworkClient {
         kind: LocalServiceAppleMusicPlayable.Kind,
         title: String,
         artist: String?,
-        album: String?
+        album: String?,
+        requireArtwork: Bool,
+        requireTrackID: Bool
     ) -> Result? {
         results
-            .filter { artworkURLString(from: $0) != nil }
+            .filter {
+                (!requireArtwork || artworkURLString(from: $0) != nil) &&
+                    (!requireTrackID || $0.trackId != nil)
+            }
             .max {
                 score($0, kind: kind, title: title, artist: artist, album: album) <
                     score($1, kind: kind, title: title, artist: artist, album: album)

@@ -144,6 +144,46 @@ final class PlaybackArtworkURLCacheTests: XCTestCase {
         XCTAssertNil(cache.resolvedQueueItem(objectOnlyQueueItem(id: "song:1"), service: .appleMusic).albumArtURL)
     }
 
+    func testMusicKitSearchArtworkDoesNotReuseLocalGetAAIdentityAcrossDifferentTracks() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let firstLocalArtworkURL = "http://192.168.50.249:1400/getaa?s=1"
+        let secondLocalArtworkURL = "http://192.168.50.249:1400/getaa?s=2"
+        let first = QueueItem(
+            id: "0",
+            objectID: "Q:0/0",
+            trackNumber: 1,
+            title: "Drum Show",
+            artist: "twenty one pilots",
+            album: "Favorite Songs",
+            albumArtURL: firstLocalArtworkURL,
+            uri: nil,
+            metaXML: nil
+        )
+        let second = QueueItem(
+            id: "1",
+            objectID: "Q:0/1",
+            trackNumber: 2,
+            title: "Time of Our Lives",
+            artist: "Pitbull & Ne-Yo",
+            album: "Globalization",
+            albumArtURL: secondLocalArtworkURL,
+            uri: nil,
+            metaXML: nil
+        )
+
+        cache.storeURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/drum-show.jpg/600x600bb.jpg",
+            service: .appleMusic,
+            source: .musicKitSearch,
+            identity: .queueItem(first)
+        )
+
+        let resolved = cache.resolvedQueueItem(second, service: .appleMusic)
+
+        XCTAssertEqual(resolved.albumArtURL, secondLocalArtworkURL)
+    }
+
     private func makeCache(
         now: @escaping () -> Date = Date.init,
         maxEntries: Int = 256

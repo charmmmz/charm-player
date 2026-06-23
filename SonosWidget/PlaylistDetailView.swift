@@ -771,7 +771,21 @@ struct PlaylistDetailView: View {
                 }
             }
             let playNowStart = Date()
-            await searchManager.playNow(item: playlistItem, manager: manager)
+            if !tracks.isEmpty {
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist play using expanded tracks title='\(playlistItem.title)' " +
+                        "count=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
+                _ = await searchManager.playNow(
+                    items: tracks.map(browseItemFromTrack),
+                    manager: manager,
+                    displayTitle: playlistTitle)
+            } else {
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist play using container fallback title='\(playlistItem.title)'")
+                await searchManager.playNow(item: playlistItem, manager: manager)
+            }
             SonosLog.info(
                 .playlistDetail,
                 "Browse playlist play timing title='\(playlistItem.title)' " +
@@ -809,7 +823,21 @@ struct PlaylistDetailView: View {
                     "step=set-play-mode ms=\(Int(Date().timeIntervalSince(setModeStart) * 1000))")
             }
             let playNowStart = Date()
-            await searchManager.playNow(item: playlistItem, manager: manager)
+            if !tracks.isEmpty {
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist shuffle using expanded tracks title='\(playlistItem.title)' " +
+                        "count=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
+                _ = await searchManager.playNow(
+                    items: tracks.map(browseItemFromTrack),
+                    manager: manager,
+                    displayTitle: playlistTitle)
+            } else {
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist shuffle using container fallback title='\(playlistItem.title)'")
+                await searchManager.playNow(item: playlistItem, manager: manager)
+            }
             SonosLog.info(
                 .playlistDetail,
                 "Browse playlist shuffle timing title='\(playlistItem.title)' " +

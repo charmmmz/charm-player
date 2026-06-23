@@ -60,17 +60,21 @@ enum AlbumArtURLCarryoverPolicy {
 
 nonisolated enum QueueArtPrefetchPolicy {
     static let defaultLocalSonosArtworkLimit = 0
+    static let defaultRemoteArtworkLimit = PlaybackArtworkPrewarmPolicy.defaultLimit
     static let localSonosArtworkConcurrency = 2
     static let remoteArtworkConcurrency = 8
 
     static func urlsToPrefetch(
         from urls: [String],
         cachedURLs: Set<String>,
-        localSonosArtworkLimit: Int = defaultLocalSonosArtworkLimit
+        localSonosArtworkLimit: Int = defaultLocalSonosArtworkLimit,
+        remoteArtworkLimit: Int = defaultRemoteArtworkLimit
     ) -> [String] {
         var seen = Set<String>()
         var localSonosArtworkCount = 0
+        var remoteArtworkCount = 0
         let localLimit = max(0, localSonosArtworkLimit)
+        let remoteLimit = max(0, remoteArtworkLimit)
 
         return urls.compactMap { urlString in
             guard !cachedURLs.contains(urlString),
@@ -83,6 +87,11 @@ nonisolated enum QueueArtPrefetchPolicy {
                     return nil
                 }
                 localSonosArtworkCount += 1
+            } else {
+                guard remoteArtworkCount < remoteLimit else {
+                    return nil
+                }
+                remoteArtworkCount += 1
             }
 
             return urlString

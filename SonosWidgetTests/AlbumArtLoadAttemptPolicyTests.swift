@@ -186,6 +186,18 @@ final class AlbumArtLoadAttemptPolicyTests: XCTestCase {
         )
     }
 
+    func testQueueArtPrefetchLimitsRemoteArtworkByDefault() {
+        let urls = (0..<60).map { "https://example.com/remote-\($0).jpg" }
+
+        XCTAssertEqual(
+            QueueArtPrefetchPolicy.urlsToPrefetch(
+                from: urls,
+                cachedURLs: []
+            ).count,
+            PlaybackArtworkPrewarmPolicy.defaultLimit
+        )
+    }
+
     func testQueueArtPrefetchUsesLowerConcurrencyWhenLocalSonosArtworkIsPresent() {
         XCTAssertEqual(
             QueueArtPrefetchPolicy.maxConcurrentFetches(

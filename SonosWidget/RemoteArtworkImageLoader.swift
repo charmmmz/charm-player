@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 
-enum RemoteArtworkImageCacheKey {
+nonisolated enum RemoteArtworkImageCacheKey {
     static func normalized(_ url: URL) -> String {
         ArtworkURLNormalizer.artworkCacheKey(from: url.absoluteString) ?? url.absoluteString
     }

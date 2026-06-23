@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 final class PlaybackArtworkPrewarmTests: XCTestCase {
+    func testLightweightArtworkMetadataRemainsEnabledWhenImagePrewarmIsDisabled() {
+        XCTAssertTrue(PlaybackArtworkCachingPolicy.isRegistryEnabled)
+        XCTAssertTrue(PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled)
+        XCTAssertTrue(PlaybackArtworkCachingPolicy.isArtworkHintsEnabled)
+        XCTAssertFalse(PlaybackArtworkCachingPolicy.isPrewarmEnabled)
+        XCTAssertFalse(PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled)
+    }
+
     func testPolicyUsesThumbnailArtworkAndDedupesNormalizedURLs() {
         let items = [
             BrowseItem(
@@ -59,7 +67,7 @@ final class PlaybackArtworkPrewarmTests: XCTestCase {
         XCTAssertEqual(requestURLs, ["https://example.com/a.jpg#one"])
     }
 
-    func testSearchManagerPrewarmsKnownPlaybackItems() async {
+    func testSearchManagerDoesNotPrewarmPlaybackArtworkWhileCachingIsDisabled() async {
         let manager = SearchManager()
         var capturedURLs: [[String]] = []
         manager.playbackArtworkPrewarmOverride = { urls in
@@ -86,10 +94,51 @@ final class PlaybackArtworkPrewarmTests: XCTestCase {
 
         await manager.prewarmPlaybackArtwork(items: items)
 
-        XCTAssertEqual(capturedURLs, [[
-            "https://example.com/one.jpg",
-            "https://example.com/two.jpg"
-        ]])
+        XCTAssertEqual(capturedURLs, [])
+    }
+
+    func testSearchManagerRegistersPlaybackArtworkMetadataWithoutImagePrewarm() async {
+        let uniqueSuffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let objectID = "song:\(uniqueSuffix)"
+        let escapedObjectID = objectID.replacingOccurrences(of: ":", with: "%3a")
+        let urlString = "https://is1-ssl.mzstatic.com/image/thumb/Music/\(uniqueSuffix).jpg/600x600bb.jpg"
+        let manager = SearchManager()
+        manager.playbackArtworkPrewarmOverride = { _ in
+            XCTFail("image prewarm should stay disabled")
+        }
+        let browseItem = BrowseItem(
+            id: objectID,
+            title: "Unique Registry Song \(uniqueSuffix)",
+            artist: "Registry Artist",
+            album: "Registry Album",
+            albumArtURL: urlString,
+            uri: "x-sonos-http:\(escapedObjectID).mp4?sid=204&flags=8232&sn=2",
+            isContainer: false,
+            cloudType: "TRACK"
+        )
+
+        await manager.prewarmPlaybackArtwork(items: [browseItem])
+
+        let queueItem = QueueItem(
+            id: "0",
+            objectID: "Q:0/0",
+            trackNumber: 1,
+            title: browseItem.title,
+            artist: browseItem.artist,
+            album: browseItem.album,
+            albumArtURL: "http://192.168.50.249:1400/getaa?s=1",
+            uri: "x-sonos-http:\(escapedObjectID).mp4?sid=204&flags=8232&sn=2",
+            metaXML: nil
+        )
+
+        XCTAssertEqual(
+            PlaybackArtworkRegistry.shared.resolvedQueueItem(queueItem).albumArtURL,
+            urlString
+        )
+        XCTAssertEqual(
+            PlaybackArtworkURLCache.shared.resolvedQueueItem(queueItem, service: .appleMusic).albumArtURL,
+            urlString
+        )
     }
 
     private static let pngData = Data(base64Encoded:

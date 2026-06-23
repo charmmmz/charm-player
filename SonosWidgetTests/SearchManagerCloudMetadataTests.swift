@@ -615,6 +615,24 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
         XCTAssertTrue(bodies[0].contains("<EnqueueAsNext>0</EnqueueAsNext>"))
     }
 
+    func testAddMultipleURIsToQueueBodiesCanChunkLargeQueueBatchesAtOneHundred() {
+        let items = (1...201).map { index in
+            SonosQueuedURI(
+                uri: "x-sonos-http:track\(index)?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"\(index)\" /></DIDL-Lite>")
+        }
+
+        let bodies = SonosAPI.addMultipleURIsToQueueBodies(
+            items: items,
+            chunkSize: 100
+        )
+
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertTrue(bodies[0].contains("<NumberOfURIs>100</NumberOfURIs>"))
+        XCTAssertTrue(bodies[1].contains("<NumberOfURIs>100</NumberOfURIs>"))
+        XCTAssertTrue(bodies[2].contains("<NumberOfURIs>1</NumberOfURIs>"))
+    }
+
     func testAddMultipleURIsToQueueBodiesPercentEncodesLiteralSpacesInURIs() {
         let items = [
             SonosQueuedURI(
@@ -629,6 +647,29 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
             bodies[0].contains(
                 "<EnqueuedURIs>x-rincon-cpcontainer:1006206c%20playlist%3apl.new?sid=204&amp;flags=8300&amp;sn=2</EnqueuedURIs>"))
         XCTAssertFalse(bodies[0].contains("1006206c playlist%3apl.new"))
+    }
+
+    func testAddMultipleURIsToQueueDiagnosticsExposeLibraryTrackAndMetadataShape() {
+        let items = [
+            SonosQueuedURI(
+                uri: "x-sonos-http:librarytrack%3ai.aJGorVIS3GeMrdm.mp4?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"10032028librarytrack%3ai.aJGorVIS3GeMrdm\" parentID=\"\" restricted=\"true\"><dc:title>Neon</dc:title></item></DIDL-Lite>"),
+            SonosQueuedURI(
+                uri: "x-sonos-http:song%3a1440857781.mp4?sid=204&flags=8232&sn=2",
+                metadata: "&lt;DIDL-Lite&gt;&lt;item id=&quot;10032028song%3a1440857781&quot; parentID=&quot;&quot; /&gt;&lt;/DIDL-Lite&gt;")
+        ]
+
+        let diagnostics = SonosAPI.addMultipleURIsToQueueDiagnostics(
+            items: items,
+            bodyByteCount: 1234)
+
+        XCTAssertTrue(diagnostics.contains("librarytrack=1"))
+        XCTAssertTrue(diagnostics.contains("song=1"))
+        XCTAssertTrue(diagnostics.contains("flags=8232:2"))
+        XCTAssertTrue(diagnostics.contains("firstMetadataID=10032028librarytrack%3ai.aJGorVIS3GeMrdm"))
+        XCTAssertTrue(diagnostics.contains("firstParentID=<empty>"))
+        XCTAssertTrue(diagnostics.contains("escapedMetadata=1"))
+        XCTAssertTrue(diagnostics.contains("bodyBytes=1234"))
     }
 
     func testAddMultipleURIsToQueueFallbackItemsSkipCompletedChunks() {
@@ -656,6 +697,47 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
 
         XCTAssertEqual(plan?.first.uri, items[0].uri)
         XCTAssertEqual(plan?.remaining.map(\.uri), [items[1].uri, items[2].uri])
+    }
+
+    func testQueueReplacementPlaybackPlanBatchesRemainingItemsAtOneHundred() {
+        let items = (1...252).map { index in
+            SonosQueuedURI(
+                uri: "x-sonos-http:track\(index)?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"\(index)\" /></DIDL-Lite>")
+        }
+
+        let plan = SonosQueueReplacementPlaybackPlan(items: items)
+        let batches = plan?.remainingBatches(maxBatchSize: 100)
+
+        XCTAssertEqual(batches?.map(\.count), [100, 100, 51])
+        XCTAssertEqual(batches?.first?.first?.uri, items[1].uri)
+        XCTAssertEqual(batches?.last?.last?.uri, items[251].uri)
+    }
+
+    func testQueueReplacementPlaybackPlanDefaultsToSixteenItemBackgroundBatches() {
+        let items = (1...35).map { index in
+            SonosQueuedURI(
+                uri: "x-sonos-http:track\(index)?sid=204&flags=8232&sn=2",
+                metadata: "<DIDL-Lite><item id=\"\(index)\" /></DIDL-Lite>")
+        }
+
+        let plan = SonosQueueReplacementPlaybackPlan(items: items)
+        let batches = plan?.remainingBatches()
+
+        XCTAssertEqual(batches?.map(\.count), [16, 16, 2])
+        XCTAssertEqual(batches?.flatMap { $0.map(\.uri) }, Array(items[1...]).map(\.uri))
+    }
+
+    func testQueueReplacementPlaybackPlanDoesNotRetrySmallerBatchesInSixteenOnlyMode() {
+        XCTAssertEqual(
+            SonosQueueReplacementPlaybackPlan.fallbackBatchSizes(afterFailedBatchSize: 100),
+            [])
+        XCTAssertEqual(
+            SonosQueueReplacementPlaybackPlan.fallbackBatchSizes(afterFailedBatchSize: 17),
+            [])
+        XCTAssertEqual(
+            SonosQueueReplacementPlaybackPlan.fallbackBatchSizes(afterFailedBatchSize: 16),
+            [])
     }
 
     func testQueueReplacementPlaybackPlanRejectsEmptyQueue() {

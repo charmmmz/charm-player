@@ -211,6 +211,39 @@ final class LocalServiceInteractionTests: XCTestCase {
             [.artists, .albums, .songs, .playlists])
     }
 
+    func testPlaybackFallbackPolicyBlocksCatalogFallbackAfterPrimaryPlaylistAttempt() {
+        XCTAssertFalse(
+            LocalServicePlaybackFallbackPolicy.shouldAttemptCatalogFallback(
+                primaryKind: .playlist,
+                fallbackKind: .playlist))
+    }
+
+    func testPlaybackFallbackPolicyAllowsSongFallbackAfterPrimarySongAttempt() {
+        XCTAssertTrue(
+            LocalServicePlaybackFallbackPolicy.shouldAttemptCatalogFallback(
+                primaryKind: .song,
+                fallbackKind: .song))
+    }
+
+    func testPlaybackFallbackPolicyAllowsFallbackWhenNoPrimaryPlayableExists() {
+        XCTAssertTrue(
+            LocalServicePlaybackFallbackPolicy.shouldAttemptCatalogFallback(
+                primaryKind: nil,
+                fallbackKind: .playlist))
+    }
+
+    func testReplaceQueueBackgroundFillCancellationPolicyCancelsBeforeLocalForegroundPlayback() {
+        XCTAssertTrue(
+            ReplaceQueueBackgroundFillCancellationPolicy.shouldCancelBeforeForegroundPlayback(
+                transport: .localUPnP))
+    }
+
+    func testReplaceQueueBackgroundFillCancellationPolicyKeepsCloudPlaybackUntouched() {
+        XCTAssertFalse(
+            ReplaceQueueBackgroundFillCancellationPolicy.shouldCancelBeforeForegroundPlayback(
+                transport: .cloud))
+    }
+
     func testSearchContextLabelEmphasizesScope() {
         XCTAssertEqual(
             LocalServiceSearchPresentation.contextLabel(

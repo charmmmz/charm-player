@@ -119,7 +119,7 @@ struct QueueView: View {
                 .fill(isNowPlaying ? accent : .clear)
                 .frame(width: 3, height: 40)
 
-            QueueArtView(urlStr: item.albumArtURL, manager: manager)
+            QueueArtView(item: item, manager: manager)
                 .frame(width: 48, height: 48)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
@@ -165,14 +165,25 @@ struct QueueView: View {
 // MARK: - Queue Art View (cache-first with shared remote loader fallback)
 
 private struct QueueArtView: View {
-    let urlStr: String?
+    let item: QueueItem
     let manager: SonosManager
+    @State private var queueCachedImage: UIImage?
+    @State private var queueCachedImageURL: String?
+    @State private var resolvedArtworkURLString: String?
+    @State private var artworkResolutionKey: String?
+    @State private var didMissPlaybackArtworkResolution = false
 
     var body: some View {
+        let urlStr = displayArtworkURLString
+
         Group {
             if let urlStr,
-               manager.cachedArtURLs.contains(urlStr),
-               let cached = manager.queueImage(for: urlStr) {
+               queueCachedImageURL == urlStr,
+               let cached = queueCachedImage {
+                Image(uiImage: cached)
+                    .resizable().aspectRatio(contentMode: .fill)
+            } else if let urlStr,
+                      let cached = manager.queueMemoryImage(for: urlStr) {
                 Image(uiImage: cached)
                     .resizable().aspectRatio(contentMode: .fill)
             } else if let urlStr,
@@ -188,9 +199,42 @@ private struct QueueArtView: View {
                 placeholder
             }
         }
-        .task(id: artworkSourceLogKey) {
-            logArtworkSource()
+        .task(id: urlStr) {
+            await loadQueueCachedImage(for: urlStr)
         }
+        .task(id: currentArtworkResolutionKey) {
+            await resolvePlaybackArtworkIfNeeded()
+        }
+    }
+
+    private var currentArtworkResolutionKey: String {
+        [
+            item.id,
+            item.objectID,
+            item.uri ?? "",
+            item.albumArtURL ?? "",
+            item.title,
+            item.artist,
+            item.album
+        ].joined(separator: "|")
+    }
+
+    private var displayArtworkURLString: String? {
+        if artworkResolutionKey == currentArtworkResolutionKey,
+           let resolvedArtworkURLString = nonEmpty(resolvedArtworkURLString) {
+            return resolvedArtworkURLString
+        }
+
+        guard let originalURLString = nonEmpty(item.albumArtURL) else { return nil }
+        guard QueueArtworkLoadPolicy.shouldLoadRemoteArtwork(
+            urlString: originalURLString,
+            isAppleMusicQueueItem: QueueArtworkLoadPolicy.isAppleMusicQueueItem(item),
+            didMissPlaybackArtworkResolution: artworkResolutionKey == currentArtworkResolutionKey
+                && didMissPlaybackArtworkResolution
+        ) else {
+            return nil
+        }
+        return originalURLString
     }
 
     private var placeholder: some View {
@@ -202,43 +246,103 @@ private struct QueueArtView: View {
             }
     }
 
-    private var artworkSourceLogKey: String {
-        "\(artworkSource.rawValue):\(urlStr ?? "nil")"
+    @MainActor
+    private func loadQueueCachedImage(for urlStr: String?) async {
+        guard let urlStr,
+              !urlStr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            queueCachedImage = nil
+            queueCachedImageURL = nil
+            return
+        }
+
+        if let cached = manager.queueMemoryImage(for: urlStr) {
+            queueCachedImage = cached
+            queueCachedImageURL = urlStr
+            return
+        }
+
+        guard QueueArtworkLoadPolicy.shouldLoadQueueDiskCacheAsync(
+            urlString: urlStr,
+            hasQueueMemoryImage: false,
+            isKnownDiskCached: manager.cachedArtURLs.contains(urlStr)
+        ) else {
+            queueCachedImage = nil
+            queueCachedImageURL = nil
+            return
+        }
+
+        let image = await Task.detached(priority: .utility) {
+            QueueArtDiskCache.shared.image(for: urlStr)
+        }.value
+
+        guard !Task.isCancelled, displayArtworkURLString == urlStr else { return }
+        queueCachedImage = image
+        queueCachedImageURL = image == nil ? nil : urlStr
     }
 
-    private var artworkSource: ArtworkSource {
-        guard let urlStr, !urlStr.isEmpty else { return .missingURL }
-        if manager.cachedArtURLs.contains(urlStr),
-           manager.queueImage(for: urlStr) != nil {
-            return .queueCache
-        }
-        guard let url = URL(string: urlStr) else { return .invalidURL }
-        if RemoteArtworkImageLoader.shared.cachedImage(for: url) != nil {
-            return .remoteMemoryCache
-        }
-        return .remoteLoad
-    }
+    @MainActor
+    private func resolvePlaybackArtworkIfNeeded() async {
+        let resolutionKey = currentArtworkResolutionKey
+        let originalURLString = nonEmpty(item.albumArtURL)
+        let isAppleMusicQueueItem = QueueArtworkLoadPolicy.isAppleMusicQueueItem(item)
 
-    private func logArtworkSource() {
-        let source = artworkSource
-        let key: String
-        if let urlStr, let url = URL(string: urlStr) {
-            key = RemoteArtworkImageCacheKey.normalized(url)
-        } else {
-            key = "nil"
+        guard QueueArtworkLoadPolicy.shouldAttemptPlaybackArtworkResolution(
+            urlString: originalURLString,
+            isAppleMusicQueueItem: isAppleMusicQueueItem
+        ) else {
+            artworkResolutionKey = resolutionKey
+            resolvedArtworkURLString = nil
+            didMissPlaybackArtworkResolution = false
+            return
         }
+
+        artworkResolutionKey = resolutionKey
+        resolvedArtworkURLString = nil
+        didMissPlaybackArtworkResolution = false
+
+        let catalogID = SonosAppleMusicTrackResolver.storeID(fromTrackURI: item.uri)
+            ?? SonosAppleMusicTrackResolver.storeID(fromObjectID: item.objectID)
+        let request = PlaybackArtworkRequest(
+            service: .appleMusic,
+            kind: .song,
+            catalogID: catalogID,
+            title: item.title,
+            artist: item.artist,
+            album: item.album,
+            currentArtworkURLString: item.albumArtURL,
+            identity: .queueItem(item),
+            countryCode: Locale.current.region?.identifier ?? "US"
+        )
+
         SonosLog.debug(
             .nowPlaying,
-            "Queue artwork view source=\(source.rawValue) " +
-                "key=\(SonosLog.playbackLinkValue(key, maxLength: 240)) " +
-                "url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+            "Queue artwork fallback start title='\(SonosLog.playbackLinkValue(item.title, maxLength: 120))' " +
+                "artist='\(SonosLog.playbackLinkValue(item.artist, maxLength: 120))' " +
+                "catalogID=\(SonosLog.playbackLinkValue(catalogID, maxLength: 120)) " +
+                "current=\(SonosLog.playbackLinkValue(item.albumArtURL, maxLength: 240))")
+
+        guard let resolution = await AppleMusicPlaybackArtworkResolver.shared.resolve(request: request) else {
+            guard !Task.isCancelled, artworkResolutionKey == resolutionKey else { return }
+            didMissPlaybackArtworkResolution = true
+            SonosLog.debug(.nowPlaying, "Queue artwork fallback miss title='\(SonosLog.playbackLinkValue(item.title, maxLength: 120))'")
+            return
+        }
+
+        guard !Task.isCancelled, artworkResolutionKey == resolutionKey else {
+            SonosLog.debug(.nowPlaying, "Queue artwork fallback stale result source=\(resolution.source.rawValue)")
+            return
+        }
+
+        resolvedArtworkURLString = resolution.urlString
+        didMissPlaybackArtworkResolution = false
+        SonosLog.debug(
+            .nowPlaying,
+            "Queue artwork fallback hit source=\(resolution.source.rawValue) " +
+                "url=\(SonosLog.playbackLinkValue(resolution.urlString, maxLength: 240))")
     }
 
-    private enum ArtworkSource: String {
-        case missingURL = "missing-url"
-        case invalidURL = "invalid-url"
-        case queueCache = "queue-cache"
-        case remoteMemoryCache = "remote-memory-cache"
-        case remoteLoad = "remote-load"
+    private func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

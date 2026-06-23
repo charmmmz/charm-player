@@ -202,6 +202,311 @@ enum LocalMusicCatalogMatcher {
     }
 }
 
+struct AppleMusicLibraryTrackPlaybackResolver: Sendable {
+    typealias CatalogSearch = @Sendable (_ term: String, _ limit: Int) async throws -> [AppleMusicCatalogSearchItem]
+    typealias ITunesCatalogSearch = @Sendable (
+        _ title: String,
+        _ artist: String?,
+        _ album: String?,
+        _ countryCode: String?
+    ) async throws -> String?
+
+    private enum ResolutionStatus {
+        case unchanged
+        case resolved(source: String)
+        case missed
+        case failed
+    }
+
+    private struct ResolutionOutcome {
+        let item: BrowseItem
+        let status: ResolutionStatus
+        let originalID: String
+    }
+
+    private let catalogSearch: CatalogSearch
+    private let iTunesCatalogSearch: ITunesCatalogSearch
+    private let searchLimit: Int
+    private let countryCode: String?
+    private let appleMusicLocalServiceIDs: Set<Int>
+    private let maxConcurrentResolutions: Int
+
+    init(
+        catalogSearch: @escaping CatalogSearch = { term, limit in
+            try await AppleMusicCatalogSearchClient.shared.search(term: term, limit: limit)
+        },
+        iTunesCatalogSearch: @escaping ITunesCatalogSearch = { title, artist, album, countryCode in
+            try await AppleMusicITunesArtworkClient.shared.searchSongCatalogID(
+                title: title,
+                artist: artist,
+                album: album,
+                countryCode: countryCode)
+        },
+        searchLimit: Int = 8,
+        countryCode: String? = nil,
+        appleMusicLocalServiceIDs: Set<Int> = [204],
+        maxConcurrentResolutions: Int = 8
+    ) {
+        self.catalogSearch = catalogSearch
+        self.iTunesCatalogSearch = iTunesCatalogSearch
+        self.searchLimit = max(1, min(searchLimit, 25))
+        self.countryCode = countryCode
+        self.appleMusicLocalServiceIDs = appleMusicLocalServiceIDs
+        self.maxConcurrentResolutions = max(1, maxConcurrentResolutions)
+    }
+
+    func resolvedItem(_ item: BrowseItem) async -> BrowseItem {
+        await resolvedOutcome(for: item).item
+    }
+
+    func resolvedItems(_ items: [BrowseItem]) async -> [BrowseItem] {
+        let unresolvedCount = items.filter {
+            Self.needsCatalogResolution($0, appleMusicLocalServiceIDs: appleMusicLocalServiceIDs)
+        }.count
+        guard unresolvedCount > 0 else { return items }
+
+        let startedAt = Date()
+        SonosLog.info(
+            .playbackLink,
+            "Apple Music librarytrack playback resolve start count=\(items.count) unresolved=\(unresolvedCount)")
+
+        var outcomes = Array<ResolutionOutcome?>(repeating: nil, count: items.count)
+        let indexedItems = Array(items.enumerated())
+        var iterator = indexedItems.makeIterator()
+
+        await withTaskGroup(of: (Int, ResolutionOutcome).self) { group in
+            for _ in 0..<min(maxConcurrentResolutions, indexedItems.count) {
+                guard let next = iterator.next() else { break }
+                group.addTask {
+                    (next.offset, await resolvedOutcome(for: next.element))
+                }
+            }
+
+            while let (index, outcome) = await group.next() {
+                outcomes[index] = outcome
+                if let next = iterator.next() {
+                    group.addTask {
+                        (next.offset, await resolvedOutcome(for: next.element))
+                    }
+                }
+            }
+        }
+
+        let resolvedOutcomes = outcomes.compactMap { $0 }
+        let resolvedCount = resolvedOutcomes.filter {
+            if case .resolved = $0.status { return true }
+            return false
+        }.count
+        let resolvedSources = Dictionary(
+            grouping: resolvedOutcomes.compactMap { outcome -> String? in
+                if case .resolved(let source) = outcome.status {
+                    return source
+                }
+                return nil
+            },
+            by: { $0 }
+        )
+        .map { "\($0.key):\($0.value.count)" }
+        .sorted()
+        .joined(separator: ",")
+        let missedCount = resolvedOutcomes.filter {
+            if case .missed = $0.status { return true }
+            return false
+        }.count
+        let failedCount = resolvedOutcomes.filter {
+            if case .failed = $0.status { return true }
+            return false
+        }.count
+        let sampleMisses = resolvedOutcomes
+            .filter {
+                switch $0.status {
+                case .missed, .failed: return true
+                case .unchanged, .resolved: return false
+                }
+            }
+            .prefix(3)
+            .map { SonosLog.playbackLinkValue($0.originalID, maxLength: 80) }
+            .joined(separator: ",")
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+
+        SonosLog.info(
+            .playbackLink,
+            "Apple Music librarytrack playback resolve done count=\(items.count) " +
+                "resolved=\(resolvedCount) sources=\(resolvedSources.isEmpty ? "none" : resolvedSources) " +
+                "missed=\(missedCount) failed=\(failedCount) " +
+                "ms=\(elapsedMs) sampleMisses=\(sampleMisses.isEmpty ? "none" : sampleMisses)")
+
+        return resolvedOutcomes.map(\.item)
+    }
+
+    private func resolvedOutcome(for item: BrowseItem) async -> ResolutionOutcome {
+        guard Self.needsCatalogResolution(item, appleMusicLocalServiceIDs: appleMusicLocalServiceIDs) else {
+            return ResolutionOutcome(item: item, status: .unchanged, originalID: item.id)
+        }
+
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: .song,
+            title: item.title,
+            artist: item.artist,
+            album: item.album)
+        guard !term.isEmpty else {
+            return ResolutionOutcome(item: item, status: .missed, originalID: item.id)
+        }
+
+        do {
+            let matches = try await catalogSearch(term, searchLimit)
+            if let match = LocalMusicCatalogMatcher.bestItem(
+                in: matches,
+                kind: .song,
+                title: item.title,
+                artist: item.artist,
+                album: item.album
+            ),
+               let resolved = resolvedItem(
+                item,
+                catalogID: match.id,
+                artworkURLString: match.artworkURLString,
+                duration: match.duration,
+                title: match.title,
+                artist: match.artist,
+                album: match.album) {
+                return ResolutionOutcome(item: resolved, status: .resolved(source: "musicKit"), originalID: item.id)
+            }
+        } catch {
+            SonosLog.debug(
+                .playbackLink,
+                "Apple Music librarytrack MusicKit resolve failed id=\(SonosLog.playbackLinkValue(item.id, maxLength: 120)) error=\(error)")
+        }
+
+        do {
+            if let catalogID = try await iTunesCatalogSearch(item.title, item.artist, item.album, countryCode),
+               let resolved = resolvedItem(
+                item,
+                catalogID: catalogID,
+                artworkURLString: nil,
+                duration: nil,
+                title: item.title,
+                artist: item.artist,
+                album: item.album) {
+                return ResolutionOutcome(item: resolved, status: .resolved(source: "iTunes"), originalID: item.id)
+            }
+            return ResolutionOutcome(item: item, status: .missed, originalID: item.id)
+        } catch {
+            SonosLog.debug(
+                .playbackLink,
+                "Apple Music librarytrack iTunes resolve failed id=\(SonosLog.playbackLinkValue(item.id, maxLength: 120)) error=\(error)")
+            return ResolutionOutcome(item: item, status: .failed, originalID: item.id)
+        }
+    }
+
+    private func resolvedItem(
+        _ item: BrowseItem,
+        catalogID: String,
+        artworkURLString: String?,
+        duration: TimeInterval?,
+        title: String,
+        artist: String,
+        album: String
+    ) -> BrowseItem? {
+        let parsedURI = SonosAppleMusicTrackResolver.parseTrackURI(item.uri)
+        guard let localSid = parsedURI.localServiceID ?? item.serviceId,
+              let accountID = parsedURI.accountID,
+              !accountID.isEmpty else {
+            return nil
+        }
+
+        let flags = Self.queryParameter("flags", in: item.uri).flatMap(Int.init) ?? 8232
+        let objectID = "song:\(catalogID)"
+        var resolved = item
+        resolved.id = objectID
+        resolved.uri = SonosPlayableURIBuilder.serviceURI(
+            scheme: "x-sonos-http",
+            objectID: objectID,
+            localSid: localSid,
+            flags: flags,
+            accountID: accountID,
+            fileExtension: ".mp4")
+        if resolved.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resolved.title = title
+        }
+        if resolved.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resolved.artist = artist
+        }
+        if resolved.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resolved.album = album
+        }
+        if resolved.albumArtURL == nil {
+            resolved.albumArtURL = artworkURLString
+        }
+        if resolved.detailArtworkURL == nil {
+            resolved.detailArtworkURL = artworkURLString
+        }
+        if resolved.duration <= 0, let duration {
+            resolved.duration = duration
+        }
+        resolved.isContainer = false
+        resolved.serviceId = localSid
+        resolved.cloudType = "TRACK"
+        return resolved
+    }
+
+    private static func needsCatalogResolution(
+        _ item: BrowseItem,
+        appleMusicLocalServiceIDs: Set<Int>
+    ) -> Bool {
+        guard !item.isContainer else { return false }
+        if let cloudType = item.cloudType?.uppercased(), cloudType != "TRACK" {
+            return false
+        }
+        guard SonosAppleMusicTrackResolver.storeID(fromBrowseItem: item) == nil else {
+            return false
+        }
+        guard isAppleMusicItem(item, appleMusicLocalServiceIDs: appleMusicLocalServiceIDs) else {
+            return false
+        }
+        return unresolvedLibraryTrackValue(in: item) != nil
+    }
+
+    private static func isAppleMusicItem(
+        _ item: BrowseItem,
+        appleMusicLocalServiceIDs: Set<Int>
+    ) -> Bool {
+        if let serviceID = item.serviceId,
+           appleMusicLocalServiceIDs.contains(serviceID) {
+            return true
+        }
+        if let uri = item.uri,
+           PlaybackSource.from(trackURI: uri) == .appleMusic {
+            return true
+        }
+        return false
+    }
+
+    private static func unresolvedLibraryTrackValue(in item: BrowseItem) -> String? {
+        [item.id, item.uri, item.metaXML, item.resMD]
+            .compactMap { $0 }
+            .first { value in
+                let decoded = value.removingPercentEncoding ?? value
+                let lowercased = decoded.lowercased()
+                return lowercased.contains("librarytrack:") ||
+                    lowercased.hasPrefix("i.") ||
+                    lowercased.hasPrefix("l.")
+            }
+    }
+
+    private static func queryParameter(_ name: String, in value: String?) -> String? {
+        guard let value else { return nil }
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = "(?:[?&]|&amp;)\(escaped)=([^&\\s\"<>]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+              let range = Range(match.range(at: 1), in: value) else {
+            return nil
+        }
+        return String(value[range]).removingPercentEncoding ?? String(value[range])
+    }
+}
+
 enum LocalMusicCatalogIDExtractor {
     static func playlistCatalogID(rawID: String, urlString: String?) -> String? {
         if let urlString,

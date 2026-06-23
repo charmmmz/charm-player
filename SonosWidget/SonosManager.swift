@@ -58,6 +58,20 @@ final class RefreshRequestGate {
     }
 }
 
+private struct QueueArtworkPrefetchRequest: Sendable {
+    let urlString: String
+    let siblingURLStrings: [String]
+}
+
+private struct QueueArtworkPrefetchResult: @unchecked Sendable {
+    let urlString: String
+    let siblingURLStrings: [String]
+    let image: UIImage
+    let imageCost: Int
+    let color: Color?
+    let source: String
+}
+
 @Observable
 final class SonosManager {
     struct SpeakerSelectionCachedArtwork {
@@ -212,7 +226,7 @@ final class SonosManager {
     /// refresh + selectSpeaker) coalesce into a single TCP check.
     private var probeTask: Task<TransportBackend, Never>?
 
-    private static let albumArtSession: URLSession = {
+    private nonisolated static let albumArtSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 5
         config.timeoutIntervalForResource = 10
@@ -505,7 +519,11 @@ final class SonosManager {
             groupLastArtURL: groupLastArtURL,
             imageForURL: { [queueArtCache] urlString in
                 queueArtCache.object(forKey: urlString as NSString)
-                    ?? QueueArtDiskCache.shared.image(for: urlString)
+                    ?? (
+                        PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled
+                            ? QueueArtDiskCache.shared.image(for: urlString)
+                            : nil
+                    )
             }
         )
         let cachedSelectionColor = groupAlbumColors[targetGroupID]
@@ -977,11 +995,16 @@ final class SonosManager {
     /// Observable set of URLs whose images have been persisted to disk (survives NSCache eviction).
     private(set) var cachedArtURLs: Set<String> = []
 
+    /// Returns the in-memory cached image for a queue item URL.
+    func queueMemoryImage(for urlStr: String) -> UIImage? {
+        queueArtCache.object(forKey: urlStr as NSString)
+    }
+
     /// Returns the cached image for a queue item URL, checking memory then disk.
-    /// Falls back gracefully if NSCache evicted the image while the view re-renders.
+    /// Avoid calling this from SwiftUI body; disk restore can decode image data.
     func queueImage(for urlStr: String) -> UIImage? {
         if let img = queueArtCache.object(forKey: urlStr as NSString) { return img }
-        // NSCache evicted it — restore from disk (local flash, ~0.1 ms, safe on main thread).
+        guard PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled else { return nil }
         return QueueArtDiskCache.shared.image(for: urlStr)
     }
     /// NSCache stores the actual UIImages; auto-evicts under memory pressure, capped at 150 images (~30 MB).
@@ -1014,21 +1037,32 @@ final class SonosManager {
     }
 
     private func applyQueueResult(_ result: QueueResult) {
-        let resolvedArtwork = PlaybackArtworkRegistry.shared.resolvedQueueItems(result.items)
-        if resolvedArtwork.replacementCount > 0 {
-            SonosLog.debug(
-                .nowPlaying,
-                "Queue artwork registry replaced count=\(resolvedArtwork.replacementCount) " +
-                    "queue=\(result.items.count)")
+        let registryResolvedItems: [QueueItem]
+        if PlaybackArtworkCachingPolicy.isRegistryEnabled {
+            let resolvedArtwork = PlaybackArtworkRegistry.shared.resolvedQueueItems(result.items)
+            if resolvedArtwork.replacementCount > 0 {
+                SonosLog.debug(
+                    .nowPlaying,
+                    "Queue artwork registry replaced count=\(resolvedArtwork.replacementCount) " +
+                        "queue=\(result.items.count)")
+            }
+            registryResolvedItems = resolvedArtwork.items
+        } else {
+            registryResolvedItems = result.items
         }
         var cacheReplacementCount = 0
-        let cacheResolvedItems = resolvedArtwork.items.map { item -> QueueItem in
-            guard Self.isAppleMusicQueueItem(item) else { return item }
-            let next = PlaybackArtworkURLCache.shared.resolvedQueueItem(item, service: .appleMusic)
-            if next.albumArtURL != item.albumArtURL {
-                cacheReplacementCount += 1
+        let cacheResolvedItems: [QueueItem]
+        if PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled {
+            cacheResolvedItems = registryResolvedItems.map { item -> QueueItem in
+                guard Self.isAppleMusicQueueItem(item) else { return item }
+                let next = PlaybackArtworkURLCache.shared.resolvedQueueItem(item, service: .appleMusic)
+                if next.albumArtURL != item.albumArtURL {
+                    cacheReplacementCount += 1
+                }
+                return next
             }
-            return next
+        } else {
+            cacheResolvedItems = registryResolvedItems
         }
         if cacheReplacementCount > 0 {
             SonosLog.debug(
@@ -1051,6 +1085,12 @@ final class SonosManager {
 
     private func schedulePrefetch() {
         prefetchTask?.cancel()
+        guard PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled else {
+            SonosLog.debug(
+                .nowPlaying,
+                "Queue artwork prefetch skipped reason=cache_disabled queue=\(queue.count)")
+            return
+        }
 
         // Build fetch order: start from now-playing, go forward, then wrap to beginning.
         let nowIndex = queue.firstIndex(where: {
@@ -1063,46 +1103,90 @@ final class SonosManager {
             from: artworkURLs,
             cachedURLs: cachedArtURLs
         )
+        let siblingURLsByURL = Self.queueArtworkSiblingURLsByURL(
+            from: queue,
+            cachedURLs: cachedArtURLs
+        )
+        let requests = ordered.map {
+            QueueArtworkPrefetchRequest(
+                urlString: $0,
+                siblingURLStrings: siblingURLsByURL[$0] ?? []
+            )
+        }
         SonosLog.debug(
             .nowPlaying,
             "Queue artwork prefetch plan queue=\(queue.count) urls=\(artworkURLs.count) " +
-                "scheduled=\(ordered.count) cachedKnown=\(cachedArtURLs.count) " +
+                "scheduled=\(requests.count) cachedKnown=\(cachedArtURLs.count) " +
                 "first=\(SonosLog.playbackLinkValue(ordered.first, maxLength: 240))")
-        guard !ordered.isEmpty else { return }
+        guard !requests.isEmpty else { return }
 
         let diskCache = QueueArtDiskCache.shared
         prefetchTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await withTaskGroup(of: Void.self) { group in
+            await withTaskGroup(of: QueueArtworkPrefetchResult?.self) { group in
                 let maxConcurrent = QueueArtPrefetchPolicy.maxConcurrentFetches(for: ordered)
                 var index = 0
 
                 func addNext() {
-                    guard index < ordered.count else { return }
-                    let urlStr = ordered[index]
+                    guard index < requests.count else { return }
+                    let request = requests[index]
                     index += 1
-                    group.addTask { [weak self] in
-                        guard let self, !Task.isCancelled else { return }
-                        await self.fetchArtForURL(urlStr, diskCache: diskCache)
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        return await Self.loadQueueArtworkPrefetch(
+                            request: request,
+                            diskCache: diskCache
+                        )
                     }
                 }
 
-                for _ in 0..<min(maxConcurrent, ordered.count) { addNext() }
-                for await _ in group { addNext() }
+                for _ in 0..<min(maxConcurrent, requests.count) { addNext() }
+                for await result in group {
+                    guard !Task.isCancelled else { continue }
+                    if let result {
+                        self.applyQueueArtworkPrefetchResult(result)
+                    }
+                    addNext()
+                }
             }
         }
     }
 
-    private func fetchArtForURL(_ urlStr: String, diskCache: QueueArtDiskCache) async {
-        guard !cachedArtURLs.contains(urlStr) else {
-            SonosLog.debug(
-                .nowPlaying,
-                "Queue artwork prefetch skip memory url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
-            return
+    private static func queueArtworkSiblingURLsByURL(
+        from queue: [QueueItem],
+        cachedURLs: Set<String>
+    ) -> [String: [String]] {
+        var keyByURL: [String: String] = [:]
+        var urlsByKey: [String: [String]] = [:]
+        var seenByKey: [String: Set<String>] = [:]
+
+        for item in queue {
+            guard let urlString = item.albumArtURL else { continue }
+            let key = "\(item.album)||||\(item.artist)"
+            keyByURL[urlString] = key
+
+            var seen = seenByKey[key] ?? []
+            guard seen.insert(urlString).inserted else { continue }
+            seenByKey[key] = seen
+            urlsByKey[key, default: []].append(urlString)
         }
 
-        // L2: disk cache.
-        // L3: network. Always capture raw data so we can populate sibling disk slots.
+        var siblingURLsByURL: [String: [String]] = [:]
+        for (urlString, key) in keyByURL {
+            siblingURLsByURL[urlString] = urlsByKey[key, default: []].filter {
+                $0 != urlString && !cachedURLs.contains($0)
+            }
+        }
+        return siblingURLsByURL
+    }
+
+    private nonisolated static func loadQueueArtworkPrefetch(
+        request: QueueArtworkPrefetchRequest,
+        diskCache: QueueArtDiskCache
+    ) async -> QueueArtworkPrefetchResult? {
+        let urlStr = request.urlString
+        guard !Task.isCancelled else { return nil }
+
         let imageData: Data
         let source: String
         if let d = diskCache.data(for: urlStr) {
@@ -1113,7 +1197,7 @@ final class SonosManager {
                 SonosLog.debug(
                     .nowPlaying,
                     "Queue artwork prefetch invalid url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
-                return
+                return nil
             }
             SonosLog.debug(
                 .nowPlaying,
@@ -1125,53 +1209,56 @@ final class SonosManager {
                 SonosLog.debug(
                     .nowPlaying,
                     "Queue artwork prefetch network failed url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240)) error=\(error)")
-                return
+                return nil
             }
             imageData = downloaded
             source = "network"
             diskCache.store(imageData, for: urlStr)
         }
-        guard let image = UIImage(data: imageData) else { return }
-        let color = dominantColorCache[urlStr] ?? image.dominantColor()
 
-        // Collect all other uncached URLs from the same album so one download
-        // populates every track's cache entry simultaneously.
-        let albumKey = queue.first(where: { $0.albumArtURL == urlStr })
-            .map { "\($0.album)||||\($0.artist)" }
-        var siblings: [String] = []
-        if let key = albumKey {
-            var seen = Set<String>()
-            siblings = queue.compactMap { item -> String? in
-                guard let u = item.albumArtURL,
-                      u != urlStr,
-                      !cachedArtURLs.contains(u),
-                      "\(item.album)||||\(item.artist)" == key,
-                      seen.insert(u).inserted else { return nil }
-                return u
-            }
+        guard !Task.isCancelled,
+              let image = UIImage(data: imageData) else {
+            return nil
         }
+        let color = image.dominantColor()
 
-        // Write primary URL to memory cache.
-        queueArtCache.setObject(image, forKey: urlStr as NSString, cost: imageData.count)
-        // Write all sibling URLs to memory + disk cache.
-        for sibling in siblings {
-            queueArtCache.setObject(image, forKey: sibling as NSString, cost: imageData.count)
+        for sibling in request.siblingURLStrings {
             if !diskCache.contains(sibling) { diskCache.store(imageData, for: sibling) }
         }
 
-        await MainActor.run { [weak self] in
-            guard let self else { return }
-            self.dominantColorCache[urlStr] = color
-            self.cachedArtURLs.insert(urlStr)
-            for sibling in siblings {
-                self.dominantColorCache[sibling] = color
-                self.cachedArtURLs.insert(sibling)
-            }
+        return QueueArtworkPrefetchResult(
+            urlString: urlStr,
+            siblingURLStrings: request.siblingURLStrings,
+            image: image,
+            imageCost: imageData.count,
+            color: color,
+            source: source
+        )
+    }
+
+    private func applyQueueArtworkPrefetchResult(_ result: QueueArtworkPrefetchResult) {
+        queueArtCache.setObject(
+            result.image,
+            forKey: result.urlString as NSString,
+            cost: result.imageCost
+        )
+        dominantColorCache[result.urlString] = result.color
+        cachedArtURLs.insert(result.urlString)
+
+        for sibling in result.siblingURLStrings {
+            queueArtCache.setObject(
+                result.image,
+                forKey: sibling as NSString,
+                cost: result.imageCost
+            )
+            dominantColorCache[sibling] = result.color
+            cachedArtURLs.insert(sibling)
         }
+
         SonosLog.debug(
             .nowPlaying,
-            "Queue artwork prefetch stored source=\(source) siblings=\(siblings.count) " +
-                "url=\(SonosLog.playbackLinkValue(urlStr, maxLength: 240))")
+            "Queue artwork prefetch stored source=\(result.source) siblings=\(result.siblingURLStrings.count) " +
+                "url=\(SonosLog.playbackLinkValue(result.urlString, maxLength: 240))")
     }
 
     func deleteFromQueue(item: QueueItem) async {
@@ -3871,7 +3958,9 @@ final class SonosManager {
                 let color = self.dominantColorCache[urlStr] ?? cached.dominantColor()
                 let bottomEdge = cached.bottomEdgeColor()
                 // Keep disk entry warm so LRU eviction doesn't drop the current song's art.
-                QueueArtDiskCache.shared.touch(urlStr)
+                if PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled {
+                    QueueArtDiskCache.shared.touch(urlStr)
+                }
                 await MainActor.run {
                     self.applyLoadedAlbumArt(
                         cached,
@@ -3891,7 +3980,8 @@ final class SonosManager {
             }
 
             // L2: check disk cache before hitting the network.
-            if let cached = QueueArtDiskCache.shared.image(for: urlStr) {
+            if PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled,
+               let cached = QueueArtDiskCache.shared.image(for: urlStr) {
                 guard !Task.isCancelled, self.loadingAlbumArtURL == urlStr else { return }
                 let color = self.dominantColorCache[urlStr] ?? cached.dominantColor()
                 let bottomEdge = cached.bottomEdgeColor()
@@ -3924,7 +4014,9 @@ final class SonosManager {
                 let image = UIImage(data: data)
                 let dominantColor = self.dominantColorCache[urlStr] ?? image?.dominantColor()
                 let bottomEdge = image?.bottomEdgeColor()
-                if image != nil { QueueArtDiskCache.shared.store(data, for: urlStr) }
+                if image != nil, PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled {
+                    QueueArtDiskCache.shared.store(data, for: urlStr)
+                }
                 await MainActor.run {
                     self.applyLoadedAlbumArt(
                         image,
@@ -3957,7 +4049,7 @@ final class SonosManager {
         await albumArtTask?.value
     }
 
-    private static func fetchAlbumArtData(from url: URL, originalURLString: String) async throws -> Data {
+    private nonisolated static func fetchAlbumArtData(from url: URL, originalURLString: String) async throws -> Data {
         if let relayURL = await MainActor.run(body: {
             RelayManager.shared.isAvailable ? RelayManager.shared.url : nil
         }) {
