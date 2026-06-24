@@ -1,7 +1,7 @@
 import apn from '@parse/node-apn';
 import { promises as fs } from 'node:fs';
 import type { Logger } from 'pino';
-import type { LiveActivityContentState } from './types.js';
+import type { LiveActivityContentState, LiveActivityStartAttributes } from './types.js';
 
 /// Swift's `Date` Codable default uses NSDate reference epoch (2001-01-01 UTC),
 /// NOT Unix epoch. ContentState fields like `startedAt` / `endsAt` must be
@@ -53,6 +53,39 @@ export function apnsStatusFromConfig(config: ApnsConfig, keyFilePresent: boolean
     keyFilePresent,
     missing,
   };
+}
+
+type LiveActivityEvent = 'start' | 'update' | 'end';
+type LiveActivityNote = apn.Notification & {
+  pushType: string;
+  relevanceScore: number;
+  timestamp: number;
+  staleDate: number;
+  event: LiveActivityEvent;
+  attributesType: string;
+  attributes: Record<string, unknown>;
+  contentState: Record<string, unknown>;
+  inputPushToken: number;
+};
+
+export function makeLiveActivityStartNotification(
+  bundleId: string,
+  attributes: LiveActivityStartAttributes,
+  contentState: LiveActivityContentState,
+  nowUnixSeconds = Math.floor(Date.now() / 1000),
+): apn.Notification {
+  const note = new apn.Notification() as LiveActivityNote;
+  note.topic = `${bundleId}.push-type.liveactivity`;
+  note.pushType = 'liveactivity';
+  note.expiry = nowUnixSeconds + 3600;
+  note.timestamp = nowUnixSeconds;
+  note.staleDate = nowUnixSeconds + 8 * 3600;
+  note.event = 'start';
+  note.attributesType = 'SonosActivityAttributes';
+  note.attributes = attributes as unknown as Record<string, unknown>;
+  note.contentState = contentState as unknown as Record<string, unknown>;
+  note.inputPushToken = 1;
+  return note;
 }
 
 /// Wraps `@parse/node-apn`. When the `.p8` key isn't present yet (Apple
@@ -120,26 +153,30 @@ export class ApnsClient {
     return this.push(tokens, 'end', contentState, 0);
   }
 
+  /// Push a `start` event to ActivityKit push-to-start tokens.
+  async pushStart(
+    tokens: string[],
+    attributes: LiveActivityStartAttributes,
+    contentState: LiveActivityContentState,
+  ): Promise<ApnsResult> {
+    const note = makeLiveActivityStartNotification(
+      this.config.bundleId,
+      attributes,
+      contentState,
+    );
+    return this.sendLiveActivityNotification(tokens, note, 'start', contentState);
+  }
+
   private async push(
     tokens: string[],
     event: 'update' | 'end',
     contentState: LiveActivityContentState,
     relevanceScore: number,
   ): Promise<ApnsResult> {
-    if (tokens.length === 0) return { sent: 0, failed: 0, unregistered: [] };
-
     // The Live Activity-specific fields (pushType, relevanceScore, timestamp,
     // staleDate, event, contentState) exist on the Notification prototype at
     // runtime but the shipped .d.ts hasn't been updated to declare them yet,
     // so we widen the type once with a local interface and assign through it.
-    type LiveActivityNote = apn.Notification & {
-      pushType: string;
-      relevanceScore: number;
-      timestamp: number;
-      staleDate: number;
-      event: 'update' | 'end';
-      contentState: Record<string, unknown>;
-    };
     const note = new apn.Notification() as LiveActivityNote;
     note.topic = `${this.config.bundleId}.push-type.liveactivity`;
     note.pushType = 'liveactivity';
@@ -150,6 +187,17 @@ export class ApnsClient {
     note.staleDate = Math.floor(Date.now() / 1000) + 8 * 3600;
     note.event = event;
     note.contentState = contentState as unknown as Record<string, unknown>;
+
+    return this.sendLiveActivityNotification(tokens, note, event, contentState);
+  }
+
+  private async sendLiveActivityNotification(
+    tokens: string[],
+    note: apn.Notification,
+    event: LiveActivityEvent,
+    contentState: LiveActivityContentState,
+  ): Promise<ApnsResult> {
+    if (tokens.length === 0) return { sent: 0, failed: 0, unregistered: [] };
 
     if (this.dryRun || !this.provider) {
       this.log.info(
