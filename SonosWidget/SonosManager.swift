@@ -533,7 +533,76 @@ final class SonosManager {
         if sortedIncoming.isEmpty, !existing.isEmpty {
             return existing
         }
-        return sortedIncoming
+        return sortedIncoming.map { incomingStatus in
+            guard let existingStatus = existing.first(where: {
+                Self.speakerGroupStatus($0, matches: incomingStatus.id)
+                    || Self.speakerGroupStatus(incomingStatus, matches: $0.id)
+            }) else {
+                return incomingStatus
+            }
+            return Self.homeSpeakerStatus(
+                existing: existingStatus,
+                mergingIncoming: incomingStatus
+            )
+        }
+    }
+
+    private nonisolated static func homeSpeakerStatus(
+        existing: SpeakerGroupStatus,
+        mergingIncoming incoming: SpeakerGroupStatus
+    ) -> SpeakerGroupStatus {
+        guard shouldPreserveExistingAppleMusicLiveStatus(existing: existing, incoming: incoming) else {
+            return incoming
+        }
+        var merged = incoming
+        merged.trackInfo = existing.trackInfo
+        if isPlaceholderTransportState(incoming.transportState) {
+            merged.transportState = existing.transportState
+        }
+        return merged
+    }
+
+    private nonisolated static func shouldPreserveExistingAppleMusicLiveStatus(
+        existing: SpeakerGroupStatus,
+        incoming: SpeakerGroupStatus
+    ) -> Bool {
+        guard let existingTrack = existing.trackInfo,
+              existingTrack.source == .appleMusic,
+              isLiveStreamTrack(existingTrack),
+              homeSpeakerTrackHasUsefulMetadata(existingTrack) else {
+            return false
+        }
+
+        guard let incomingTrack = incoming.trackInfo else { return true }
+        if !homeSpeakerTrackHasDisplayTitle(incomingTrack) {
+            return true
+        }
+        return incomingTrack.source == .appleMusic
+            && isLiveStreamTrack(incomingTrack)
+            && isPlaceholderTransportState(incoming.transportState)
+    }
+
+    private nonisolated static func homeSpeakerTrackHasUsefulMetadata(_ trackInfo: TrackInfo) -> Bool {
+        homeSpeakerTrackHasDisplayTitle(trackInfo)
+            || nonEmpty(trackInfo.albumArtURL) != nil
+    }
+
+    private nonisolated static func homeSpeakerTrackHasDisplayTitle(_ trackInfo: TrackInfo?) -> Bool {
+        displayableMetadataText(trackInfo?.title) != nil
+    }
+
+    private nonisolated static func isPlaceholderTransportState(_ state: TransportState) -> Bool {
+        switch state {
+        case .stopped, .noMedia, .unknown:
+            return true
+        case .playing, .paused, .transitioning:
+            return false
+        }
+    }
+
+    private nonisolated static func isLiveStreamTrack(_ trackInfo: TrackInfo) -> Bool {
+        if trackInfo.source == .tv { return false }
+        return SonosTime.parse(trackInfo.duration ?? "") <= 0
     }
 
     // MARK: - Lifecycle
@@ -1849,29 +1918,10 @@ final class SonosManager {
                 // carrying `position` so the card's progress ring fills in.
                 let track: TrackInfo? = {
                     if isSelected { return trackInfo }
-                    guard let meta = entry.meta,
-                          let cloudTrack = meta.currentItem?.track else { return nil }
-                    // Same LAN-URL filter as `refreshStateCloud` — drop
-                    // speaker-local `getaa` URLs that don't work off-LAN.
-                    let artURL = Self.pickPublicArtURL(
-                        cloudTrack.imageUrl,
-                        cloudTrack.album?.imageUrl,
-                        meta.container?.imageUrl)
-                    let durSec = (cloudTrack.durationMillis).map {
-                        TimeInterval($0) / 1000.0
-                    } ?? 0
-                    let posSec: TimeInterval = (entry.status?.positionMillis).map {
-                        TimeInterval($0) / 1000.0
-                    } ?? 0
-                    let sourceName = cloudTrack.service?.name ?? meta.container?.name
-                    return TrackInfo(
-                        title: cloudTrack.name ?? "",
-                        artist: cloudTrack.artist?.name ?? "",
-                        album: cloudTrack.album?.name ?? "",
-                        albumArtURL: artURL,
-                        duration: SonosTime.apiFormat(durSec),
-                        position: SonosTime.apiFormat(posSec),
-                        source: PlaybackSource.from(serviceName: sourceName))
+                    guard let meta = entry.meta else { return nil }
+                    return Self.cloudSpeakerCardTrackInfo(
+                        from: meta,
+                        positionMillis: entry.status?.positionMillis)
                 }()
 
                 // Group volume: selected group uses `manager.volume` (kept
@@ -1912,14 +1962,36 @@ final class SonosManager {
     /// house, totally dead over cellular. Filter those out in cloud mode
     /// so the CDN fallbacks (`album.imageUrl`, `container.imageUrl`)
     /// actually get a chance to render.
-    private static func pickPublicArtURL(_ candidates: String?...) -> String? {
+    private nonisolated static func cloudSpeakerCardTrackInfo(
+        from metadata: SonosCloudAPI.CloudPlaybackMetadata,
+        positionMillis: Int?
+    ) -> TrackInfo? {
+        let positionSeconds = (positionMillis).map { TimeInterval($0) / 1000.0 } ?? 0
+        var info = TrackInfo(
+            title: "",
+            artist: "",
+            album: "",
+            duration: "00:00:00",
+            position: SonosTime.apiFormat(positionSeconds)
+        )
+        info = trackInfo(info, applyingPlaybackMetadata: metadata)
+        info.albumArtURL = pickPublicArtURL(
+            metadata.currentItem?.track?.imageUrl,
+            metadata.currentItem?.track?.album?.imageUrl,
+            metadata.container?.imageUrl)
+
+        guard homeSpeakerTrackHasUsefulMetadata(info) else { return nil }
+        return info
+    }
+
+    private nonisolated static func pickPublicArtURL(_ candidates: String?...) -> String? {
         for case let url? in candidates where isPubliclyReachable(url) {
             return url
         }
         return nil
     }
 
-    private static func isPubliclyReachable(_ urlStr: String) -> Bool {
+    private nonisolated static func isPubliclyReachable(_ urlStr: String) -> Bool {
         guard let url = URL(string: urlStr), let host = url.host else { return false }
         // Accept https outright (mzstatic, aliyuncs, etc. — cross-network
         // CDN URLs). Plain http is only accepted if the host is *not* a
@@ -2664,7 +2736,10 @@ final class SonosManager {
         applyingPlaybackMetadata metadata: SonosCloudAPI.CloudPlaybackMetadata
     ) -> TrackInfo {
         var info = incoming
-        guard let track = metadata.currentItem?.track else { return info }
+        guard let track = metadata.currentItem?.track else {
+            applyPlaybackContainerFallback(to: &info, metadata: metadata)
+            return info
+        }
 
         if let name = nonEmpty(track.name) {
             info.title = name
@@ -2692,6 +2767,56 @@ final class SonosManager {
             info.audioQuality = mapped
         }
         return info
+    }
+
+    private nonisolated static func applyPlaybackContainerFallback(
+        to info: inout TrackInfo,
+        metadata: SonosCloudAPI.CloudPlaybackMetadata
+    ) {
+        guard metadata.currentItem?.track == nil else { return }
+        let containerTitle = displayableMetadataText(metadata.container?.name)
+        let containerArtURL = nonEmpty(metadata.container?.imageUrl)
+        guard containerTitle != nil || containerArtURL != nil else { return }
+
+        let source = PlaybackSource.from(serviceName: metadata.container?.name)
+        guard info.source == .appleMusic || source == .appleMusic else { return }
+
+        if let containerTitle, !homeSpeakerTrackHasDisplayTitle(info) {
+            info.title = containerTitle
+        }
+        if let containerArtURL {
+            info.albumArtURL = containerArtURL
+        }
+
+        if source != .unknown {
+            info.source = source
+        }
+
+        if displayableMetadataText(info.artist) == nil {
+            let sourceName = fallbackDisplayName(for: info.source)
+            if !sourceName.isEmpty {
+                info.artist = sourceName
+            }
+        }
+    }
+
+    private nonisolated static func fallbackDisplayName(for source: PlaybackSource) -> String {
+        switch source {
+        case .appleMusic:
+            return "Apple Music"
+        default:
+            return ""
+        }
+    }
+
+    private nonisolated static func displayableMetadataText(_ value: String?) -> String? {
+        guard let trimmed = nonEmpty(value) else { return nil }
+        switch trimmed.lowercased() {
+        case "unknown", "idle", "not playing":
+            return nil
+        default:
+            return trimmed
+        }
     }
 
     private nonisolated static func nonEmpty(_ value: String?) -> String? {

@@ -37,6 +37,84 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(next.map(\.id), ["living"])
     }
 
+    func testHomeSpeakerRefreshPreservesLiveStreamWhenIncomingRefreshIsPlaceholder() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let existing = [
+            makeStatus(
+                player: playroom,
+                trackInfo: TrackInfo(
+                    title: "Apple Music Chill",
+                    artist: "Apple Music Radio",
+                    album: "",
+                    albumArtURL: "https://example.com/chill.jpg",
+                    duration: "00:00:00",
+                    position: "00:00:00",
+                    source: .appleMusic
+                ),
+                transportState: .playing,
+                volume: 12
+            )
+        ]
+        let incoming = [
+            makeStatus(
+                player: playroom,
+                trackInfo: nil,
+                transportState: .stopped,
+                volume: 14
+            )
+        ]
+
+        let next = SonosManager.homeSpeakerStatusesAfterRefresh(
+            existing: existing,
+            incoming: incoming,
+            preferredOrder: []
+        )
+
+        XCTAssertEqual(next.map(\.id), ["playroom-group"])
+        XCTAssertEqual(next[0].trackInfo?.title, "Apple Music Chill")
+        XCTAssertEqual(next[0].trackInfo?.albumArtURL, "https://example.com/chill.jpg")
+        XCTAssertEqual(next[0].transportState, .playing)
+        XCTAssertEqual(next[0].volume, 14)
+    }
+
+    func testHomeSpeakerRefreshDoesNotPreserveFixedDurationTrackWhenIncomingRefreshIsPlaceholder() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let existing = [
+            makeStatus(
+                player: playroom,
+                trackInfo: TrackInfo(
+                    title: "Waltz, No. 2 (XO)",
+                    artist: "Elliott Smith",
+                    album: "XO",
+                    albumArtURL: "https://example.com/xo.jpg",
+                    duration: "00:04:40",
+                    position: "00:01:00",
+                    source: .appleMusic
+                ),
+                transportState: .playing,
+                volume: 12
+            )
+        ]
+        let incoming = [
+            makeStatus(
+                player: playroom,
+                trackInfo: nil,
+                transportState: .stopped,
+                volume: 14
+            )
+        ]
+
+        let next = SonosManager.homeSpeakerStatusesAfterRefresh(
+            existing: existing,
+            incoming: incoming,
+            preferredOrder: []
+        )
+
+        XCTAssertNil(next[0].trackInfo)
+        XCTAssertEqual(next[0].transportState, .stopped)
+        XCTAssertEqual(next[0].volume, 14)
+    }
+
     func testHomeSpeakerCardsBlockingLoaderOnlyShowsBeforeFirstLoad() {
         XCTAssertTrue(
             HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(
