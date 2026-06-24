@@ -2,9 +2,9 @@ import { SonosEvents, SonosManager, type SonosDevice } from '@svrooij/sonos';
 import { EventEmitter } from 'node:events';
 import https from 'node:https';
 import type { Logger } from 'pino';
-import type { ArtworkHintStore } from './artworkHints.js';
 import {
   createSonosArtworkResolver,
+  type ITunesArtworkLookupClient,
   type SonosArtworkResolver,
 } from './sonosArtworkResolver.js';
 import type { SonosGroupSnapshot } from './types.js';
@@ -43,7 +43,7 @@ export interface SonosLocalControlClient {
 
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
-  artworkHints?: ArtworkHintStore | null;
+  artworkITunes?: ITunesArtworkLookupClient | null;
   artworkResolver?: SonosArtworkResolver | null;
   transitionSettleRefreshMs?: number;
   eventRefreshDebounceMs?: number;
@@ -206,7 +206,6 @@ export class SonosBridge extends EventEmitter {
   private readonly localQualityLogSignatures = new Map<string, string>();
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
-  private readonly artworkHints: ArtworkHintStore | null;
   private readonly artworkResolver: SonosArtworkResolver | null;
   private readonly transitionSettleRefreshMs: number;
   private readonly eventRefreshDebounceMs: number;
@@ -225,9 +224,11 @@ export class SonosBridge extends EventEmitter {
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
       : options.localControl;
-    this.artworkHints = options.artworkHints ?? null;
     this.artworkResolver = options.artworkResolver === undefined
-      ? createSonosArtworkResolver({ artworkHints: this.artworkHints })
+      ? createSonosArtworkResolver({
+        logger: this.log,
+        ...(options.artworkITunes === undefined ? {} : { itunes: options.artworkITunes }),
+      })
       : options.artworkResolver;
     this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
     this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
@@ -505,14 +506,17 @@ export class SonosBridge extends EventEmitter {
         coordinator.CurrentTrack?.Album,
         device.CurrentTrack?.Album,
       );
-      let albumArtUri = absoluteAlbumArtUri(
+      const albumArtHost = coordinator.Host ?? device.Host ?? resolvedGroupId;
+      const metadataAlbumArtUri = absoluteAlbumArtUri(
         coordinator.CurrentTrack?.AlbumArtUri
           ?? coordinator.CurrentTrack?.AlbumArtURI
           ?? device.CurrentTrack?.AlbumArtUri
           ?? device.CurrentTrack?.AlbumArtURI
           ?? metadata.albumArtUri,
-        coordinator.Host ?? device.Host ?? resolvedGroupId,
+        albumArtHost,
       );
+      let albumArtUri = sonosGetAAAlbumArtUri(metadataAlbumArtUri)
+        ?? albumArtUriFromTrackUri(trackUri, albumArtHost);
 
       if (shouldSuppressTransientNonPlayingSnapshot({
         options,
@@ -558,6 +562,8 @@ export class SonosBridge extends EventEmitter {
       }
       if (this.artworkResolver) {
         const artworkResolution = await this.artworkResolver.resolve({
+          groupId: resolvedGroupId,
+          trigger,
           title: trackTitle,
           artist,
           album,
@@ -590,6 +596,11 @@ export class SonosBridge extends EventEmitter {
               trigger,
               source: artworkResolution.source,
               catalogID: artworkResolution.catalogID ?? null,
+              title: trackTitle,
+              artist,
+              album,
+              playbackSourceRaw,
+              trackUri: summarizeTrackUri(trackUri),
               albumArtUri: summarizeAlbumArtUri(albumArtUri),
             },
             'snapshot album art resolver kept current artwork',
@@ -1083,16 +1094,20 @@ export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata
     album: xmlTagValue(metadata, 'upnp:album'),
     albumArtUri: xmlTagValue(metadata, 'upnp:albumArtURI'),
   };
-  return reconcileRadioStreamContent(baseMetadata, xmlTagValue(metadata, 'r:streamContent'));
+  return reconcileRadioStreamContent(
+    baseMetadata,
+    xmlTagValue(metadata, 'r:streamContent') ?? radioStreamContentFromCachedArtist(baseMetadata.artist),
+  );
 }
 
 function trackMetadataDiagnostic(metadata: unknown): SonosTrackMetadataDiagnostic {
   if (!metadata || typeof metadata !== 'object') {
     const raw = typeof metadata === 'string' ? metadata : '';
-    const streamContent = xmlTagValue(raw, 'r:streamContent');
+    const didlArtist = xmlTagValue(raw, 'dc:creator') ?? xmlTagValue(raw, 'upnp:artist');
+    const streamContent = xmlTagValue(raw, 'r:streamContent') ?? radioStreamContentFromCachedArtist(didlArtist);
     return {
       didlTitle: xmlTagValue(raw, 'dc:title'),
-      didlArtist: xmlTagValue(raw, 'dc:creator') ?? xmlTagValue(raw, 'upnp:artist'),
+      didlArtist,
       didlAlbum: xmlTagValue(raw, 'upnp:album'),
       streamContent,
       streamFields: streamContent ? radioStreamContentFields(streamContent) : {},
@@ -1100,15 +1115,16 @@ function trackMetadataDiagnostic(metadata: unknown): SonosTrackMetadataDiagnosti
   }
 
   const track = metadata as Record<string, unknown>;
+  const didlArtist = firstObjectString(track.Artist, track.artist, track.Creator, track.creator) || null;
   const streamContent = firstObjectString(
     track.StreamContent,
     track.streamContent,
     track.StreamInfo,
     track.streamInfo,
-  );
+  ) || radioStreamContentFromCachedArtist(didlArtist);
   return {
     didlTitle: firstObjectString(track.Title, track.title) || null,
-    didlArtist: firstObjectString(track.Artist, track.artist, track.Creator, track.creator) || null,
+    didlArtist,
     didlAlbum: firstObjectString(track.Album, track.album) || null,
     streamContent: streamContent || null,
     streamFields: streamContent ? radioStreamContentFields(streamContent) : {},
@@ -1333,7 +1349,8 @@ function trackMetadataFromTrackObject(metadata: unknown): SonosTrackMetadata {
   };
   return reconcileRadioStreamContent(
     baseMetadata,
-    firstObjectString(track.StreamContent, track.streamContent, track.StreamInfo, track.streamInfo),
+    firstObjectString(track.StreamContent, track.streamContent, track.StreamInfo, track.streamInfo)
+      || radioStreamContentFromCachedArtist(baseMetadata.artist),
   );
 }
 
@@ -1387,6 +1404,10 @@ function reconcileRadioStreamContent(
   }
 
   return metadata;
+}
+
+function radioStreamContentFromCachedArtist(artist: string | null | undefined): string | null {
+  return artist && looksLikeRadioStreamContent(artist) ? artist : null;
 }
 
 function radioStreamContentFields(streamContent: string): Partial<Pick<SonosTrackMetadata, 'title' | 'artist' | 'album'>> {
@@ -1607,6 +1628,45 @@ function absoluteAlbumArtUri(uri: string | null | undefined, host: string | unde
   if (!host) return uri;
   const path = uri.startsWith('/') ? uri : `/${uri}`;
   return `http://${host}:1400${path}`;
+}
+
+function sonosGetAAAlbumArtUri(uri: string | null | undefined): string | null {
+  const trimmed = uri?.trim() ?? '';
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.pathname.toLowerCase().includes('/getaa') ? trimmed : null;
+  } catch {
+    return trimmed.startsWith('/getaa') ? trimmed : null;
+  }
+}
+
+function albumArtUriFromTrackUri(trackUri: string | null | undefined, host: string | undefined): string | null {
+  const uri = trackUri?.trim() ?? '';
+  const resolvedHost = host?.trim() ?? '';
+  if (!uri || !resolvedHost) return null;
+
+  const lower = uri.toLowerCase();
+  if (
+    lower.startsWith('x-sonos-htastream:')
+    || lower.startsWith('x-rincon-queue:')
+    || lower.startsWith('x-rincon-stream:')
+    || lower.startsWith('x-sonos-vli:')
+  ) {
+    return null;
+  }
+
+  const supportsGetAA = lower.startsWith('x-sonos-http:')
+    || lower.startsWith('x-sonosprog-http:')
+    || lower.startsWith('x-sonosapi-hls:')
+    || lower.startsWith('x-sonosapi-stream:')
+    || lower.startsWith('x-sonosapi-radio:')
+    || lower.startsWith('x-rincon-mp3radio:')
+    || lower.startsWith('aac:');
+  if (!supportsGetAA) return null;
+
+  return `http://${resolvedHost}:1400/getaa?s=1&u=${encodeURIComponent(uri)}`;
 }
 
 function decodeXmlEntities(value: string): string {

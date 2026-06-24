@@ -75,7 +75,6 @@ export class LiveActivityPreferenceStore {
       next.trackTitle = nowPlaying.trackTitle;
       if (nowPlaying.artist !== null) next.artist = nowPlaying.artist;
       if (nowPlaying.album !== null) next.album = nowPlaying.album;
-      if (nowPlaying.albumArtUri !== null) next.albumArtUri = nowPlaying.albumArtUri;
       if (nowPlaying.isPlaying !== null) next.isPlaying = nowPlaying.isPlaying;
       if (nowPlaying.positionSeconds !== null) next.positionSeconds = nowPlaying.positionSeconds;
       if (nowPlaying.durationSeconds !== null) next.durationSeconds = nowPlaying.durationSeconds;

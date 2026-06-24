@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
+import pino from 'pino';
 import { PNG } from 'pngjs';
 
 import {
@@ -33,6 +34,79 @@ test('Live Activity content state derives a dominant theme color from fetched al
 
   assert.match(state.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
   assert.notEqual(state.dominantColorHex, '#FFFFFF');
+});
+
+test('Live Activity album art fetches getaa once for the same song', async () => {
+  let fetchCalls = 0;
+  const dependencies = {
+    fetchAlbumArt: async () => {
+      fetchCalls += 1;
+      return makeSolidPng(96, 96);
+    },
+  };
+  const albumArtUri = 'http://192.168.50.25:1400/getaa?s=once&u=x-sonos-http%3atrack';
+
+  const firstState = await buildLiveActivityContentState(snapshot({ albumArtUri }), dependencies);
+  const secondState = await buildLiveActivityContentState(snapshot({ albumArtUri }), dependencies);
+
+  assert.ok(firstState.albumArtThumbnail);
+  assert.equal(secondState.albumArtThumbnail, firstState.albumArtThumbnail);
+  assert.equal(fetchCalls, 1);
+});
+
+test('Live Activity album art fetches again when the song changes behind the same getaa URL', async () => {
+  let fetchCalls = 0;
+  const dependencies = {
+    fetchAlbumArt: async () => {
+      fetchCalls += 1;
+      return makeSolidPng(96, 96);
+    },
+  };
+  const albumArtUri = 'http://192.168.50.25:1400/getaa?s=current';
+
+  await buildLiveActivityContentState(snapshot({
+    albumArtUri,
+    trackTitle: 'Blue Train',
+  }), dependencies);
+  await buildLiveActivityContentState(snapshot({
+    albumArtUri,
+    trackTitle: 'Naima',
+  }), dependencies);
+
+  assert.equal(fetchCalls, 2);
+});
+
+test('Live Activity album art fetches the same getaa URL again after a song change', async () => {
+  let requestCount = 0;
+  const server = http.createServer((_req, res) => {
+    requestCount += 1;
+    const image = makeSolidPng(96, 96);
+    res.writeHead(200, {
+      'content-type': 'image/png',
+      'content-length': image.length,
+    });
+    res.end(image);
+  });
+
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const albumArtUri = `http://127.0.0.1:${address.port}/getaa?s=current`;
+
+  try {
+    await buildLiveActivityContentState(snapshot({
+      albumArtUri,
+      trackTitle: 'Blue Train',
+    }));
+    await buildLiveActivityContentState(snapshot({
+      albumArtUri,
+      trackTitle: 'Naima',
+    }));
+
+    assert.equal(requestCount, 2);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test('Live Activity content hash changes when album art becomes available', () => {
@@ -131,7 +205,7 @@ test('Live Activity content hash changes when the audio quality label changes', 
   assert.notEqual(lossless, atmos);
 });
 
-test('Live Activity album art extraction retries after a transient fetch failure', async () => {
+test('Live Activity album art extraction does not retry a failed fetch for the same song', async () => {
   let requestCount = 0;
   const server = http.createServer((_req, res) => {
     requestCount += 1;
@@ -160,12 +234,49 @@ test('Live Activity album art extraction retries after a transient fetch failure
 
     assert.equal(failedState.albumArtThumbnail, null);
     assert.equal(failedState.dominantColorHex, null);
-    assert.ok(recoveredState.albumArtThumbnail);
-    assert.match(recoveredState.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
-    assert.equal(requestCount, 2);
+    assert.equal(recoveredState.albumArtThumbnail, null);
+    assert.equal(recoveredState.dominantColorHex, null);
+    assert.equal(requestCount, 1);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+test('Live Activity content state logs missing album art URI', async () => {
+  const { logger, lines } = captureLogger();
+
+  await buildLiveActivityContentState(snapshot({ albumArtUri: null }), {
+    logger,
+    logContext: { trigger: 'unit-test' },
+  });
+
+  assert.equal(lines.some(line =>
+    line.includes('"msg":"live activity album art"')
+    && line.includes('"status":"missing-uri"')
+    && line.includes('"groupId":"192.168.50.25"')
+    && line.includes('"trigger":"unit-test"')
+  ), true);
+});
+
+test('Live Activity content state logs album art fetch failures', async () => {
+  const { logger, lines } = captureLogger();
+
+  await buildLiveActivityContentState(snapshot({
+    albumArtUri: 'http://192.168.50.25:1400/getaa?s=missing',
+  }), {
+    logger,
+    logContext: { trigger: 'unit-test' },
+    fetchAlbumArt: async () => {
+      throw new Error('speaker returned 404');
+    },
+  });
+
+  assert.equal(lines.some(line =>
+    line.includes('"msg":"live activity album art"')
+    && line.includes('"status":"failed"')
+    && line.includes('"trigger":"unit-test"')
+    && line.includes('"speaker returned 404"')
+  ), true);
 });
 
 function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapshot {
@@ -210,4 +321,14 @@ function makeSolidPng(width: number, height: number): Buffer {
     png.data[index + 3] = 255;
   }
   return PNG.sync.write(png);
+}
+
+function captureLogger(): { logger: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  const destination = {
+    write: (line: string) => {
+      lines.push(line);
+    },
+  };
+  return { logger: pino({ level: 'info' }, destination), lines };
 }

@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
+import type { Logger } from 'pino';
 
 import { normalizedAlbumArtUri } from './albumArtFetchCache.js';
-import { fetchAlbumArt as defaultFetchAlbumArt } from './hueAlbumArtPalette.js';
 import type { LiveActivityContentState, SonosGroupSnapshot } from './types.js';
 
+const MAX_ALBUM_ART_BYTES = 5 * 1024 * 1024;
 const THUMBNAIL_SIZE = 60;
 const THUMBNAIL_JPEG_QUALITY = 65;
 const MAX_THUMBNAIL_BYTES = 15 * 1024;
@@ -14,6 +15,8 @@ const albumArtCache = new Map<string, AlbumArtPresentation>();
 
 export interface LiveActivityContentStateDependencies {
   fetchAlbumArt?: (uri: string) => Promise<Buffer>;
+  logger?: Pick<Logger, 'debug' | 'info' | 'warn'>;
+  logContext?: Record<string, unknown>;
 }
 
 interface DecodedImage {
@@ -38,7 +41,7 @@ export async function buildLiveActivityContentState(
   const endsAtUnix = snap.isPlaying && snap.durationSeconds > 0
     ? sampledUnix + (snap.durationSeconds - snap.positionSeconds)
     : null;
-  const albumArt = await albumArtPresentation(snap.albumArtUri, dependencies);
+  const albumArt = await albumArtPresentation(snap, dependencies);
 
   return {
     trackTitle: snap.trackTitle || 'Not Playing',
@@ -85,28 +88,162 @@ export function hashLiveActivityContentState(state: LiveActivityContentState): s
 }
 
 async function albumArtPresentation(
-  albumArtUri: string | null | undefined,
+  snap: SonosGroupSnapshot,
   dependencies: LiveActivityContentStateDependencies,
 ): Promise<AlbumArtPresentation> {
-  if (!albumArtUri) return { thumbnailBase64: null, dominantColorHex: null };
-
-  const cacheKey = normalizedAlbumArtUri(albumArtUri);
-  const useCache = dependencies.fetchAlbumArt === undefined;
-  if (useCache && albumArtCache.has(cacheKey)) {
-    return albumArtCache.get(cacheKey)!;
+  const albumArtUri = snap.albumArtUri;
+  if (!albumArtUri) {
+    logAlbumArt(dependencies, 'info', snap, {
+      status: 'missing-uri',
+      reason: 'snapshot-album-art-uri-null',
+    });
+    return { thumbnailBase64: null, dominantColorHex: null };
   }
 
+  const fetchUri = normalizedAlbumArtUri(albumArtUri);
+  const cacheKey = albumArtPresentationCacheKey(snap, fetchUri);
+  if (!isSonosGetAAArtworkURI(fetchUri)) {
+    logAlbumArt(dependencies, 'info', snap, {
+      status: 'unsupported-uri',
+      reason: 'not-sonos-getaa',
+      albumArtUri,
+      cacheKey,
+    });
+    return { thumbnailBase64: null, dominantColorHex: null };
+  }
+
+  if (albumArtCache.has(cacheKey)) {
+    const cached = albumArtCache.get(cacheKey)!;
+    logAlbumArt(dependencies, 'info', snap, {
+      status: 'cache-hit',
+      albumArtUri,
+      cacheKey,
+      thumbnailBytes: base64ByteLength(cached.thumbnailBase64),
+      dominantColorHex: cached.dominantColorHex,
+    });
+    return cached;
+  }
+
+  const start = Date.now();
   try {
-    const imageData = await (dependencies.fetchAlbumArt ?? defaultFetchAlbumArt)(cacheKey);
+    const imageData = await (dependencies.fetchAlbumArt ?? fetchAlbumArtDirect)(fetchUri);
     const image = decodeImage(imageData);
     const presentation = {
       thumbnailBase64: makeJpegThumbnailBase64(image),
       dominantColorHex: dominantColorHex(image),
     };
-    if (useCache) rememberAlbumArt(cacheKey, presentation);
+    rememberAlbumArt(cacheKey, presentation);
+    logAlbumArt(dependencies, 'info', snap, {
+      status: 'resolved',
+      albumArtUri,
+      cacheKey,
+      fetchBytes: imageData.length,
+      imageWidth: image.width,
+      imageHeight: image.height,
+      thumbnailBytes: base64ByteLength(presentation.thumbnailBase64),
+      dominantColorHex: presentation.dominantColorHex,
+      cache: 'stored',
+      ms: Date.now() - start,
+    });
     return presentation;
+  } catch (err) {
+    const presentation = { thumbnailBase64: null, dominantColorHex: null };
+    rememberAlbumArt(cacheKey, presentation);
+    logAlbumArt(dependencies, 'warn', snap, {
+      status: 'failed',
+      albumArtUri,
+      cacheKey,
+      err,
+      ms: Date.now() - start,
+    });
+    return presentation;
+  }
+}
+
+function logAlbumArt(
+  dependencies: LiveActivityContentStateDependencies,
+  level: 'debug' | 'info' | 'warn',
+  snap: SonosGroupSnapshot,
+  fields: Record<string, unknown>,
+): void {
+  const logger = dependencies.logger;
+  if (!logger) return;
+
+  logger[level]({
+    source: 'relay',
+    action: 'album-art',
+    ...dependencies.logContext,
+    groupId: snap.groupId,
+    trackTitle: snap.trackTitle || null,
+    artist: snap.artist || null,
+    album: snap.album || null,
+    playbackSourceRaw: snap.playbackSourceRaw ?? null,
+    isPlaying: snap.isPlaying,
+    ...fields,
+    albumArtUri: summarizeAlbumArtUri(fields.albumArtUri),
+    cacheKey: summarizeAlbumArtUri(fields.cacheKey),
+  }, 'live activity album art');
+}
+
+function summarizeAlbumArtUri(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  if (value.length <= 140) return value;
+  return `${value.slice(0, 110)}…${value.slice(-24)}`;
+}
+
+function base64ByteLength(value: string | null | undefined): number {
+  if (!value) return 0;
+  return Buffer.byteLength(value, 'base64');
+}
+
+function albumArtPresentationCacheKey(snap: SonosGroupSnapshot, albumArtUri: string): string {
+  return [
+    albumArtUri,
+    normalizedCacheText(snap.trackTitle),
+    normalizedCacheText(snap.artist),
+    normalizedCacheText(snap.album),
+    normalizedCacheText(snap.playbackSourceRaw),
+  ].join('|');
+}
+
+function normalizedCacheText(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function isSonosGetAAArtworkURI(value: string): boolean {
+  if (value.startsWith('/getaa')) return true;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.pathname.toLowerCase().includes('/getaa');
   } catch {
-    return { thumbnailBase64: null, dominantColorHex: null };
+    return false;
+  }
+}
+
+async function fetchAlbumArtDirect(uri: string): Promise<Buffer> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  timeout.unref?.();
+  try {
+    const response = await fetch(uri, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Album art request failed with HTTP ${response.status}`);
+    }
+
+    const contentLength = Number(response.headers.get('content-length') ?? '0');
+    if (contentLength > MAX_ALBUM_ART_BYTES) {
+      throw new Error('Album art response is too large');
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength > MAX_ALBUM_ART_BYTES) {
+      throw new Error('Album art response is too large');
+    }
+
+    return Buffer.from(arrayBuffer);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

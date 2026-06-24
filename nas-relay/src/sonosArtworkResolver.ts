@@ -1,12 +1,8 @@
-import type { ArtworkHintLookup, ArtworkHintStore } from './artworkHints.js';
-import { isLocalSonosArtworkUrl } from './artworkHints.js';
+import type { Logger } from 'pino';
+
 import { ITunesArtworkClient, type ITunesArtworkSearchInput } from './itunesArtwork.js';
 
 export type SonosArtworkResolutionSource =
-  | 'public'
-  | 'hint'
-  | 'itunesLookup'
-  | 'itunesSearch'
   | 'getaa'
   | 'none';
 
@@ -17,6 +13,8 @@ export interface SonosArtworkResolution {
 }
 
 export interface SonosArtworkResolveInput {
+  groupId?: string | null;
+  trigger?: string | null;
   title?: string | null;
   artist?: string | null;
   album?: string | null;
@@ -31,14 +29,14 @@ export interface SonosArtworkResolver {
 }
 
 export interface SonosArtworkResolverOptions {
-  artworkHints?: Pick<ArtworkHintStore, 'resolve'> | null;
-  itunes?: ITunesArtworkLookupClient;
+  logger?: Pick<Logger, 'info' | 'warn'> | null;
+  itunes?: ITunesArtworkLookupClient | null;
   countryCode?: string | null;
 }
 
 export interface ResolveSonosArtworkInput extends SonosArtworkResolveInput {
-  artworkHints?: Pick<ArtworkHintStore, 'resolve'> | null;
-  itunes?: ITunesArtworkLookupClient;
+  artworkHints?: unknown;
+  itunes?: unknown;
 }
 
 export interface ITunesArtworkLookupClient {
@@ -46,64 +44,147 @@ export interface ITunesArtworkLookupClient {
   searchArtworkURLString(input: ITunesArtworkSearchInput): Promise<string | null>;
 }
 
+export type ITunesArtworkProbeStatus = 'hit' | 'miss' | 'error' | 'skipped';
+export type ITunesArtworkProbeMethod = 'lookup' | 'search' | null;
+export type ITunesArtworkProbeStepStatus = 'hit' | 'miss' | 'error' | 'skipped';
+
+export interface ITunesArtworkProbeInput extends SonosArtworkResolveInput {
+  itunes: ITunesArtworkLookupClient;
+}
+
+export interface ITunesArtworkProbeResult {
+  status: ITunesArtworkProbeStatus;
+  method: ITunesArtworkProbeMethod;
+  lookupStatus: ITunesArtworkProbeStepStatus;
+  searchStatus: ITunesArtworkProbeStepStatus;
+  url: string | null;
+  catalogID: string | null;
+  ms: number;
+  error?: unknown;
+}
+
 const sharedITunesArtworkClient = new ITunesArtworkClient();
 
 export function createSonosArtworkResolver(options: SonosArtworkResolverOptions = {}): SonosArtworkResolver {
-  const itunes = options.itunes ?? sharedITunesArtworkClient;
-  const artworkHints = options.artworkHints ?? null;
+  const logger = options.logger ?? null;
+  const itunes = options.itunes === undefined ? sharedITunesArtworkClient : options.itunes;
   const countryCode = options.countryCode ?? null;
   return {
-    resolve: input => resolveSonosArtwork({
-      ...input,
-      countryCode: input.countryCode ?? countryCode,
-      artworkHints,
-      itunes,
-    }),
+    async resolve(input) {
+      const resolution = await resolveSonosArtwork(input);
+      if (itunes) {
+        const probeInput = {
+          ...input,
+          countryCode: input.countryCode ?? countryCode,
+          itunes,
+        };
+        void probeITunesArtwork(probeInput)
+          .then(result => logITunesArtworkProbe(logger, probeInput, result))
+          .catch(error => logITunesArtworkProbe(logger, probeInput, {
+            status: 'error',
+            method: null,
+            lookupStatus: 'skipped',
+            searchStatus: 'skipped',
+            url: null,
+            catalogID: null,
+            ms: 0,
+            error,
+          }));
+      }
+      return resolution;
+    },
   };
 }
 
-export async function resolveSonosArtwork(input: ResolveSonosArtworkInput): Promise<SonosArtworkResolution> {
+export function resolveSonosArtwork(input: ResolveSonosArtworkInput): Promise<SonosArtworkResolution> {
   const currentArtwork = trimmedOrNull(input.albumArtUri);
-  if (isPublicArtworkURL(currentArtwork)) {
-    return { source: 'public', url: currentArtwork };
+  if (isSonosGetAAArtworkURI(currentArtwork)) {
+    return Promise.resolve({ source: 'getaa', url: currentArtwork });
   }
 
-  const hint = input.artworkHints?.resolve(artworkHintLookup(input)) ?? null;
-  if (isPublicArtworkURL(hint)) {
-    return { source: 'hint', url: hint };
+  return Promise.resolve({ source: 'none', url: null });
+}
+
+export async function probeITunesArtwork(input: ITunesArtworkProbeInput): Promise<ITunesArtworkProbeResult> {
+  const startedAt = Date.now();
+  const catalogID = appleMusicCatalogIDFromSonosValues(input.trackUri, input.albumArtUri);
+  if (!isAppleMusicCandidate(input, catalogID)) {
+    return {
+      status: 'skipped',
+      method: null,
+      lookupStatus: 'skipped',
+      searchStatus: 'skipped',
+      url: null,
+      catalogID,
+      ms: Date.now() - startedAt,
+    };
   }
 
-  const catalogID = appleMusicCatalogIDFromSonosValues(input.trackUri, currentArtwork);
-  const appleMusicCandidate = isAppleMusicCandidate(input, catalogID);
-  const itunes = input.itunes ?? sharedITunesArtworkClient;
+  let lookupStatus: ITunesArtworkProbeStepStatus = catalogID ? 'miss' : 'skipped';
+  let searchStatus: ITunesArtworkProbeStepStatus = shouldSearchITunes(input) ? 'miss' : 'skipped';
+  let firstError: unknown;
 
-  if (appleMusicCandidate && catalogID) {
-    const lookupURL = await safeResolve(() =>
-      itunes.lookupArtworkURLString(catalogID, input.countryCode));
-    if (isPublicArtworkURL(lookupURL)) {
-      return { source: 'itunesLookup', url: lookupURL, catalogID };
+  if (catalogID) {
+    try {
+      const lookupURL = await input.itunes.lookupArtworkURLString(catalogID, input.countryCode);
+      if (isPublicArtworkURL(lookupURL)) {
+        return {
+          status: 'hit',
+          method: 'lookup',
+          lookupStatus: 'hit',
+          searchStatus: 'skipped',
+          url: lookupURL,
+          catalogID,
+          ms: Date.now() - startedAt,
+        };
+      }
+      lookupStatus = 'miss';
+    } catch (error) {
+      lookupStatus = 'error';
+      firstError = error;
     }
   }
 
-  if (appleMusicCandidate && shouldSearchITunes(input)) {
-    const searchURL = await safeResolve(() =>
-      itunes.searchArtworkURLString({
+  if (shouldSearchITunes(input)) {
+    try {
+      const searchURL = await input.itunes.searchArtworkURLString({
         kind: 'song',
         title: input.title?.trim() ?? '',
         artist: input.artist,
         album: input.album,
         countryCode: input.countryCode,
-      }));
-    if (isPublicArtworkURL(searchURL)) {
-      return { source: 'itunesSearch', url: searchURL, catalogID };
+      });
+      if (isPublicArtworkURL(searchURL)) {
+        return {
+          status: 'hit',
+          method: 'search',
+          lookupStatus,
+          searchStatus: 'hit',
+          url: searchURL,
+          catalogID,
+          ms: Date.now() - startedAt,
+        };
+      }
+      searchStatus = 'miss';
+    } catch (error) {
+      searchStatus = 'error';
+      firstError ??= error;
     }
   }
 
-  if (currentArtwork && isLocalSonosArtworkUrl(currentArtwork)) {
-    return { source: 'getaa', url: currentArtwork, catalogID };
-  }
-
-  return { source: 'none', url: currentArtwork, catalogID };
+  const status: ITunesArtworkProbeStatus = lookupStatus === 'error' || searchStatus === 'error'
+    ? 'error'
+    : 'miss';
+  return {
+    status,
+    method: null,
+    lookupStatus,
+    searchStatus,
+    url: null,
+    catalogID,
+    ms: Date.now() - startedAt,
+    ...(firstError ? { error: firstError } : {}),
+  };
 }
 
 export function appleMusicCatalogIDFromSonosValues(
@@ -119,6 +200,36 @@ export function appleMusicCatalogIDFromSonosValues(
   return null;
 }
 
+function logITunesArtworkProbe(
+  logger: Pick<Logger, 'info' | 'warn'> | null,
+  input: SonosArtworkResolveInput,
+  result: ITunesArtworkProbeResult,
+): void {
+  if (!logger || result.status === 'skipped') return;
+
+  const level = result.status === 'error' ? 'warn' : 'info';
+  logger[level]({
+    source: 'relay',
+    action: 'itunes-artwork-shadow-probe',
+    status: result.status,
+    method: result.method,
+    lookupStatus: result.lookupStatus,
+    searchStatus: result.searchStatus,
+    groupId: input.groupId ?? null,
+    trigger: input.trigger ?? null,
+    title: input.title ?? null,
+    artist: input.artist ?? null,
+    album: input.album ?? null,
+    playbackSourceRaw: input.playbackSourceRaw ?? null,
+    catalogID: result.catalogID,
+    trackUri: summarizeArtworkLogValue(input.trackUri),
+    getaaAlbumArtUri: summarizeArtworkLogValue(input.albumArtUri),
+    resolvedAlbumArtUri: summarizeArtworkLogValue(result.url),
+    ms: result.ms,
+    ...(result.error ? { err: result.error } : {}),
+  }, 'iTunes artwork shadow probe');
+}
+
 function sonosObjectCandidates(value: string | null | undefined): string[] {
   const trimmed = value?.trim() ?? '';
   if (!trimmed) return [];
@@ -129,7 +240,7 @@ function sonosObjectCandidates(value: string | null | undefined): string[] {
     const wrappedUri = url.searchParams.get('u');
     if (wrappedUri) candidates.push(wrappedUri);
   } catch {
-    // Not an absolute URL; raw Sonos URIs are still candidates.
+    // Raw Sonos URIs are still candidates.
   }
   return candidates;
 }
@@ -156,19 +267,9 @@ function shouldSearchITunes(input: SonosArtworkResolveInput): boolean {
   return Boolean(title && (artist || album));
 }
 
-function artworkHintLookup(input: SonosArtworkResolveInput): ArtworkHintLookup {
-  return {
-    title: input.title,
-    artist: input.artist,
-    album: input.album,
-    objectIds: [input.trackUri],
-    currentArtworkUrl: input.albumArtUri,
-  };
-}
-
 function isPublicArtworkURL(value: string | null | undefined): value is string {
   const trimmed = trimmedOrNull(value);
-  if (!trimmed || isLocalSonosArtworkUrl(trimmed)) return false;
+  if (!trimmed) return false;
 
   try {
     const url = new URL(trimmed);
@@ -178,17 +279,29 @@ function isPublicArtworkURL(value: string | null | undefined): value is string {
   }
 }
 
-async function safeResolve(resolve: () => Promise<string | null>): Promise<string | null> {
-  try {
-    return await resolve();
-  } catch {
-    return null;
-  }
-}
-
 function trimmedOrNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? '';
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isSonosGetAAArtworkURI(value: string | null | undefined): value is string {
+  const trimmed = trimmedOrNull(value);
+  if (!trimmed) return false;
+  if (trimmed.startsWith('/getaa')) return true;
+
+  try {
+    const url = new URL(trimmed);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.pathname.toLowerCase().includes('/getaa');
+  } catch {
+    return false;
+  }
+}
+
+function summarizeArtworkLogValue(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (value.length <= 140) return value;
+  return `${value.slice(0, 110)}…${value.slice(-24)}`;
 }
 
 function decodeRepeated(value: string): string {

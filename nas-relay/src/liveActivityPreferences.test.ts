@@ -48,7 +48,7 @@ test('Live Activity preferences ignore blank style strings', () => {
   assert.equal(enriched.liveActivityStyleRaw, null);
 });
 
-test('Live Activity preferences use recent app now playing hints for live snapshots', () => {
+test('Live Activity preferences use recent app now playing hints for live snapshots except artwork', () => {
   const store = new LiveActivityPreferenceStore(() => 1_000);
   store.update({
     groupId: '192.168.50.25',
@@ -70,7 +70,7 @@ test('Live Activity preferences use recent app now playing hints for live snapsh
     trackTitle: 'Apple Music 1',
     artist: 'Apple Music',
     album: 'Live Radio',
-    albumArtUri: 'https://example.com/station.jpg',
+    albumArtUri: 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3astation',
     playbackSourceRaw: 'appleMusic',
     audioQualityLabel: null,
     positionSeconds: 14,
@@ -81,7 +81,7 @@ test('Live Activity preferences use recent app now playing hints for live snapsh
   assert.equal(enriched.trackTitle, 'Correct Radio Song');
   assert.equal(enriched.artist, 'Correct Artist');
   assert.equal(enriched.album, 'Correct Album');
-  assert.equal(enriched.albumArtUri, 'https://example.com/correct.jpg');
+  assert.equal(enriched.albumArtUri, 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3astation');
   assert.equal(enriched.positionSeconds, 0);
   assert.equal(enriched.durationSeconds, 0);
   assert.equal(enriched.playbackSourceRaw, 'appleMusic');

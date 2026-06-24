@@ -57,6 +57,20 @@ test('track metadata extraction uses Sonos radio stream content for the current 
   );
 });
 
+test('track metadata extraction uses radio stream fields cached in artist metadata', () => {
+  assert.deepEqual(
+    trackMetadataFromMetadata(
+      '<DIDL-Lite><item><dc:title>Single</dc:title><dc:creator>TYPE=SNG|TITLE Broken Hearted Sade|ARTIST Joseph Shabason &amp; Dawn Richard|ALBUM Broken Hearted Sade</dc:creator><upnp:album>Single</upnp:album><upnp:albumArtURI>/getaa?s=1&amp;u=x-sonosapi-hls%3astation</upnp:albumArtURI></item></DIDL-Lite>',
+    ),
+    {
+      title: 'Broken Hearted Sade',
+      artist: 'Joseph Shabason & Dawn Richard',
+      album: 'Broken Hearted Sade',
+      albumArtUri: '/getaa?s=1&u=x-sonosapi-hls%3astation',
+    },
+  );
+});
+
 test('track metadata extraction accepts parsed Sonos Track metadata objects', () => {
   assert.deepEqual(
     trackMetadataFromMetadata({
@@ -608,6 +622,50 @@ test('bridge keeps previous live radio song when Sonos temporarily reports only 
   assert.equal(snapshot?.album, 'Single');
 });
 
+test('bridge synthesizes getaa artwork for live radio when Sonos omits album art metadata', async () => {
+  const bridge = testBridge();
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, liveRadioPositionInfo(''));
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  assert.equal(
+    bridge.current('192.168.50.25')?.albumArtUri,
+    'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3Ahls%253ara.1740614260%3Fsid%3D204%26flags%3D8232%26sn%3D2',
+  );
+});
+
+test('bridge prefers speaker getaa artwork over public artwork metadata', async () => {
+  const bridge = testBridge();
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, {
+    ...genericAppleMusicPositionInfo(),
+    TrackMetaData: '<DIDL-Lite><item>'
+      + '<dc:title>Call On Me</dc:title>'
+      + '<dc:creator>Daniel Caesar</dc:creator>'
+      + '<upnp:album>Son of Spergy</upnp:album>'
+      + '<upnp:albumArtURI>https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg</upnp:albumArtURI>'
+      + '</item></DIDL-Lite>',
+  });
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  assert.equal(
+    bridge.current('192.168.50.25')?.albumArtUri,
+    'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3Asong%253a1839352407.mp4%3Fsid%3D204%26flags%3D8232%26sn%3D2',
+  );
+});
+
 test('bridge snapshots audio quality from Sonos track metadata', async () => {
   const bridge = testBridge();
   const device = playbackDevice({
@@ -624,21 +682,8 @@ test('bridge snapshots audio quality from Sonos track metadata', async () => {
   assert.equal(snapshot?.audioQualityLabel, 'Lossless');
 });
 
-test('bridge resolves snapshot artwork before emitting', async () => {
-  const calls: unknown[] = [];
-  const bridge = new SonosBridge(pino({ enabled: false }), {
-    localControl: null,
-    artworkResolver: {
-      resolve: async input => {
-        calls.push(input);
-        return {
-          source: 'itunesLookup',
-          url: 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
-          catalogID: '1440857781',
-        };
-      },
-    },
-  });
+test('bridge keeps getaa snapshot artwork before emitting', async () => {
+  const bridge = testBridge();
   const device = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -649,37 +694,16 @@ test('bridge resolves snapshot artwork before emitting', async () => {
     refreshSnapshot: (device: unknown) => Promise<void>;
   }).refreshSnapshot(device);
 
-  const firstCall = calls[0] as {
-    title?: string;
-    artist?: string;
-    album?: string;
-    trackUri?: string;
-    albumArtUri?: string | null;
-    playbackSourceRaw?: string | null;
-  };
-  assert.equal(firstCall.title, 'Call On Me');
-  assert.equal(firstCall.artist, 'Daniel Caesar');
-  assert.equal(firstCall.album, 'Son of Spergy');
-  assert.equal(firstCall.trackUri, 'x-sonos-http:song%3a1839352407.mp4?sid=204&flags=8232&sn=2');
-  assert.equal(firstCall.albumArtUri?.includes('/getaa'), true);
-  assert.equal(firstCall.playbackSourceRaw, 'appleMusic');
   assert.equal(
     bridge.current('192.168.50.25')?.albumArtUri,
-    'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
+    'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a1839352407.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
   );
 });
 
-test('bridge logs snapshot artwork resolver source at info level', async () => {
+test('bridge logs getaa snapshot artwork source at info level', async () => {
   const { logger, lines } = captureLogger();
   const bridge = new SonosBridge(logger, {
     localControl: null,
-    artworkResolver: {
-      resolve: async () => ({
-        source: 'itunesLookup',
-        url: 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
-        catalogID: '1440857781',
-      }),
-    },
   });
   const device = playbackDevice({
     Host: '192.168.50.25',
@@ -692,10 +716,52 @@ test('bridge logs snapshot artwork resolver source at info level', async () => {
   }).refreshSnapshot(device);
 
   assert.equal(lines.some(line =>
-    line.includes('"msg":"snapshot album art resolver applied"')
-    && line.includes('"source":"itunesLookup"')
-    && line.includes('"catalogID":"1440857781"')
-    && line.includes('"resolvedAlbumArtUri":"https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg"')
+    line.includes('"msg":"snapshot album art resolver kept current artwork"')
+    && line.includes('"source":"getaa"')
+    && line.includes('"catalogID":null')
+    && line.includes('"albumArtUri":"http://192.168.50.25:1400/getaa?s=1')
+  ), true);
+});
+
+test('bridge logs iTunes artwork shadow probe without replacing getaa artwork', async () => {
+  const { logger, lines } = captureLogger();
+  const calls: string[] = [];
+  const bridge = new SonosBridge(logger, {
+    localControl: null,
+    artworkITunes: {
+      lookupArtworkURLString: async catalogID => {
+        calls.push(`lookup:${catalogID}`);
+        return 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg';
+      },
+      searchArtworkURLString: async () => {
+        calls.push('search');
+        return null;
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, genericAppleMusicPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+  await waitForLine(lines, '"msg":"iTunes artwork shadow probe"');
+
+  assert.equal(
+    bridge.current('192.168.50.25')?.albumArtUri,
+    'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a1839352407.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
+  );
+  assert.deepEqual(calls, ['lookup:1839352407']);
+  assert.equal(lines.some(line =>
+    line.includes('"msg":"iTunes artwork shadow probe"')
+    && line.includes('"action":"itunes-artwork-shadow-probe"')
+    && line.includes('"status":"hit"')
+    && line.includes('"method":"lookup"')
+    && line.includes('"groupId":"192.168.50.25"')
+    && line.includes('"catalogID":"1839352407"')
   ), true);
 });
 
@@ -989,6 +1055,13 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForLine(lines: string[], pattern: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (lines.some(line => line.includes(pattern))) return;
+    await delay(0);
+  }
 }
 
 function playbackDevice(
