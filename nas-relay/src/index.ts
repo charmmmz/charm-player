@@ -320,6 +320,10 @@ async function main(): Promise<void> {
         discoveryError: sonos.discovery.error,
       },
       apns: apns.status(),
+      liveActivity: {
+        startTokenCount: startTokens.count(),
+        updateTokenCount: tokens.count(),
+      },
       groups: sonos.allSnapshots().map(s => ({
         groupId: s.groupId,
         speakerName: s.speakerName,

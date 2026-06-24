@@ -115,6 +115,47 @@ project); change `APNS_BUNDLE_ID` if you renamed it. The APNs topic is
 automatically suffixed with `.push-type.liveactivity`, which is what Apple
 requires for Live Activity pushes.
 
+### Live Activity push-to-start
+
+The relay can start the iOS Live Activity when Sonos playback begins. The iOS
+app must have run at least once after install so it can upload an ActivityKit
+push-to-start token. APNs must be configured with `APNS_KEY_ID`,
+`APNS_TEAM_ID`, `APNS_KEY_PATH`, `APNS_PRODUCTION`, and `APNS_BUNDLE_ID`.
+
+Expected flow:
+
+1. Open Charm Player once on the iPhone while the relay is reachable.
+2. Confirm `/api/health` reports `apns.mode: "ready"` and
+   `liveActivity.startTokenCount > 0`.
+3. Start playback on the selected Sonos group without opening the app.
+4. The relay sends an APNs `start` push.
+5. iOS creates the Live Activity and reports an update token back to
+   `/api/register-activity`.
+
+Use a real iPhone for this check. APNs push-to-start cannot be fully validated
+in the simulator. Before playback, a healthy response should include:
+
+```json
+{
+  "apns": { "mode": "ready" },
+  "liveActivity": {
+    "startTokenCount": 1,
+    "updateTokenCount": 0
+  }
+}
+```
+
+Expected relay log sequence after playback starts:
+
+```text
+live_activity action=apns-start trigger=sonos-change groupId=<group>
+live_activity action=register-request groupId=<group> activityId=<activity>
+live_activity action=apns-update trigger=register-initial groupId=<group>
+```
+
+The iPhone should show one Live Activity, update its track metadata, and avoid
+creating a duplicate when the app is opened later.
+
 ## API
 
 | Method | Path                                  | Body / Params                                                   | Description                                              |
@@ -122,6 +163,7 @@ requires for Live Activity pushes.
 | GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
 | GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
 | POST   | `/api/artwork-hints`                  | `{ hints: [{ title, artist, album, artworkUrl, ... }] }`        | Stores app-known CDN artwork hints for relay snapshots   |
+| POST   | `/api/register-push-to-start`         | `{ groupId, token, clientId?, speakerName?, liveActivityStyleRaw? }` | Stores iOS ActivityKit push-to-start tokens              |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
 | DELETE | `/api/register-activity/:token`       | path: `:token`                                                  | Called by iOS when the Live Activity ends                |
 | GET    | `/api/hue-ambience/status`            | —                                                               | Hue runtime status without exposing the Hue app key      |

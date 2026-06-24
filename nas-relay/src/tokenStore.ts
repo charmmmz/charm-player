@@ -72,6 +72,10 @@ export class TokenStore {
     return entry?.groupId === groupId;
   }
 
+  count(): number {
+    return this.tokens.size;
+  }
+
   /// Update the cached "last shipped hash" so we can skip no-op pushes. Done
   /// atomically with a debounced flush since this is a write-heavy field.
   recordSent(token: string, hash: string): void {

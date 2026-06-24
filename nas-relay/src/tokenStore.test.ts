@@ -83,3 +83,29 @@ test('new activity registration prunes older tokens from the same client and gro
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('count reports the current activity update token count', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'sonos-token-store-'));
+  try {
+    const store = new TokenStore(dir, pino({ enabled: false }));
+
+    assert.equal(store.count(), 0);
+    store.register({
+      groupId: '192.168.50.251',
+      token: 'activity-token-a',
+      clientId: 'phone-a',
+      activityId: 'activity-1',
+    });
+    store.register({
+      groupId: '192.168.50.252',
+      token: 'activity-token-b',
+      clientId: 'phone-b',
+      activityId: 'activity-2',
+    });
+    store.unregister('activity-token-a');
+
+    assert.equal(store.count(), 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
