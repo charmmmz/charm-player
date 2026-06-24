@@ -343,6 +343,36 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
+    func testLiveActivityAttributesCarryOptionalGroupID() {
+        let attrs = SonosActivityAttributes(
+            speakerName: "Playroom",
+            groupId: "192.168.50.25"
+        )
+
+        XCTAssertEqual(attrs.speakerName, "Playroom")
+        XCTAssertEqual(attrs.groupId, "192.168.50.25")
+    }
+
+    func testRelayStartReadyPreventsLocalActivityCreation() {
+        XCTAssertFalse(
+            SonosManager.shouldCreateLocalLiveActivity(
+                currentActivityExists: false,
+                shouldKeepActivity: true,
+                relayPushToStartReady: true
+            )
+        )
+    }
+
+    func testLocalActivityCreationRemainsFallbackWhenRelayStartIsNotReady() {
+        XCTAssertTrue(
+            SonosManager.shouldCreateLocalLiveActivity(
+                currentActivityExists: false,
+                shouldKeepActivity: true,
+                relayPushToStartReady: false
+            )
+        )
+    }
+
     func testTVSoundbarCommandsUseRelayWhenRelayIsPrimaryWriter() {
         XCTAssertTrue(
             SonosManager.shouldSendSoundbarCommandThroughRelay(

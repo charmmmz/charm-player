@@ -1040,6 +1040,7 @@ struct SonosActivityAttributes: ActivityAttributes {
         var audioQualityLabel: String? = nil
     }
     var speakerName: String
+    var groupId: String? = nil
 }
 
 enum LiveActivityArtworkData {

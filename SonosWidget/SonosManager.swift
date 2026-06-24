@@ -3396,7 +3396,10 @@ final class SonosManager {
         if currentActivity == nil {
             // No existing activity — create one (always, even during TRANSITIONING).
             let state = makeActivityState()
-            let attrs = SonosActivityAttributes(speakerName: speaker.name)
+            let attrs = SonosActivityAttributes(
+                speakerName: speaker.name,
+                groupId: liveActivityGroupId()
+            )
             // `staleDate` is refreshed on every `update()` below so an alive
             // app keeps the activity fresh indefinitely. If all writers stop,
             // iOS can age the activity out without us actively killing it.
@@ -3517,6 +3520,14 @@ final class SonosManager {
         relayWriterReady: Bool
     ) -> Bool {
         !usesRelay || !relayWriterReady
+    }
+
+    nonisolated static func shouldCreateLocalLiveActivity(
+        currentActivityExists: Bool,
+        shouldKeepActivity: Bool,
+        relayPushToStartReady: Bool
+    ) -> Bool {
+        shouldKeepActivity && !currentActivityExists && !relayPushToStartReady
     }
 
     nonisolated static func shouldSendSoundbarCommandThroughRelay(
