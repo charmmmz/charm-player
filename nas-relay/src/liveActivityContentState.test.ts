@@ -23,10 +23,10 @@ test('Live Activity content state embeds fetched album art as a push-sized high-
   assert.equal(thumbnail[0], 0xff);
   assert.equal(thumbnail[1], 0xd8);
   const decoded = jpeg.decode(thumbnail, { useTArray: true });
-  assert.ok(decoded.width >= 72);
+  assert.ok(decoded.width >= 80);
   assert.equal(decoded.width, decoded.height);
   assert.ok(thumbnail.length > 0);
-  assert.ok(thumbnail.length <= 2_400);
+  assert.ok(thumbnail.length <= 1_800);
   assert.ok(estimatedLiveActivityPayloadBytes(state) <= 4_096);
 });
 

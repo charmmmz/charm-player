@@ -91,6 +91,24 @@ export interface PushToStartRegisterRequest {
 export interface PushToStartTokenEntry extends PushToStartRegisterRequest {
   registeredAt: string;
   lastStartAt?: string;
+  startAttemptCount?: number;
+}
+
+export interface LiveActivityDismissedRequest {
+  groupId: string;
+  clientId?: string;
+  activityId?: string;
+  token?: string;
+  suppressForSeconds?: number;
+}
+
+export interface PushToStartSuppressionEntry {
+  groupId: string;
+  clientId?: string;
+  activityId?: string;
+  reason: 'user-dismissed';
+  recordedAt: string;
+  suppressUntil: string;
 }
 
 export interface LiveActivityStartAttributes {

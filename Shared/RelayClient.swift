@@ -585,6 +585,27 @@ enum RelayClient {
         try validate(response)
     }
 
+    struct LiveActivityDismissalBody: Encodable, Sendable {
+        let groupId: String
+        let clientId: String
+        let activityId: String?
+        let token: String?
+        let suppressForSeconds: Int
+    }
+
+    static func postLiveActivityDismissal(
+        baseURL: URL,
+        body: LiveActivityDismissalBody
+    ) async throws {
+        let url = baseURL.appendingPathComponent("/api/live-activity-dismissed")
+        var request = URLRequest(url: url, timeoutInterval: 3)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await noProxySession.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Live Activity preferences
 
     /// App-owned presentation preferences plus a short-lived live-stream

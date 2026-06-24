@@ -5,6 +5,7 @@ import pino from 'pino';
 import {
   ApnsClient,
   apnsStatusFromConfig,
+  liveActivityNotificationPayloadBytes,
   makeLiveActivityStartNotification,
   type ApnsConfig,
 } from './apns.js';
@@ -89,6 +90,20 @@ test('makeLiveActivityStartNotification creates ActivityKit start payload', () =
     'content-state': contentState,
     'input-push-token': 1,
   });
+});
+
+test('liveActivityNotificationPayloadBytes measures the serialized APNs payload', () => {
+  const note = makeLiveActivityStartNotification(
+    baseConfig.bundleId,
+    startAttributes,
+    contentState,
+    1_800_000_000,
+  );
+
+  assert.equal(
+    liveActivityNotificationPayloadBytes(note),
+    Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8'),
+  );
 });
 
 test('pushStart dry-run returns all tokens as sent without provider', async () => {

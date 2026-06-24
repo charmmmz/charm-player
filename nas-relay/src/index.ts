@@ -35,8 +35,10 @@ import {
 import { snapshotJson } from './relaySnapshotJson.js';
 import { publishRelayBonjour, type RelayBonjourAdvertisement } from './bonjour.js';
 import { StartTokenStore } from './startTokenStore.js';
+import { LiveActivityDismissalStore } from './liveActivityDismissalStore.js';
 import type {
   LiveActivityContentState,
+  LiveActivityDismissedRequest,
   PushToStartRegisterRequest,
   PushToStartTokenEntry,
   RegisterRequest,
@@ -56,6 +58,7 @@ const CS2_LIGHTING_LOG_PATH = process.env.CS2_LIGHTING_LOG_PATH
   ?? path.join(DATA_DIR, 'cs2-lighting.jsonl');
 const DEFAULT_APNS_BUNDLE_ID = 'com.charm.SonosWidget';
 const DEFAULT_APNS_TEAM_ID = '3MSS7DJGVR';
+const DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS = 30 * 60;
 
 async function main(): Promise<void> {
   // ---- core wiring ------------------------------------------------------
@@ -63,6 +66,8 @@ async function main(): Promise<void> {
   await tokens.load();
   const startTokens = new StartTokenStore(DATA_DIR, log);
   await startTokens.load();
+  const liveActivityDismissals = new LiveActivityDismissalStore(DATA_DIR, log);
+  await liveActivityDismissals.load();
   const hueConfigStore = new HueAmbienceConfigStore(DATA_DIR);
   const hueAmbience = new HueAmbienceService(
     hueConfigStore,
@@ -218,6 +223,7 @@ async function main(): Promise<void> {
         snap,
         startTokens: startTokenEntries,
         activityTokens: activityTokenEntries,
+        startSuppressions: liveActivityDismissals.activeForGroup(snap.groupId, now),
         buildState: buildSnap => buildLiveActivityContentState(buildSnap, {
           logger: liveActivityArtworkLog,
           logContext: { trigger },
@@ -239,6 +245,7 @@ async function main(): Promise<void> {
           groupId: snap.groupId,
           startTokenCount: startTokenEntries.length,
           activityTokenCount: activityTokenEntries.length,
+          suppressionCount: liveActivityDismissals.activeForGroup(snap.groupId, now).length,
           sent: result.sent,
           failed: result.failed,
           snapshot: summarizeSnapshot(snap),
@@ -320,10 +327,11 @@ async function main(): Promise<void> {
         discoveryError: sonos.discovery.error,
       },
       apns: apns.status(),
-      liveActivity: {
-        startTokenCount: startTokens.count(),
-        updateTokenCount: tokens.count(),
-      },
+        liveActivity: {
+          startTokenCount: startTokens.count(),
+          updateTokenCount: tokens.count(),
+          dismissedSuppressionCount: liveActivityDismissals.count(),
+        },
       groups: sonos.allSnapshots().map(s => ({
         groupId: s.groupId,
         speakerName: s.speakerName,
@@ -433,6 +441,26 @@ async function main(): Promise<void> {
       liveActivityStyleRaw: body.liveActivityStyleRaw,
       attributes: body.attributes,
     });
+    startTokens.recordActivityRegistered(body.groupId, body.clientId);
+    const clearedSuppressions = liveActivityDismissals.clearForActivity(
+      body.groupId,
+      body.clientId,
+      body.activityId,
+    );
+    if (clearedSuppressions > 0) {
+      log.info(
+        {
+          source: 'relay',
+          action: 'dismissal-suppression-clear',
+          trigger: 'register-activity',
+          groupId: body.groupId,
+          clientId: body.clientId ?? null,
+          activityId: body.activityId ?? null,
+          removed: clearedSuppressions,
+        },
+        'live_activity',
+      );
+    }
 
     // Push an initial state immediately so the Lock Screen reflects current
     // playback the moment the user starts the Live Activity, not after the
@@ -537,6 +565,49 @@ async function main(): Promise<void> {
     }
 
     res.json({ ok: true });
+  });
+
+  app.post('/api/live-activity-dismissed', (req, res) => {
+    const body = req.body as Partial<LiveActivityDismissedRequest>;
+    if (!body.groupId) {
+      res.status(400).json({ error: 'groupId is required' });
+      return;
+    }
+
+    const defaultSuppressForSeconds = Number(
+      process.env.LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS
+        ?? DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS,
+    );
+    const entry = liveActivityDismissals.recordDismissalRequest(
+      {
+        groupId: body.groupId,
+        clientId: body.clientId,
+        activityId: body.activityId,
+        token: body.token,
+        suppressForSeconds: body.suppressForSeconds,
+      },
+      new Date(),
+      Number.isFinite(defaultSuppressForSeconds)
+        ? defaultSuppressForSeconds
+        : DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS,
+    );
+    const removedToken = body.token ? tokens.unregister(body.token) : false;
+
+    log.info(
+      {
+        source: 'relay',
+        action: 'dismissed',
+        groupId: body.groupId,
+        clientId: body.clientId ?? null,
+        activityId: body.activityId ?? null,
+        token: body.token ? shortToken(body.token) : null,
+        removedToken,
+        suppressUntil: entry.suppressUntil,
+      },
+      'live_activity',
+    );
+
+    res.json({ ok: true, suppressUntil: entry.suppressUntil, removedToken });
   });
 
   app.post('/api/live-activity-command', async (req, res) => {

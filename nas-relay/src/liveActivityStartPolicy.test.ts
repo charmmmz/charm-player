@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { selectPushToStartTargets } from './liveActivityStartPolicy.js';
-import type { PushToStartTokenEntry, SonosGroupSnapshot, TokenEntry } from './types.js';
+import type {
+  PushToStartSuppressionEntry,
+  PushToStartTokenEntry,
+  SonosGroupSnapshot,
+  TokenEntry,
+} from './types.js';
 
 const snap: SonosGroupSnapshot = {
   groupId: '192.168.50.25',
@@ -133,4 +138,86 @@ test('selects only start tokens outside cooldown', () => {
     decision.targets.map(target => target.token),
     ['eligible-token', 'fresh-token'],
   );
+});
+
+test('does not start tokens suppressed by a user dismissed Live Activity', () => {
+  const suppressions: PushToStartSuppressionEntry[] = [
+    {
+      groupId: '192.168.50.25',
+      clientId: 'phone-a',
+      activityId: 'activity-a',
+      suppressUntil: '2026-06-24T08:30:00.000Z',
+      reason: 'user-dismissed',
+      recordedAt: '2026-06-24T08:00:00.000Z',
+    },
+  ];
+
+  const decision = selectPushToStartTargets({
+    snap,
+    startTokens: [startToken],
+    activityTokens: [],
+    startSuppressions: suppressions,
+    now: new Date('2026-06-24T08:10:00.000Z'),
+  });
+
+  assert.equal(decision.reason, 'suppressed');
+  assert.deepEqual(decision.targets, []);
+});
+
+test('suppressed tokens become eligible after the suppression expires', () => {
+  const decision = selectPushToStartTargets({
+    snap,
+    startTokens: [startToken],
+    activityTokens: [],
+    startSuppressions: [
+      {
+        groupId: '192.168.50.25',
+        clientId: 'phone-a',
+        activityId: 'activity-a',
+        suppressUntil: '2026-06-24T08:30:00.000Z',
+        reason: 'user-dismissed',
+        recordedAt: '2026-06-24T08:00:00.000Z',
+      },
+    ],
+    now: new Date('2026-06-24T08:30:01.000Z'),
+  });
+
+  assert.equal(decision.reason, 'start');
+  assert.deepEqual(decision.targets.map(target => target.token), ['start-token']);
+});
+
+test('uses an elevated backoff after repeated starts do not produce an activity token', () => {
+  const decision = selectPushToStartTargets({
+    snap,
+    startTokens: [
+      {
+        ...startToken,
+        lastStartAt: '2026-06-24T08:00:00.000Z',
+        startAttemptCount: 2,
+      },
+    ],
+    activityTokens: [],
+    now: new Date('2026-06-24T08:05:00.000Z'),
+  });
+
+  assert.equal(decision.reason, 'backoff');
+  assert.deepEqual(decision.targets, []);
+});
+
+test('repeated start attempts become eligible after the elevated backoff expires', () => {
+  const decision = selectPushToStartTargets({
+    snap,
+    startTokens: [
+      {
+        ...startToken,
+        lastStartAt: '2026-06-24T08:00:00.000Z',
+        startAttemptCount: 2,
+      },
+    ],
+    activityTokens: [],
+    now: new Date('2026-06-24T08:15:00.000Z'),
+  });
+
+  assert.equal(decision.reason, 'start');
+  assert.deepEqual(decision.targets.map(target => target.token), ['start-token']);
 });

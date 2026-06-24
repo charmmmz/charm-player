@@ -88,6 +88,10 @@ export function makeLiveActivityStartNotification(
   return note;
 }
 
+export function liveActivityNotificationPayloadBytes(note: apn.Notification): number {
+  return Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8');
+}
+
 /// Wraps `@parse/node-apn`. When the `.p8` key isn't present yet (Apple
 /// Developer enrollment still pending), we go into "dry-run" mode and only
 /// log the payload we *would* have sent — useful for validating the data
@@ -198,6 +202,7 @@ export class ApnsClient {
     contentState: LiveActivityContentState,
   ): Promise<ApnsResult> {
     if (tokens.length === 0) return { sent: 0, failed: 0, unregistered: [] };
+    const payloadBytes = liveActivityNotificationPayloadBytes(note);
 
     if (this.dryRun || !this.provider) {
       this.log.info(
@@ -206,6 +211,7 @@ export class ApnsClient {
           action: 'apns-dry-run',
           event,
           tokens: tokens.length,
+          payloadBytes,
           state: summarizeLiveActivityState(contentState),
         },
         'live_activity',
@@ -215,6 +221,19 @@ export class ApnsClient {
 
     const result: ApnsResult = { sent: 0, failed: 0, unregistered: [] };
     try {
+      if (event === 'start') {
+        this.log.info(
+          {
+            source: 'relay',
+            action: 'apns-payload',
+            event,
+            tokens: tokens.length,
+            payloadBytes,
+            state: summarizeLiveActivityState(contentState),
+          },
+          'live_activity',
+        );
+      }
       const response = await this.provider.send(note, tokens);
       result.sent = response.sent.length;
       for (const failure of response.failed) {
@@ -241,6 +260,7 @@ export class ApnsClient {
         action: 'apns-send-result',
         event,
         tokens: tokens.length,
+        payloadBytes,
         sent: result.sent,
         failed: result.failed,
         unregistered: result.unregistered.map(token => token.slice(0, 8) + '…'),

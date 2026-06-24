@@ -50,6 +50,7 @@ export class StartTokenStore {
       ...req,
       registeredAt: existing?.registeredAt ?? new Date().toISOString(),
       lastStartAt: existing?.lastStartAt,
+      startAttemptCount: existing?.startAttemptCount,
     };
     this.tokens.set(req.token, entry);
     this.markDirty();
@@ -84,8 +85,22 @@ export class StartTokenStore {
     const entry = this.tokens.get(token);
     if (entry) {
       entry.lastStartAt = date.toISOString();
+      entry.startAttemptCount = (entry.startAttemptCount ?? 0) + 1;
       this.markDirty();
     }
+  }
+
+  recordActivityRegistered(groupId: string, clientId?: string): void {
+    let changed = false;
+    for (const entry of this.tokens.values()) {
+      if (entry.groupId !== groupId) continue;
+      if (clientId && entry.clientId !== clientId) continue;
+      if ((entry.startAttemptCount ?? 0) !== 0) {
+        entry.startAttemptCount = 0;
+        changed = true;
+      }
+    }
+    if (changed) this.markDirty();
   }
 
   count(): number {

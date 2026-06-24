@@ -103,6 +103,46 @@ test('recordStart stores an ISO timestamp for an existing token', async () => {
     store.recordStart('start-token', startedAt);
 
     assert.equal(store.forGroup('192.168.50.25')[0]?.lastStartAt, startedAt.toISOString());
+    assert.equal(store.forGroup('192.168.50.25')[0]?.startAttemptCount, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordStart increments the start attempt count for repeated push-to-start sends', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));
+  try {
+    const store = new StartTokenStore(dir, pino({ enabled: false }));
+    store.register({
+      groupId: '192.168.50.25',
+      token: 'start-token',
+      clientId: 'phone-a',
+    });
+
+    store.recordStart('start-token', new Date('2026-06-24T12:00:00.000Z'));
+    store.recordStart('start-token', new Date('2026-06-24T12:02:00.000Z'));
+
+    assert.equal(store.forGroup('192.168.50.25')[0]?.startAttemptCount, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('registering an activity token resets start attempts for that client group', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));
+  try {
+    const store = new StartTokenStore(dir, pino({ enabled: false }));
+    store.register({
+      groupId: '192.168.50.25',
+      token: 'start-token',
+      clientId: 'phone-a',
+    });
+    store.recordStart('start-token', new Date('2026-06-24T12:00:00.000Z'));
+    store.recordStart('start-token', new Date('2026-06-24T12:02:00.000Z'));
+
+    store.recordActivityRegistered('192.168.50.25', 'phone-a');
+
+    assert.equal(store.forGroup('192.168.50.25')[0]?.startAttemptCount, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -128,6 +168,7 @@ test('recordStart persists lastStartAt across load', async () => {
     await loaded.load();
 
     assert.equal(loaded.forGroup('192.168.50.25')[0]?.lastStartAt, startedAt.toISOString());
+    assert.equal(loaded.forGroup('192.168.50.25')[0]?.startAttemptCount, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

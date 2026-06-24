@@ -7,9 +7,9 @@ import { normalizedAlbumArtUri } from './albumArtFetchCache.js';
 import type { LiveActivityContentState, SonosGroupSnapshot } from './types.js';
 
 const MAX_ALBUM_ART_BYTES = 5 * 1024 * 1024;
-const THUMBNAIL_SIZE_CANDIDATES = [80, 76, 72, 68, 64, 60] as const;
-const THUMBNAIL_JPEG_QUALITY_CANDIDATES = [60, 55, 50, 45, 40, 35, 30] as const;
-const MAX_THUMBNAIL_BYTES = 2_400;
+const THUMBNAIL_SIZE_CANDIDATES = [96, 88, 80, 72, 64, 56, 48] as const;
+const THUMBNAIL_JPEG_QUALITY_CANDIDATES = [50, 45, 40, 35, 30, 25, 20, 15] as const;
+const MAX_THUMBNAIL_BYTES = 1_800;
 const MAX_THUMBNAIL_CACHE_ENTRIES = 50;
 const albumArtCache = new Map<string, AlbumArtPresentation>();
 

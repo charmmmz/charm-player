@@ -3,6 +3,7 @@ import { selectPushToStartTargets } from './liveActivityStartPolicy.js';
 import type {
   LiveActivityContentState,
   LiveActivityStartAttributes,
+  PushToStartSuppressionEntry,
   PushToStartTokenEntry,
   SonosGroupSnapshot,
   TokenEntry,
@@ -12,6 +13,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
   snap: SonosGroupSnapshot;
   startTokens: PushToStartTokenEntry[];
   activityTokens: TokenEntry[];
+  startSuppressions?: PushToStartSuppressionEntry[];
   buildState: (snap: SonosGroupSnapshot) => Promise<LiveActivityContentState>;
   pushStart: (
     tokens: string[],
@@ -26,6 +28,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
     snap: input.snap,
     startTokens: input.startTokens,
     activityTokens: input.activityTokens,
+    startSuppressions: input.startSuppressions,
     now: input.now,
   });
 
