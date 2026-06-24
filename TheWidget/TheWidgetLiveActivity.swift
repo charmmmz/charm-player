@@ -418,11 +418,11 @@ private struct WidgetTransportControlsView: View {
     var body: some View {
         HStack(spacing: 16) {
             Button(intent: VolumeDownIntent()) {
-                Image(systemName: "speaker.minus.fill")
-                    .font(.caption2.weight(.semibold))
+                LiveActivityVolumeControlContent(
+                    systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.52))
+            .accessibilityLabel("Volume Down")
 
             Spacer(minLength: 0)
 
@@ -475,11 +475,11 @@ private struct WidgetTransportControlsView: View {
             Spacer(minLength: 0)
 
             Button(intent: VolumeUpIntent()) {
-                Image(systemName: "speaker.plus.fill")
-                    .font(.caption2.weight(.semibold))
+                LiveActivityVolumeControlContent(
+                    systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.52))
+            .accessibilityLabel("Volume Up")
         }
         .frame(height: 26)
     }
@@ -492,11 +492,11 @@ private struct TVRemoteControlsView: View {
     var body: some View {
         HStack(spacing: 12) {
             Button(intent: VolumeDownIntent()) {
-                Image(systemName: "speaker.minus.fill")
-                    .font(.caption2.weight(.semibold))
+                LiveActivityVolumeControlContent(
+                    systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.52))
+            .accessibilityLabel("Volume Down")
 
             Spacer(minLength: 0)
 
@@ -505,13 +505,35 @@ private struct TVRemoteControlsView: View {
             Spacer(minLength: 0)
 
             Button(intent: VolumeUpIntent()) {
-                Image(systemName: "speaker.plus.fill")
-                    .font(.caption2.weight(.semibold))
+                LiveActivityVolumeControlContent(
+                    systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.52))
+            .accessibilityLabel("Volume Up")
         }
         .frame(height: 34)
+    }
+}
+
+private struct LiveActivityVolumeControlContent: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.74))
+            .frame(
+                width: LiveActivityLayoutMetrics.volumeControlSize,
+                height: LiveActivityLayoutMetrics.volumeControlSize)
+            .background {
+                Circle()
+                    .fill(.white.opacity(0.08))
+            }
+            .overlay {
+                Circle()
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
+            }
+            .contentShape(Circle())
     }
 }
 

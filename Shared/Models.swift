@@ -994,6 +994,9 @@ enum LiveActivityLayoutMetrics {
     static let transportHeight: CGFloat = 26
     static let transportButtonSlotWidth: CGFloat = 24
     static let regularTransportClusterWidth: CGFloat = 116
+    static let volumeControlSize: CGFloat = 26
+    static let volumeDownSystemImage = "minus"
+    static let volumeUpSystemImage = "plus"
 
     static func progressHeight(for _: SonosActivityAttributes.ContentState) -> CGFloat {
         progressHeight

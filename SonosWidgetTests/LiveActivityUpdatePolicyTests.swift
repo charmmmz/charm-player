@@ -644,6 +644,12 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertEqual(LiveActivityLayoutMetrics.regularTransportClusterWidth, 116)
     }
 
+    func testLiveActivityVolumeControlsUseSimpleSecondaryButtonStyle() {
+        XCTAssertEqual(LiveActivityLayoutMetrics.volumeControlSize, 26)
+        XCTAssertEqual(LiveActivityLayoutMetrics.volumeDownSystemImage, "minus")
+        XCTAssertEqual(LiveActivityLayoutMetrics.volumeUpSystemImage, "plus")
+    }
+
     private static func makeSolidImage(color: UIColor) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 240))
         return renderer.image { context in
