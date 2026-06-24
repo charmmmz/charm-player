@@ -399,20 +399,22 @@ struct SonosLocalPlaylistDetailView: View {
                     shuffle: shuffle,
                     repeat: current?.repeat ?? .off)
             }
-            if !tracks.isEmpty {
+            switch PlaylistContainerPlaybackPolicy.route(for: playlistItem, hasLoadedTracks: !tracks.isEmpty) {
+            case .container:
                 SonosLog.info(
                     .playlistDetail,
-                    "Local playlist play using expanded tracks title='\(playlistTitle)' " +
+                    "Local playlist play using container title='\(playlistTitle)' " +
+                        "loadedTrackCount=\(tracks.count) shuffle=\(shuffle)")
+                await searchManager.playNow(item: playlistItem, manager: manager)
+            case .displayedTracks:
+                SonosLog.info(
+                    .playlistDetail,
+                    "Local playlist play using displayed tracks fallback title='\(playlistTitle)' " +
                         "count=\(tracks.count) shuffle=\(shuffle)")
                 _ = await searchManager.playNow(
                     items: tracks,
                     manager: manager,
                     displayTitle: playlistTitle)
-            } else {
-                SonosLog.info(
-                    .playlistDetail,
-                    "Local playlist play using container fallback title='\(playlistTitle)' shuffle=\(shuffle)")
-                await searchManager.playNow(item: playlistItem, manager: manager)
             }
             withAnimation(.easeOut(duration: 0.2)) { actionInFlight = nil }
         }

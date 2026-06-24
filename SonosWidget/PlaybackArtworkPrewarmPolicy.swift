@@ -8,7 +8,7 @@ nonisolated enum PlaybackArtworkCachingPolicy {
     // Lightweight URL metadata only. These do not fetch images.
     static let isRegistryEnabled = true
     static let isPlaybackURLCacheEnabled = true
-    static let isArtworkHintsEnabled = true
+    static let isArtworkHintsEnabled = false
 }
 
 nonisolated enum PlaybackArtworkPrewarmPolicy {

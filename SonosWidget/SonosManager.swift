@@ -72,6 +72,46 @@ private struct QueueArtworkPrefetchResult: @unchecked Sendable {
     let source: String
 }
 
+nonisolated enum AlbumArtDataFetchPolicy {
+    static func shouldUseRelayArtworkProxy(sourceURLString _: String) -> Bool {
+        false
+    }
+
+    static func validateDirectResponse(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw URLError(
+                .badServerResponse,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"]
+            )
+        }
+    }
+}
+
+nonisolated enum HomeSpeakerCardsRefreshPolicy {
+    static let defaultMinimumRefreshInterval: TimeInterval = 2
+
+    static func showsBlockingLoader(
+        hasLoadedCards: Bool,
+        groupStatusesIsEmpty: Bool
+    ) -> Bool {
+        !hasLoadedCards && groupStatusesIsEmpty
+    }
+
+    static func shouldRefreshOnAppear(
+        lastRefreshAt: Date?,
+        isRefreshing: Bool,
+        now: Date = Date(),
+        minimumInterval: TimeInterval = defaultMinimumRefreshInterval
+    ) -> Bool {
+        guard !isRefreshing else { return false }
+        guard let lastRefreshAt else { return true }
+        return now.timeIntervalSince(lastRefreshAt) >= minimumInterval
+    }
+}
+
 @Observable
 final class SonosManager {
     struct SpeakerSelectionCachedArtwork {
@@ -82,6 +122,8 @@ final class SonosManager {
     var speakers: [SonosPlayer] = []
     var allSpeakers: [SonosPlayer] = []
     var groupStatuses: [SpeakerGroupStatus] = []
+    var hasLoadedHomeSpeakerCards = false
+    var isRefreshingHomeSpeakerCards = false
     var selectedSpeaker: SonosPlayer?
     var trackInfo: TrackInfo?
     var transportState: TransportState = .stopped
@@ -137,6 +179,7 @@ final class SonosManager {
     private var eventSubscriptionTask: Task<Void, Never>?
     private var eventDrivenRefreshTask: Task<Void, Never>?
     @ObservationIgnored private let lanRefreshGate = RefreshRequestGate()
+    @ObservationIgnored private let groupRefreshGate = RefreshRequestGate()
     private var eventListener: SonosEventListener?
     private var eventSubscriptions = SonosEventSubscriptionRegistry()
     private var eventSubscriptionIP: String?
@@ -195,6 +238,7 @@ final class SonosManager {
     private var backgroundKeepaliveTask: Task<Void, Never>?
     /// Timestamp of the last real Sonos position fetch, used to keep timerInterval accurate.
     private var positionFetchedAt: Date = .now
+    private var lastHomeSpeakerCardsRefreshAt: Date?
 
     /// Cloud API group ID resolved for the currently selected speaker.
     private var cloudGroupId: String?
@@ -246,6 +290,25 @@ final class SonosManager {
     var isPlaying: Bool { transportState == .playing }
     var isConfigured: Bool { selectedSpeaker != nil }
     var currentCloudGroupId: String? { cloudGroupId }
+    var showsHomeSpeakerCardsBlockingLoader: Bool {
+        HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(
+            hasLoadedCards: hasLoadedHomeSpeakerCards,
+            groupStatusesIsEmpty: groupStatuses.isEmpty
+        )
+    }
+
+    func shouldRefreshHomeSpeakerCardsOnAppear(now: Date = Date()) -> Bool {
+        HomeSpeakerCardsRefreshPolicy.shouldRefreshOnAppear(
+            lastRefreshAt: lastHomeSpeakerCardsRefreshAt,
+            isRefreshing: isRefreshingHomeSpeakerCards,
+            now: now
+        )
+    }
+
+    func refreshHomeSpeakerCardsOnAppear() {
+        guard shouldRefreshHomeSpeakerCardsOnAppear() else { return }
+        Task { await refreshAllGroupStatuses() }
+    }
 
     func albumArtTransitionID(hasDisplayedArtwork: Bool? = nil) -> String {
         AlbumArtTransitionIdentity.id(
@@ -305,6 +368,22 @@ final class SonosManager {
         groupStatuses[idx].trackInfo = trackInfo
         groupStatuses[idx].transportState = transportState
         groupStatuses[idx].volume = volume
+    }
+
+    func setCurrentTransportState(_ state: TransportState) {
+        transportState = state
+        syncCurrentGroupStatusFromPlaybackState()
+    }
+
+    func setGroupTransportState(_ state: TransportState, forGroupID groupID: String) {
+        guard let idx = groupStatuses.firstIndex(where: { Self.speakerGroupStatus($0, matches: groupID) }) else {
+            return
+        }
+
+        groupStatuses[idx].transportState = state
+        if currentGroupStatusIndex() == idx {
+            transportState = state
+        }
     }
 
     nonisolated static func sortedSpeakerGroups(
@@ -432,7 +511,29 @@ final class SonosManager {
     }
 
     private func applyPreferredSpeakerOrder(to statuses: [SpeakerGroupStatus]) {
-        groupStatuses = Self.sortedSpeakerGroups(statuses)
+        groupStatuses = Self.homeSpeakerStatusesAfterRefresh(
+            existing: groupStatuses,
+            incoming: statuses
+        )
+        if !statuses.isEmpty {
+            hasLoadedHomeSpeakerCards = true
+            lastHomeSpeakerCardsRefreshAt = Date()
+        }
+    }
+
+    nonisolated static func homeSpeakerStatusesAfterRefresh(
+        existing: [SpeakerGroupStatus],
+        incoming: [SpeakerGroupStatus],
+        preferredOrder: [String] = SharedStorage.homeSpeakerGroupOrder
+    ) -> [SpeakerGroupStatus] {
+        let sortedIncoming = Self.sortedSpeakerGroups(
+            incoming,
+            preferredOrder: preferredOrder
+        )
+        if sortedIncoming.isEmpty, !existing.isEmpty {
+            return existing
+        }
+        return sortedIncoming
     }
 
     // MARK: - Lifecycle
@@ -692,13 +793,13 @@ final class SonosManager {
         }
         let prev = transportState
         let wasPlaying = prev == .playing
-        transportState = wasPlaying ? .paused : .playing
+        setCurrentTransportState(wasPlaying ? .paused : .playing)
         do {
             try await SonosControl.togglePlayPause(backend, currentlyPlaying: wasPlaying)
             try? await Task.sleep(for: .milliseconds(300))
             await refreshState()
         } catch {
-            transportState = prev
+            setCurrentTransportState(prev)
             errorMessage = error.localizedDescription
             await fallbackToCloudIfLANFailed(backend)
         }
@@ -954,7 +1055,7 @@ final class SonosManager {
         guard let idx = groupStatuses.firstIndex(where: { $0.id == groupID }) else { return }
         let prev = groupStatuses[idx].transportState
         let optimistic: TransportState = (prev == .playing) ? .paused : .playing
-        groupStatuses[idx].transportState = optimistic
+        setGroupTransportState(optimistic, forGroupID: groupID)
         do {
             if prev == .playing {
                 try await SonosAPI.pause(ip: coordinatorIP)
@@ -966,14 +1067,11 @@ final class SonosManager {
             // otherwise the card icon bounces playing → transitioning → playing.
             // Same policy as `applyIncomingTransportState`.
             if let state = try? await SonosAPI.getTransportInfo(ip: coordinatorIP),
-               state != .transitioning,
-               let i = groupStatuses.firstIndex(where: { $0.id == groupID }) {
-                groupStatuses[i].transportState = state
+               state != .transitioning {
+                setGroupTransportState(state, forGroupID: groupID)
             }
         } catch {
-            if let i = groupStatuses.firstIndex(where: { $0.id == groupID }) {
-                groupStatuses[i].transportState = prev
-            }
+            setGroupTransportState(prev, forGroupID: groupID)
             errorMessage = error.localizedDescription
         }
     }
@@ -1558,6 +1656,15 @@ final class SonosManager {
     }
 
     func refreshAllGroupStatuses() async {
+        await groupRefreshGate.run {
+            await self.performRefreshAllGroupStatuses()
+        }
+    }
+
+    private func performRefreshAllGroupStatuses() async {
+        isRefreshingHomeSpeakerCards = true
+        defer { isRefreshingHomeSpeakerCards = false }
+
         switch transportBackend {
         case .lan:
             await refreshAllGroupStatusesLAN()
@@ -3191,6 +3298,7 @@ final class SonosManager {
                     logLiveActivity(action: "create", activityID: activity.id, mode: "relay-token",
                                     state: state, extra: ["speaker=\(Self.liveActivityLogValue(speaker.name))"])
                     spawnPushTokenObserver(activity: activity, speakerName: speaker.name)
+                    pushLiveActivityRelayPreferencesIfNeeded(force: true)
                     return
                 } catch {
                     logLiveActivity(action: "create-failed", mode: "relay-token",
@@ -3478,6 +3586,7 @@ final class SonosManager {
                         self?.lastRegisteredPushToken = hex
                         SharedStorage.liveActivityRelayPushToken = hex
                         self?.liveActivityRelayWriterReady = true
+                        self?.pushLiveActivityRelayPreferencesIfNeeded(force: true)
                         self?.logLiveActivity(action: "register-token-success",
                                               activityID: activity.id,
                                               mode: "relay-token", token: hex,
@@ -3569,6 +3678,25 @@ final class SonosManager {
         soundbarEQLockUntil = .distantPast
     }
 
+    private func makeLiveActivityNowPlayingHint() -> RelayClient.LiveActivityNowPlayingHint? {
+        guard let info = trackInfo, info.isLiveStream else { return nil }
+        guard let title = Self.cleanLiveActivityHintString(info.title) else { return nil }
+
+        return RelayClient.LiveActivityNowPlayingHint(
+            trackTitle: title,
+            artist: Self.cleanLiveActivityHintString(info.artist),
+            album: Self.cleanLiveActivityHintString(info.album),
+            albumArtUri: Self.cleanLiveActivityHintString(info.albumArtURL),
+            isPlaying: isPlaying,
+            positionSeconds: max(0, positionSeconds),
+            durationSeconds: max(0, durationSeconds),
+            playbackSourceRaw: info.source.rawValue,
+            audioQualityLabel: Self.cleanLiveActivityHintString(
+                info.audioQuality?.label ?? SharedStorage.cachedAudioQualityLabel
+            )
+        )
+    }
+
     private func pushLiveActivityRelayPreferencesIfNeeded(force: Bool = false) {
         guard RelayManager.shared.isAvailable else {
             logLiveActivity(action: "preferences-skip",
@@ -3601,11 +3729,20 @@ final class SonosManager {
 
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: groupId,
-            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue,
+            nowPlaying: makeLiveActivityNowPlayingHint()
         )
         let signature = [
             body.groupId,
-            body.liveActivityStyleRaw ?? ""
+            body.liveActivityStyleRaw ?? "",
+            body.nowPlaying?.trackTitle ?? "",
+            body.nowPlaying?.artist ?? "",
+            body.nowPlaying?.album ?? "",
+            body.nowPlaying?.albumArtUri ?? "",
+            body.nowPlaying?.isPlaying.map(String.init) ?? "",
+            body.nowPlaying?.durationSeconds.map { String(Int($0.rounded())) } ?? "",
+            body.nowPlaying?.playbackSourceRaw ?? "",
+            body.nowPlaying?.audioQualityLabel ?? ""
         ].joined(separator: "\u{1F}")
 
         guard force || signature != lastLiveActivityRelayPreferencesSignature else {
@@ -3615,7 +3752,8 @@ final class SonosManager {
                             groupId: groupId,
                             relayURL: url,
                             extra: [
-                                "style=\(body.liveActivityStyleRaw ?? "nil")"
+                                "style=\(body.liveActivityStyleRaw ?? "nil")",
+                                "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
                             ])
             return
         }
@@ -3627,7 +3765,8 @@ final class SonosManager {
                         relayURL: url,
                         extra: [
                             "force=\(force)",
-                            "style=\(body.liveActivityStyleRaw ?? "nil")"
+                            "style=\(body.liveActivityStyleRaw ?? "nil")",
+                            "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
                         ])
 
         Task { [weak self] in
@@ -3639,7 +3778,8 @@ final class SonosManager {
                                           groupId: groupId,
                                           relayURL: url,
                                           extra: [
-                                            "style=\(body.liveActivityStyleRaw ?? "nil")"
+                                            "style=\(body.liveActivityStyleRaw ?? "nil")",
+                                            "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
                                           ])
                 }
             } catch {
@@ -3655,6 +3795,11 @@ final class SonosManager {
                 }
             }
         }
+    }
+
+    private nonisolated static func cleanLiveActivityHintString(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     func stopLiveActivity() {
@@ -3800,10 +3945,14 @@ final class SonosManager {
         let currentURLString = info.albumArtURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let needsFallback = currentURLString.isEmpty || QueueArtPrefetchPolicy.isLocalSonosArtworkURL(currentURLString)
         guard needsFallback else {
+            let displayURLString = PlaybackArtworkImageSize.nowPlayingURLString(from: currentURLString)
+            if displayURLString != currentURLString {
+                trackInfo?.albumArtURL = displayURLString
+            }
             SonosLog.debug(
                 .nowPlaying,
                 "Current artwork fallback skipped reason=public_artwork " +
-                    "url=\(SonosLog.playbackLinkValue(currentURLString, maxLength: 240))")
+                    "url=\(SonosLog.playbackLinkValue(displayURLString, maxLength: 240))")
             return
         }
 
@@ -3838,11 +3987,14 @@ final class SonosManager {
             return
         }
 
-        trackInfo?.albumArtURL = resolution.urlString
+        let resolvedURLString = resolution.sizedURLString(
+            shortSidePixels: PlaybackArtworkImageSize.nowPlayingShortSidePixels
+        )
+        trackInfo?.albumArtURL = resolvedURLString
         SonosLog.debug(
             .nowPlaying,
             "Current artwork fallback hit source=\(resolution.source.rawValue) " +
-                "url=\(SonosLog.playbackLinkValue(resolution.urlString, maxLength: 240))")
+                "url=\(SonosLog.playbackLinkValue(resolvedURLString, maxLength: 240))")
     }
 
     private static var defaultArtworkCountryCode: String {
@@ -3850,7 +4002,16 @@ final class SonosManager {
     }
 
     private func loadAlbumArt() async {
-        let urlStr = trackInfo?.albumArtURL ?? ""
+        var urlStr = trackInfo?.albumArtURL ?? ""
+        if trackInfo?.source == .appleMusic,
+           !urlStr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !QueueArtPrefetchPolicy.isLocalSonosArtworkURL(urlStr) {
+            let displayURLString = PlaybackArtworkImageSize.nowPlayingURLString(from: urlStr)
+            if displayURLString != urlStr {
+                trackInfo?.albumArtURL = displayURLString
+                urlStr = displayURLString
+            }
+        }
         let incomingTrackIdentity = AlbumArtTrackIdentity.make(from: trackInfo)
 
         // No artwork in the current track — TV input, line-in, idle, etc.
@@ -4050,7 +4211,8 @@ final class SonosManager {
     }
 
     private nonisolated static func fetchAlbumArtData(from url: URL, originalURLString: String) async throws -> Data {
-        if let relayURL = await MainActor.run(body: {
+        if AlbumArtDataFetchPolicy.shouldUseRelayArtworkProxy(sourceURLString: originalURLString),
+           let relayURL = await MainActor.run(body: {
             RelayManager.shared.isAvailable ? RelayManager.shared.url : nil
         }) {
             do {
@@ -4066,7 +4228,8 @@ final class SonosManager {
             }
         }
 
-        let (data, _) = try await Self.albumArtSession.data(from: url)
+        let (data, response) = try await Self.albumArtSession.data(from: url)
+        try AlbumArtDataFetchPolicy.validateDirectResponse(response)
         return data
     }
 

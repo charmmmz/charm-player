@@ -92,7 +92,10 @@ async function main(): Promise<void> {
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
 
   // ---- snapshot → APNs pipeline ----------------------------------------
-  type LiveActivityPushTrigger = SonosSnapshotChangeContext['trigger'] | 'register-initial';
+  type LiveActivityPushTrigger =
+    | SonosSnapshotChangeContext['trigger']
+    | 'register-initial'
+    | 'app-preferences';
 
   async function pushLiveActivitySnapshot(
     snap: SonosGroupSnapshot,
@@ -362,6 +365,7 @@ async function main(): Promise<void> {
     liveActivityPreferences.update({
       groupId: body.groupId,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
+      nowPlaying: body.nowPlaying,
     });
 
     log.info(
@@ -370,9 +374,30 @@ async function main(): Promise<void> {
         action: 'preferences-update',
         groupId: body.groupId,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
+        hasNowPlayingHint: Boolean(body.nowPlaying),
+        nowPlayingTrackTitle: body.nowPlaying?.trackTitle ?? null,
       },
       'live_activity',
     );
+
+    const snap = sonos.current(body.groupId);
+    if (snap) {
+      await pushLiveActivitySnapshot(snap, 'app-preferences', {
+        force: true,
+        logNoTokens: false,
+      });
+    } else {
+      log.info(
+        {
+          source: 'relay',
+          action: 'skip',
+          trigger: 'app-preferences',
+          reason: 'no-current-snapshot',
+          groupId: body.groupId,
+        },
+        'live_activity',
+      );
+    }
 
     res.json({ ok: true });
   });

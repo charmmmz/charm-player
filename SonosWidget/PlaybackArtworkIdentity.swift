@@ -18,6 +18,30 @@ nonisolated enum PlaybackArtworkResolutionSource: String, Codable, Sendable {
 nonisolated struct PlaybackArtworkResolution: Equatable, Sendable {
     let urlString: String
     let source: PlaybackArtworkResolutionSource
+
+    func sizedURLString(shortSidePixels: Int) -> String {
+        PlaybackArtworkImageSize.urlString(from: urlString, shortSidePixels: shortSidePixels)
+    }
+}
+
+nonisolated enum PlaybackArtworkImageSize {
+    static let queueThumbnailShortSidePixels = 240
+    static let nowPlayingShortSidePixels = 1_200
+
+    static func queueThumbnailURLString(from value: String) -> String {
+        urlString(from: value, shortSidePixels: queueThumbnailShortSidePixels)
+    }
+
+    static func nowPlayingURLString(from value: String) -> String {
+        urlString(from: value, shortSidePixels: nowPlayingShortSidePixels)
+    }
+
+    static func urlString(from value: String, shortSidePixels: Int) -> String {
+        ArtworkURLNormalizer.loadableURLString(
+            from: value,
+            shortSidePixels: shortSidePixels
+        ) ?? value
+    }
 }
 
 nonisolated enum PlaybackArtworkLookupKey: Hashable, Sendable {

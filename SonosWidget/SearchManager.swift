@@ -604,7 +604,9 @@ final class SearchManager {
                     source: .sonosCloud
                 )
             }
-            submitArtworkHintsToRelay(trackItems)
+            if PlaybackArtworkCachingPolicy.isArtworkHintsEnabled {
+                submitArtworkHintsToRelay(trackItems)
+            }
             let urls = PlaybackArtworkPrewarmPolicy.urls(
                 from: trackItems,
                 limit: PlaybackArtworkPrewarmPolicy.defaultLimit)

@@ -113,7 +113,7 @@ struct PlayerView: View {
                 if pendingAppleMusicShare != nil {
                     pendingAppleMusicShareBanner
                 }
-                if manager.groupStatuses.isEmpty {
+                if manager.showsHomeSpeakerCardsBlockingLoader {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
@@ -228,7 +228,7 @@ struct PlayerView: View {
         }
         .toast($homeToastMessage)
         .onAppear {
-            Task { await manager.refreshAllGroupStatuses() }
+            manager.refreshHomeSpeakerCardsOnAppear()
             updatePendingSharePulse()
         }
         .onChange(of: pendingAppleMusicShare?.id) { _, _ in

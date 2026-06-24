@@ -7,9 +7,47 @@ final class PlaybackArtworkPrewarmTests: XCTestCase {
     func testLightweightArtworkMetadataRemainsEnabledWhenImagePrewarmIsDisabled() {
         XCTAssertTrue(PlaybackArtworkCachingPolicy.isRegistryEnabled)
         XCTAssertTrue(PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled)
-        XCTAssertTrue(PlaybackArtworkCachingPolicy.isArtworkHintsEnabled)
+        XCTAssertFalse(PlaybackArtworkCachingPolicy.isArtworkHintsEnabled)
         XCTAssertFalse(PlaybackArtworkCachingPolicy.isPrewarmEnabled)
         XCTAssertFalse(PlaybackArtworkCachingPolicy.isQueueDiskCacheEnabled)
+    }
+
+    func testAppArtworkRelayProxyIsDisabledForPlaybackArtworkLoads() {
+        XCTAssertFalse(
+            AlbumArtDataFetchPolicy.shouldUseRelayArtworkProxy(
+                sourceURLString: "https://is1-ssl.mzstatic.com/image/thumb/Music/example.jpg/1200x1200bb.jpg"
+            )
+        )
+        XCTAssertFalse(
+            AlbumArtDataFetchPolicy.shouldUseRelayArtworkProxy(
+                sourceURLString: "http://192.168.50.249:1400/getaa?s=1"
+            )
+        )
+    }
+
+    func testDirectArtworkResponseRejectsNonSuccessHTTPStatus() throws {
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://is1-ssl.mzstatic.com/image/thumb/Music/missing.jpg/1200x1200bb.jpg")!,
+            statusCode: 404,
+            httpVersion: nil,
+            headerFields: nil
+        ))
+
+        XCTAssertThrowsError(try AlbumArtDataFetchPolicy.validateDirectResponse(response)) { error in
+            XCTAssertEqual((error as? URLError)?.code, .badServerResponse)
+            XCTAssertTrue(error.localizedDescription.contains("HTTP 404"))
+        }
+    }
+
+    func testDirectArtworkResponseAcceptsSuccessHTTPStatus() throws {
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://is1-ssl.mzstatic.com/image/thumb/Music/cover.jpg/1200x1200bb.jpg")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        ))
+
+        XCTAssertNoThrow(try AlbumArtDataFetchPolicy.validateDirectResponse(response))
     }
 
     func testPolicyUsesThumbnailArtworkAndDedupesNormalizedURLs() {
@@ -130,14 +168,15 @@ final class PlaybackArtworkPrewarmTests: XCTestCase {
             uri: "x-sonos-http:\(escapedObjectID).mp4?sid=204&flags=8232&sn=2",
             metaXML: nil
         )
+        let expectedQueueURLString = PlaybackArtworkImageSize.queueThumbnailURLString(from: urlString)
 
         XCTAssertEqual(
             PlaybackArtworkRegistry.shared.resolvedQueueItem(queueItem).albumArtURL,
-            urlString
+            expectedQueueURLString
         )
         XCTAssertEqual(
             PlaybackArtworkURLCache.shared.resolvedQueueItem(queueItem, service: .appleMusic).albumArtURL,
-            urlString
+            expectedQueueURLString
         )
     }
 

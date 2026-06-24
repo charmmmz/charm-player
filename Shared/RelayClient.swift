@@ -553,11 +553,24 @@ enum RelayClient {
 
     // MARK: - Live Activity preferences
 
-    /// App-owned presentation preferences. Playback metadata and audio quality
-    /// are intentionally not sent here; the relay owns those snapshots.
+    /// App-owned presentation preferences plus a short-lived live-stream
+    /// metadata hint matching the Now Playing UI when the app is alive.
+    struct LiveActivityNowPlayingHint: Encodable, Sendable {
+        let trackTitle: String
+        let artist: String?
+        let album: String?
+        let albumArtUri: String?
+        let isPlaying: Bool?
+        let positionSeconds: Double?
+        let durationSeconds: Double?
+        let playbackSourceRaw: String?
+        let audioQualityLabel: String?
+    }
+
     struct LiveActivityPreferencesBody: Encodable, Sendable {
         let groupId: String
         let liveActivityStyleRaw: String?
+        let nowPlaying: LiveActivityNowPlayingHint?
     }
 
     static func postLiveActivityPreferences(

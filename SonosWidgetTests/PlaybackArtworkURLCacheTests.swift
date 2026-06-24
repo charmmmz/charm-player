@@ -44,7 +44,94 @@ final class PlaybackArtworkURLCacheTests: XCTestCase {
 
         XCTAssertEqual(
             resolved.albumArtURL,
-            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg"
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/240x240bb.jpg"
+        )
+    }
+
+    func testAppleMusicArtworkSizeVariantsDoNotMakeIdentityAmbiguous() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let identity = PlaybackArtworkIdentity.metadata(
+            objectIDs: ["song:123"],
+            title: "Moon",
+            artist: "Daniel Caesar",
+            album: "Freudian"
+        )
+
+        cache.storeURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: identity
+        )
+        cache.storeURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/1200x1200bb.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: identity
+        )
+
+        XCTAssertEqual(
+            cache.cachedURL(for: identity, service: .appleMusic)?.urlString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/1200x1200bb.jpg"
+        )
+    }
+
+    func testLegacySizeSpecificCacheKeyMigratesToArtworkFamilyKey() {
+        var now = Date(timeIntervalSince1970: 1_000)
+        let (cache, defaults, suiteName) = makeCache(now: { now })
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacyURLString = "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg"
+        let storageKey = PlaybackArtworkLookupKey.object("song:123").storageKey(service: .appleMusic)
+        let legacyJSON = """
+        {
+          "\(storageKey)": {
+            "urlString": "\(legacyURLString)",
+            "cacheKey": "\(legacyURLString)",
+            "source": "musicKitDirect",
+            "storedAt": 1000,
+            "lastAccessedAt": 1000,
+            "isAmbiguous": false
+          }
+        }
+        """
+        defaults.set(Data(legacyJSON.utf8), forKey: "PlaybackArtworkURLCache.v1")
+        let identity = PlaybackArtworkIdentity.metadata(
+            objectIDs: ["song:123"],
+            title: "Moon",
+            artist: "Daniel Caesar",
+            album: "Freudian"
+        )
+
+        now = Date(timeIntervalSince1970: 1_010)
+        cache.storeURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/1200x1200bb.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: identity
+        )
+
+        XCTAssertEqual(
+            cache.cachedURL(for: identity, service: .appleMusic)?.urlString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/1200x1200bb.jpg"
+        )
+    }
+
+    func testResolvedQueueItemUsesSmallAppleArtworkVariant() {
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let queueItem = objectOnlyQueueItem(id: "song:123")
+
+        cache.storeURLString(
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/1200x1200bb.jpg",
+            service: .appleMusic,
+            source: .musicKitDirect,
+            identity: .queueItem(queueItem)
+        )
+
+        XCTAssertEqual(
+            cache.resolvedQueueItem(queueItem, service: .appleMusic).albumArtURL,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/240x240bb.jpg"
         )
     }
 

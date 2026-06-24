@@ -8,6 +8,10 @@ struct PlaybackArtworkURLCache {
     struct CachedURL: Equatable {
         let urlString: String
         let source: PlaybackArtworkResolutionSource
+
+        func sizedURLString(shortSidePixels: Int) -> String {
+            PlaybackArtworkImageSize.urlString(from: urlString, shortSidePixels: shortSidePixels)
+        }
     }
 
     private struct Entry: Codable {
@@ -196,7 +200,9 @@ struct PlaybackArtworkURLCache {
         }
 
         var resolved = item
-        resolved.albumArtURL = cached.urlString
+        resolved.albumArtURL = cached.sizedURLString(
+            shortSidePixels: PlaybackArtworkImageSize.queueThumbnailShortSidePixels
+        )
         return resolved
     }
 
@@ -208,7 +214,9 @@ struct PlaybackArtworkURLCache {
         entries: inout [String: Entry]
     ) -> Int {
         let nowSeconds = now().timeIntervalSince1970
-        let cacheKey = ArtworkURLNormalizer.artworkCacheKey(from: urlString) ?? urlString
+        let cacheKey = ArtworkURLNormalizer.playbackArtworkFamilyCacheKey(from: urlString)
+            ?? ArtworkURLNormalizer.artworkCacheKey(from: urlString)
+            ?? urlString
         var changedCount = 0
 
         for lookupKey in lookupKeys {
@@ -226,7 +234,7 @@ struct PlaybackArtworkURLCache {
                 continue
             }
 
-            guard existing.cacheKey != cacheKey else {
+            guard !isSameArtwork(existing: existing, incomingCacheKey: cacheKey) else {
                 guard existing.urlString != urlString
                         || existing.source != source
                         || existing.isAmbiguous else {
@@ -260,6 +268,16 @@ struct PlaybackArtworkURLCache {
         }
 
         return changedCount
+    }
+
+    private func isSameArtwork(existing: Entry, incomingCacheKey: String) -> Bool {
+        if existing.cacheKey == incomingCacheKey {
+            return true
+        }
+        guard let existingURLString = existing.urlString else {
+            return false
+        }
+        return ArtworkURLNormalizer.playbackArtworkFamilyCacheKey(from: existingURLString) == incomingCacheKey
     }
 
     private func prune(entries: inout [String: Entry]) -> Int {

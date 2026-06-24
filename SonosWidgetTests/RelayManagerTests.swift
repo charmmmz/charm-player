@@ -27,21 +27,55 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(attributes["speakerName"], "Playroom")
     }
 
-    func testLiveActivityPreferencesRequestOnlyEncodesStyleContract() throws {
+    func testLiveActivityPreferencesRequestCanOmitNowPlayingHint() throws {
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: "192.168.50.25",
-            liveActivityStyleRaw: "classic"
+            liveActivityStyleRaw: "classic",
+            nowPlaying: nil
         )
 
         let data = try JSONEncoder().encode(body)
         let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: String]
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
 
-        XCTAssertEqual(json, [
-            "groupId": "192.168.50.25",
-            "liveActivityStyleRaw": "classic"
-        ])
+        XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
+        XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "classic")
+        XCTAssertNil(json["nowPlaying"])
+    }
+
+    func testLiveActivityPreferencesRequestEncodesNowPlayingHint() throws {
+        let body = RelayClient.LiveActivityPreferencesBody(
+            groupId: "192.168.50.25",
+            liveActivityStyleRaw: "classic",
+            nowPlaying: .init(
+                trackTitle: "Correct Radio Song",
+                artist: "Correct Artist",
+                album: "Correct Album",
+                albumArtUri: "https://example.com/correct.jpg",
+                isPlaying: true,
+                positionSeconds: 0,
+                durationSeconds: 0,
+                playbackSourceRaw: "appleMusic",
+                audioQualityLabel: "Lossless"
+            )
+        )
+
+        let data = try JSONEncoder().encode(body)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let nowPlaying = try XCTUnwrap(json["nowPlaying"] as? [String: Any])
+
+        XCTAssertEqual(nowPlaying["trackTitle"] as? String, "Correct Radio Song")
+        XCTAssertEqual(nowPlaying["artist"] as? String, "Correct Artist")
+        XCTAssertEqual(nowPlaying["album"] as? String, "Correct Album")
+        XCTAssertEqual(nowPlaying["albumArtUri"] as? String, "https://example.com/correct.jpg")
+        XCTAssertEqual(nowPlaying["isPlaying"] as? Bool, true)
+        XCTAssertEqual(nowPlaying["positionSeconds"] as? Double, 0)
+        XCTAssertEqual(nowPlaying["durationSeconds"] as? Double, 0)
+        XCTAssertEqual(nowPlaying["playbackSourceRaw"] as? String, "appleMusic")
+        XCTAssertEqual(nowPlaying["audioQualityLabel"] as? String, "Lossless")
     }
 
     func testLiveActivityCommandEncodesSoundbarFields() throws {

@@ -222,7 +222,7 @@ private struct QueueArtView: View {
     private var displayArtworkURLString: String? {
         if artworkResolutionKey == currentArtworkResolutionKey,
            let resolvedArtworkURLString = nonEmpty(resolvedArtworkURLString) {
-            return resolvedArtworkURLString
+            return PlaybackArtworkImageSize.queueThumbnailURLString(from: resolvedArtworkURLString)
         }
 
         guard let originalURLString = nonEmpty(item.albumArtURL) else { return nil }
@@ -234,7 +234,7 @@ private struct QueueArtView: View {
         ) else {
             return nil
         }
-        return originalURLString
+        return PlaybackArtworkImageSize.queueThumbnailURLString(from: originalURLString)
     }
 
     private var placeholder: some View {
@@ -333,12 +333,15 @@ private struct QueueArtView: View {
             return
         }
 
-        resolvedArtworkURLString = resolution.urlString
+        let resolvedURLString = resolution.sizedURLString(
+            shortSidePixels: PlaybackArtworkImageSize.queueThumbnailShortSidePixels
+        )
+        resolvedArtworkURLString = resolvedURLString
         didMissPlaybackArtworkResolution = false
         SonosLog.debug(
             .nowPlaying,
             "Queue artwork fallback hit source=\(resolution.source.rawValue) " +
-                "url=\(SonosLog.playbackLinkValue(resolution.urlString, maxLength: 240))")
+                "url=\(SonosLog.playbackLinkValue(resolvedURLString, maxLength: 240))")
     }
 
     private func nonEmpty(_ value: String?) -> String? {

@@ -743,4 +743,40 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
     func testQueueReplacementPlaybackPlanRejectsEmptyQueue() {
         XCTAssertNil(SonosQueueReplacementPlaybackPlan(items: []))
     }
+
+    func testPlaylistContainerPlaybackPolicyUsesContainerWhenURIExistsEvenIfTracksAreLoaded() {
+        let item = BrowseItem(
+            id: "playlist:favorite",
+            title: "Favorite Songs",
+            artist: "Apple Music",
+            album: "",
+            uri: "x-rincon-cpcontainer:1006206clibraryplaylist%3Ap.favorite?sid=204&flags=8300&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "PLAYLIST"
+        )
+
+        XCTAssertEqual(
+            PlaylistContainerPlaybackPolicy.route(for: item, hasLoadedTracks: true),
+            .container
+        )
+    }
+
+    func testPlaylistContainerPlaybackPolicyFallsBackToDisplayedTracksWhenContainerURIIsMissing() {
+        let item = BrowseItem(
+            id: "playlist:missing-uri",
+            title: "Partial Playlist",
+            artist: "Apple Music",
+            album: "",
+            uri: nil,
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "PLAYLIST"
+        )
+
+        XCTAssertEqual(
+            PlaylistContainerPlaybackPolicy.route(for: item, hasLoadedTracks: true),
+            .displayedTracks
+        )
+    }
 }

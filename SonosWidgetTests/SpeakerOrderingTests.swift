@@ -23,6 +23,78 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(sorted.map(\.id), ["living", "bedroom", "kitchen"])
     }
 
+    func testHomeSpeakerRefreshKeepsExistingCardsWhenIncomingRefreshIsEmpty() {
+        let existing = [
+            makeStatus(id: "living", name: "Living Room")
+        ]
+
+        let next = SonosManager.homeSpeakerStatusesAfterRefresh(
+            existing: existing,
+            incoming: [],
+            preferredOrder: []
+        )
+
+        XCTAssertEqual(next.map(\.id), ["living"])
+    }
+
+    func testHomeSpeakerCardsBlockingLoaderOnlyShowsBeforeFirstLoad() {
+        XCTAssertTrue(
+            HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(
+                hasLoadedCards: false,
+                groupStatusesIsEmpty: true
+            )
+        )
+        XCTAssertFalse(
+            HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(
+                hasLoadedCards: true,
+                groupStatusesIsEmpty: true
+            )
+        )
+        XCTAssertFalse(
+            HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(
+                hasLoadedCards: false,
+                groupStatusesIsEmpty: false
+            )
+        )
+    }
+
+    func testHomeSpeakerCardsRefreshOnAppearUsesSilentRefreshCadence() {
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(
+            HomeSpeakerCardsRefreshPolicy.shouldRefreshOnAppear(
+                lastRefreshAt: nil,
+                isRefreshing: false,
+                now: now,
+                minimumInterval: 2
+            )
+        )
+        XCTAssertFalse(
+            HomeSpeakerCardsRefreshPolicy.shouldRefreshOnAppear(
+                lastRefreshAt: now.addingTimeInterval(-10),
+                isRefreshing: true,
+                now: now,
+                minimumInterval: 2
+            )
+        )
+        XCTAssertFalse(
+            HomeSpeakerCardsRefreshPolicy.shouldRefreshOnAppear(
+                lastRefreshAt: now.addingTimeInterval(-1),
+                isRefreshing: false,
+                now: now,
+                minimumInterval: 2
+            )
+        )
+        XCTAssertTrue(
+            HomeSpeakerCardsRefreshPolicy.shouldRefreshOnAppear(
+                lastRefreshAt: now.addingTimeInterval(-3),
+                isRefreshing: false,
+                now: now,
+                minimumInterval: 2
+            )
+        )
+    }
+
     func testMovingSpeakerGroupPersistsNewOrderAndReordersCurrentStatuses() {
         let manager = SonosManager()
         manager.groupStatuses = [
@@ -113,6 +185,48 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(manager.groupStatuses[1].trackInfo?.albumArtURL, "https://example.com/new.jpg")
         XCTAssertEqual(manager.groupStatuses[1].transportState, .playing)
         XCTAssertEqual(manager.groupStatuses[1].volume, 4)
+    }
+
+    func testSettingCurrentTransportStateImmediatelyUpdatesCurrentGroupStatus() {
+        let manager = SonosManager()
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let move = makePlayer(id: "move", name: "Move", groupId: "move-group")
+
+        manager.selectedSpeaker = playroom
+        manager.trackInfo = TrackInfo(title: "Extraordinary Girl", artist: "Green Day", album: "American Idiot")
+        manager.volume = 4
+        manager.groupStatuses = [
+            makeStatus(player: move, transportState: .playing, volume: 14),
+            makeStatus(player: playroom, transportState: .paused, volume: 2)
+        ]
+
+        manager.setCurrentTransportState(.playing)
+
+        XCTAssertEqual(manager.transportState, .playing)
+        XCTAssertEqual(manager.groupStatuses[0].transportState, .playing)
+        XCTAssertEqual(manager.groupStatuses[0].volume, 14)
+        XCTAssertEqual(manager.groupStatuses[1].transportState, .playing)
+        XCTAssertEqual(manager.groupStatuses[1].trackInfo?.title, "Extraordinary Girl")
+        XCTAssertEqual(manager.groupStatuses[1].volume, 4)
+    }
+
+    func testSettingCurrentGroupTransportStateImmediatelyUpdatesNowPlayingState() {
+        let manager = SonosManager()
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let move = makePlayer(id: "move", name: "Move", groupId: "move-group")
+
+        manager.selectedSpeaker = playroom
+        manager.transportState = .paused
+        manager.groupStatuses = [
+            makeStatus(player: move, transportState: .playing, volume: 14),
+            makeStatus(player: playroom, transportState: .paused, volume: 2)
+        ]
+
+        manager.setGroupTransportState(.playing, forGroupID: "playroom-group")
+
+        XCTAssertEqual(manager.transportState, .playing)
+        XCTAssertEqual(manager.groupStatuses[0].transportState, .playing)
+        XCTAssertEqual(manager.groupStatuses[1].transportState, .playing)
     }
 
     func testSpeakerSelectionArtworkRestoreUsesMatchingGroupImage() {

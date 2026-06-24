@@ -771,20 +771,22 @@ struct PlaylistDetailView: View {
                 }
             }
             let playNowStart = Date()
-            if !tracks.isEmpty {
+            switch PlaylistContainerPlaybackPolicy.route(for: playlistItem, hasLoadedTracks: !tracks.isEmpty) {
+            case .container:
                 SonosLog.info(
                     .playlistDetail,
-                    "Browse playlist play using expanded tracks title='\(playlistItem.title)' " +
+                    "Browse playlist play using container title='\(playlistItem.title)' " +
+                        "loadedTrackCount=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
+                await searchManager.playNow(item: playlistItem, manager: manager)
+            case .displayedTracks:
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist play using displayed tracks fallback title='\(playlistItem.title)' " +
                         "count=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
                 _ = await searchManager.playNow(
                     items: tracks.map(browseItemFromTrack),
                     manager: manager,
                     displayTitle: playlistTitle)
-            } else {
-                SonosLog.info(
-                    .playlistDetail,
-                    "Browse playlist play using container fallback title='\(playlistItem.title)'")
-                await searchManager.playNow(item: playlistItem, manager: manager)
             }
             SonosLog.info(
                 .playlistDetail,
@@ -823,20 +825,22 @@ struct PlaylistDetailView: View {
                     "step=set-play-mode ms=\(Int(Date().timeIntervalSince(setModeStart) * 1000))")
             }
             let playNowStart = Date()
-            if !tracks.isEmpty {
+            switch PlaylistContainerPlaybackPolicy.route(for: playlistItem, hasLoadedTracks: !tracks.isEmpty) {
+            case .container:
                 SonosLog.info(
                     .playlistDetail,
-                    "Browse playlist shuffle using expanded tracks title='\(playlistItem.title)' " +
+                    "Browse playlist shuffle using container title='\(playlistItem.title)' " +
+                        "loadedTrackCount=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
+                await searchManager.playNow(item: playlistItem, manager: manager)
+            case .displayedTracks:
+                SonosLog.info(
+                    .playlistDetail,
+                    "Browse playlist shuffle using displayed tracks fallback title='\(playlistItem.title)' " +
                         "count=\(tracks.count) allPagesLoaded=\(allPagesLoaded)")
                 _ = await searchManager.playNow(
                     items: tracks.map(browseItemFromTrack),
                     manager: manager,
                     displayTitle: playlistTitle)
-            } else {
-                SonosLog.info(
-                    .playlistDetail,
-                    "Browse playlist shuffle using container fallback title='\(playlistItem.title)'")
-                await searchManager.playNow(item: playlistItem, manager: manager)
             }
             SonosLog.info(
                 .playlistDetail,

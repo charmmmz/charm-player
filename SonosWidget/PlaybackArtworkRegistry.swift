@@ -51,7 +51,7 @@ final class PlaybackArtworkRegistry {
         }
 
         var resolved = item
-        resolved.albumArtURL = replacement
+        resolved.albumArtURL = PlaybackArtworkImageSize.queueThumbnailURLString(from: replacement)
         return resolved
     }
 
@@ -80,13 +80,18 @@ final class PlaybackArtworkRegistry {
     }
 
     private func remember(_ urlString: String, for key: LookupKey) {
-        let cacheKey = ArtworkURLNormalizer.artworkCacheKey(from: urlString) ?? urlString
+        let cacheKey = ArtworkURLNormalizer.playbackArtworkFamilyCacheKey(from: urlString)
+            ?? ArtworkURLNormalizer.artworkCacheKey(from: urlString)
+            ?? urlString
         guard let existing = entries[key] else {
             entries[key] = Entry(urlString: urlString, cacheKey: cacheKey, isAmbiguous: false)
             return
         }
 
-        guard existing.cacheKey != cacheKey else { return }
+        guard existing.cacheKey != cacheKey else {
+            entries[key] = Entry(urlString: urlString, cacheKey: cacheKey, isAmbiguous: false)
+            return
+        }
         entries[key] = Entry(urlString: nil, cacheKey: existing.cacheKey, isAmbiguous: true)
     }
 

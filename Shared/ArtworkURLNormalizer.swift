@@ -80,6 +80,42 @@ nonisolated enum ArtworkURLNormalizer {
         return components.url?.absoluteString
     }
 
+    static func playbackArtworkFamilyCacheKey(from value: String?) -> String? {
+        let normalized = loadableURLString(from: value, preserveExistingAppleArtworkSize: true) ?? value
+        let trimmed = normalized?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              var components = URLComponents(string: trimmed),
+              let scheme = components.scheme,
+              let host = components.host else {
+            return nil
+        }
+
+        components.scheme = scheme.lowercased()
+        components.host = host.lowercased()
+        components.fragment = nil
+
+        guard isAppleArtworkURL(components) else {
+            return components.url?.absoluteString
+        }
+
+        var path = components.percentEncodedPath
+        guard let range = path.range(
+            of: #"/\d+x\d+([a-z]{2})(\.[^/]+)?$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) else {
+            return components.url?.absoluteString
+        }
+
+        let sizeAgnosticComponent = String(path[range]).replacingOccurrences(
+            of: #"^/\d+x\d+"#,
+            with: "/0x0",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        path.replaceSubrange(range, with: sizeAgnosticComponent)
+        components.percentEncodedPath = path
+        return components.url?.absoluteString
+    }
+
     private static func sonosArtworkURL(fromRelativePath value: String, speakerIP: String?, port: Int) -> URL? {
         let trimmedSpeakerIP = speakerIP?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedSpeakerIP.isEmpty,
@@ -130,13 +166,13 @@ nonisolated enum ArtworkURLNormalizer {
 
         guard path.split(separator: "/").count > 1,
               path.range(
-                  of: #"(?:\.(?:jpg|jpeg|png|webp)|/\d+x\d+bb(?:\.[a-z0-9]+)?)$"#,
+                  of: #"(?:\.(?:jpg|jpeg|png|webp)|/\d+x\d+(?:bb|cc)(?:\.[a-z0-9]+)?)$"#,
                   options: [.regularExpression, .caseInsensitive]
               ) != nil else {
             return nil
         }
 
-        if path.range(of: #"/\d+x\d+bb(\.[^/]+)?$"#, options: .regularExpression) == nil {
+        if path.range(of: #"/\d+x\d+(?:bb|cc)(\.[^/]+)?$"#, options: [.regularExpression, .caseInsensitive]) == nil {
             path += "/600x600bb.jpg"
         }
 
@@ -164,8 +200,8 @@ nonisolated enum ArtworkURLNormalizer {
 
         var path = components.percentEncodedPath
         guard let range = path.range(
-            of: #"/\d+x\d+bb(\.[^/]+)?$"#,
-            options: .regularExpression
+            of: #"/\d+x\d+([a-z]{2})(\.[^/]+)?$"#,
+            options: [.regularExpression, .caseInsensitive]
         ) else {
             return url
         }
@@ -173,15 +209,21 @@ nonisolated enum ArtworkURLNormalizer {
             return url
         }
 
-        let matchedComponent = String(path[range])
-        let suffix: String
-        if let dotIndex = matchedComponent.lastIndex(of: ".") {
-            suffix = String(matchedComponent[dotIndex...])
-        } else {
-            suffix = ""
-        }
-        path.replaceSubrange(range, with: "/\(shortSidePixels)x\(shortSidePixels)bb\(suffix)")
+        let resizedComponent = String(path[range]).replacingOccurrences(
+            of: #"^/\d+x\d+"#,
+            with: "/\(shortSidePixels)x\(shortSidePixels)",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        path.replaceSubrange(range, with: resizedComponent)
         components.percentEncodedPath = path
         return components.url ?? url
+    }
+
+    private static func isAppleArtworkURL(_ components: URLComponents) -> Bool {
+        let host = components.host?.lowercased() ?? ""
+        guard host == "mzstatic.com" || host.hasSuffix(".mzstatic.com") else {
+            return false
+        }
+        return components.percentEncodedPath.localizedCaseInsensitiveContains("/image/thumb/")
     }
 }

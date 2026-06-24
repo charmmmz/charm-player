@@ -43,6 +43,20 @@ struct BrowseItemPlaybackDescriptor: Equatable, Sendable {
     }
 }
 
+enum PlaylistContainerPlaybackRoute: Equatable, Sendable {
+    case container
+    case displayedTracks
+}
+
+enum PlaylistContainerPlaybackPolicy {
+    static func route(for item: BrowseItem, hasLoadedTracks: Bool) -> PlaylistContainerPlaybackRoute {
+        if item.playbackDescriptor.isPlayable {
+            return .container
+        }
+        return hasLoadedTracks ? .displayedTracks : .container
+    }
+}
+
 extension BrowseItem {
     var playbackDescriptor: BrowseItemPlaybackDescriptor {
         BrowseItemPlaybackDescriptor(
