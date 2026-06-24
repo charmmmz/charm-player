@@ -48,13 +48,16 @@ export class LiveActivityPreferenceStore {
   update(request: LiveActivityPreferencesRequest): void {
     const existing = this.preferences.get(request.groupId);
     const updatedAt = this.now();
+    const liveActivityStyleRaw = request.liveActivityStyleRaw === undefined
+      ? existing?.liveActivityStyleRaw ?? null
+      : clean(request.liveActivityStyleRaw);
     const nowPlaying = request.nowPlaying === undefined
       ? existing?.nowPlaying ?? null
       : cleanNowPlayingHint(request.nowPlaying, updatedAt);
 
     this.preferences.set(request.groupId, {
       groupId: request.groupId,
-      liveActivityStyleRaw: clean(request.liveActivityStyleRaw),
+      liveActivityStyleRaw,
       nowPlaying,
       updatedAt,
     });

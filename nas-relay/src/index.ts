@@ -22,6 +22,7 @@ import {
   buildLiveActivityContentState,
   hashLiveActivityContentState,
 } from './liveActivityContentState.js';
+import { maybeStartLiveActivityForSnapshot } from './liveActivityStartCoordinator.js';
 import {
   LiveActivityPreferenceStore,
   type LiveActivityPreferencesRequest,
@@ -33,7 +34,15 @@ import {
 } from './liveActivityPushPolicy.js';
 import { snapshotJson } from './relaySnapshotJson.js';
 import { publishRelayBonjour, type RelayBonjourAdvertisement } from './bonjour.js';
-import type { LiveActivityContentState, RegisterRequest, SonosGroupSnapshot } from './types.js';
+import { StartTokenStore } from './startTokenStore.js';
+import type {
+  LiveActivityContentState,
+  PushToStartRegisterRequest,
+  PushToStartTokenEntry,
+  RegisterRequest,
+  SonosGroupSnapshot,
+  TokenEntry,
+} from './types.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -52,6 +61,8 @@ async function main(): Promise<void> {
   // ---- core wiring ------------------------------------------------------
   const tokens = new TokenStore(DATA_DIR, log);
   await tokens.load();
+  const startTokens = new StartTokenStore(DATA_DIR, log);
+  await startTokens.load();
   const hueConfigStore = new HueAmbienceConfigStore(DATA_DIR);
   const hueAmbience = new HueAmbienceService(
     hueConfigStore,
@@ -195,6 +206,62 @@ async function main(): Promise<void> {
     }
   }
 
+  async function tryStartLiveActivitySnapshot(
+    snap: SonosGroupSnapshot,
+    trigger: string,
+    startTokenEntries: PushToStartTokenEntry[],
+    activityTokenEntries: TokenEntry[],
+  ): Promise<void> {
+    const now = new Date();
+    try {
+      const result = await maybeStartLiveActivityForSnapshot({
+        snap,
+        startTokens: startTokenEntries,
+        activityTokens: activityTokenEntries,
+        buildState: buildSnap => buildLiveActivityContentState(buildSnap, {
+          logger: liveActivityArtworkLog,
+          logContext: { trigger },
+        }),
+        pushStart: (targetTokens, attributes, state) => (
+          apns.pushStart(targetTokens, attributes, state)
+        ),
+        recordStart: (token, date) => startTokens.recordStart(token, date),
+        unregisterStartToken: token => startTokens.unregister(token),
+        now,
+      });
+
+      log[result.reason === 'start' ? 'info' : 'debug'](
+        {
+          source: 'relay',
+          action: result.reason === 'start' ? 'apns-start' : 'skip',
+          trigger,
+          reason: result.reason,
+          groupId: snap.groupId,
+          startTokenCount: startTokenEntries.length,
+          activityTokenCount: activityTokenEntries.length,
+          sent: result.sent,
+          failed: result.failed,
+          snapshot: summarizeSnapshot(snap),
+        },
+        'live_activity',
+      );
+    } catch (err) {
+      log.warn(
+        {
+          err,
+          source: 'relay',
+          action: 'apns-start',
+          trigger,
+          groupId: snap.groupId,
+          startTokenCount: startTokenEntries.length,
+          activityTokenCount: activityTokenEntries.length,
+          snapshot: summarizeSnapshot(snap),
+        },
+        'live_activity',
+      );
+    }
+  }
+
   sonos.on('change', async (
     snap: SonosGroupSnapshot,
     context?: SonosSnapshotChangeContext,
@@ -208,6 +275,13 @@ async function main(): Promise<void> {
     if (force && !shouldForceLiveActivityCalibration(snap)) {
       return;
     }
+    const enrichedSnap = liveActivityPreferences.apply(snap);
+    await tryStartLiveActivitySnapshot(
+      enrichedSnap,
+      `${trigger}:start`,
+      startTokens.forGroup(snap.groupId),
+      tokens.forGroup(snap.groupId),
+    );
     await pushLiveActivitySnapshot(snap, trigger, {
       force,
       logNoTokens: trigger !== 'periodic-refresh',
@@ -267,6 +341,63 @@ async function main(): Promise<void> {
   /// and on every `pushTokenUpdates` rotation. Body shape: `RegisterRequest`.
   /// Replies with the current ContentState so the iOS side can sanity-check
   /// what the server thinks is playing without waiting for the next event.
+  app.post('/api/register-push-to-start', async (req, res) => {
+    const body = req.body as Partial<PushToStartRegisterRequest>;
+    if (!body.groupId || !body.token) {
+      res.status(400).json({ error: 'groupId and token are required' });
+      return;
+    }
+
+    log.info(
+      {
+        source: 'relay',
+        action: 'register-push-to-start-request',
+        groupId: body.groupId,
+        token: shortToken(body.token),
+        clientId: body.clientId ?? null,
+        speakerName: body.speakerName ?? null,
+        liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
+      },
+      'live_activity',
+    );
+    const entry = startTokens.register({
+      groupId: body.groupId,
+      token: body.token,
+      clientId: body.clientId,
+      speakerName: body.speakerName,
+      liveActivityStyleRaw: body.liveActivityStyleRaw,
+    });
+    liveActivityPreferences.update({
+      groupId: body.groupId,
+      liveActivityStyleRaw: body.liveActivityStyleRaw,
+    });
+
+    const snap = sonos.current(body.groupId);
+    if (snap?.isPlaying) {
+      await tryStartLiveActivitySnapshot(
+        liveActivityPreferences.apply(snap),
+        'register-push-to-start:start',
+        [entry],
+        tokens.forGroup(body.groupId),
+      );
+    } else {
+      log.info(
+        {
+          source: 'relay',
+          action: 'skip',
+          trigger: 'register-push-to-start:start',
+          reason: snap ? 'not-playing' : 'no-current-snapshot',
+          groupId: body.groupId,
+          token: shortToken(body.token),
+          snapshot: snap ? summarizeSnapshot(snap) : null,
+        },
+        'live_activity',
+      );
+    }
+
+    res.json({ ok: true });
+  });
+
   app.post('/api/register-activity', async (req, res) => {
     const body = req.body as Partial<RegisterRequest>;
     if (!body.groupId || !body.token) {

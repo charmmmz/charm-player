@@ -48,6 +48,25 @@ test('Live Activity preferences ignore blank style strings', () => {
   assert.equal(enriched.liveActivityStyleRaw, null);
 });
 
+test('Live Activity preferences preserve style when updates omit it', () => {
+  const store = new LiveActivityPreferenceStore();
+  store.update({
+    groupId: '192.168.50.25',
+    liveActivityStyleRaw: 'widget',
+  });
+
+  store.update({
+    groupId: '192.168.50.25',
+    liveActivityStyleRaw: undefined,
+  });
+
+  const enriched = store.apply(snapshot({
+    liveActivityStyleRaw: null,
+  }));
+
+  assert.equal(enriched.liveActivityStyleRaw, 'widget');
+});
+
 test('Live Activity preferences use recent app now playing hints for live snapshots except artwork', () => {
   const store = new LiveActivityPreferenceStore(() => 1_000);
   store.update({
