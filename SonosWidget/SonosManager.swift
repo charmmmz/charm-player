@@ -1772,8 +1772,21 @@ final class SonosManager {
                     async let p = SonosAPI.getPositionInfo(ip: coord.ipAddress)
                     async let v = SonosAPI.getGroupVolume(ip: coord.ipAddress)
                     let state = try await t
-                    let track = try await p
+                    let positionInfo = try await p
                     let vol = (try? await v) ?? 0
+                    let localMetadata: SonosCloudAPI.CloudPlaybackMetadata?
+                    if Self.shouldFetchLocalControlMetadataForLANSpeakerStatus(positionInfo) {
+                        localMetadata = await fetchLocalControlPlaybackMetadata(ip: coord.ipAddress)
+                    } else {
+                        localMetadata = nil
+                    }
+                    let track = Self.lanTrackInfo(
+                        positionInfo,
+                        localMetadata: localMetadata,
+                        cachedCloudQuality: cachedCloudQuality,
+                        cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
+                            && isCloudQualityAuthoritative(positionInfo.source)
+                    )
                     statuses.append(SpeakerGroupStatus(
                         id: coord.groupId ?? coord.id,
                         coordinator: coord, members: members,
@@ -2171,14 +2184,15 @@ final class SonosManager {
             if positionInfo.source == .tv {
                 await refreshSoundbarEQ()
             }
-            var incomingTrackInfo = Self.reconciledLANTrackInfo(
+            let localMetadata = await fetchLocalControlPlaybackMetadata(ip: ip)
+            let incomingTrackInfo = Self.lanTrackInfo(
                 positionInfo,
+                localMetadata: localMetadata,
                 cachedCloudQuality: cachedCloudQuality,
                 cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
                     && isCloudQualityAuthoritative(positionInfo.source)
             )
-            if let localMetadata = await fetchLocalControlPlaybackMetadata(ip: ip) {
-                incomingTrackInfo = Self.trackInfo(incomingTrackInfo, applyingPlaybackMetadata: localMetadata)
+            if localMetadata != nil {
                 cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
             }
             trackInfo = incomingTrackInfo
@@ -2337,14 +2351,15 @@ final class SonosManager {
                 repeatMode = mode.repeat
             }
 
-            var incomingTrackInfo = Self.reconciledLANTrackInfo(
+            let localMetadata = await fetchLocalControlPlaybackMetadata(ip: pIP)
+            let incomingTrackInfo = Self.lanTrackInfo(
                 positionInfo,
+                localMetadata: localMetadata,
                 cachedCloudQuality: cachedCloudQuality,
                 cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
                     && isCloudQualityAuthoritative(positionInfo.source)
             )
-            if let localMetadata = await fetchLocalControlPlaybackMetadata(ip: pIP) {
-                incomingTrackInfo = Self.trackInfo(incomingTrackInfo, applyingPlaybackMetadata: localMetadata)
+            if localMetadata != nil {
                 cacheAudioQualityIfPresent(incomingTrackInfo.audioQuality, for: incomingTrackInfo)
             }
             trackInfo = incomingTrackInfo
@@ -2732,6 +2747,33 @@ final class SonosManager {
         }
 
         return info
+    }
+
+    nonisolated static func lanTrackInfo(
+        _ positionInfo: TrackInfo,
+        localMetadata: SonosCloudAPI.CloudPlaybackMetadata?,
+        cachedCloudQuality: (trackKey: String, quality: AudioQuality)?,
+        cloudQualityIsAuthoritative: Bool
+    ) -> TrackInfo {
+        var info = reconciledLANTrackInfo(
+            positionInfo,
+            cachedCloudQuality: cachedCloudQuality,
+            cloudQualityIsAuthoritative: cloudQualityIsAuthoritative
+        )
+        if let localMetadata {
+            info = trackInfo(info, applyingPlaybackMetadata: localMetadata)
+        }
+        return info
+    }
+
+    private nonisolated static func shouldFetchLocalControlMetadataForLANSpeakerStatus(
+        _ positionInfo: TrackInfo
+    ) -> Bool {
+        guard isLiveStreamTrack(positionInfo),
+              !homeSpeakerTrackHasDisplayTitle(positionInfo) else {
+            return false
+        }
+        return positionInfo.source == .appleMusic || positionInfo.source == .unknown
     }
 
     nonisolated static func trackInfo(

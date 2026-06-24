@@ -136,4 +136,39 @@ final class AudioQualityRefreshTests: XCTestCase {
         XCTAssertEqual(enriched.source, .appleMusic)
         XCTAssertTrue(enriched.isLiveStream)
     }
+
+    func testLANTrackInfoUsesLocalControlMetadataForAppleMusicLiveStation() throws {
+        let positionInfo = TrackInfo(
+            title: "Unknown",
+            artist: "Unknown",
+            album: "",
+            duration: "00:00:00",
+            position: "00:00:00",
+            source: .appleMusic
+        )
+        let json = """
+        {
+          "_objectType": "metadataStatus",
+          "container": {
+            "name": "Apple Music Chill",
+            "type": "station",
+            "imageUrl": "https://example.com/chill.jpg"
+          }
+        }
+        """.data(using: .utf8)!
+        let metadata = try SonosLocalControlAPI.decodePlaybackMetadata(json)
+
+        let enriched = SonosManager.lanTrackInfo(
+            positionInfo,
+            localMetadata: metadata,
+            cachedCloudQuality: nil,
+            cloudQualityIsAuthoritative: false
+        )
+
+        XCTAssertEqual(enriched.title, "Apple Music Chill")
+        XCTAssertEqual(enriched.artist, "Apple Music")
+        XCTAssertEqual(enriched.albumArtURL, "https://example.com/chill.jpg")
+        XCTAssertEqual(enriched.source, .appleMusic)
+        XCTAssertTrue(enriched.isLiveStream)
+    }
 }
