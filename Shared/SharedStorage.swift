@@ -318,6 +318,34 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "liveActivityRelayPushToken") }
     }
 
+    nonisolated static var liveActivityPushToStartToken: String? {
+        get { defaults.string(forKey: "liveActivityPushToStartToken") }
+        set { defaults.set(newValue, forKey: "liveActivityPushToStartToken") }
+    }
+
+    nonisolated static var liveActivityPushToStartRegisteredAt: Date {
+        get {
+            let ts = defaults.double(forKey: "liveActivityPushToStartRegisteredAt")
+            return ts == 0 ? .distantPast : Date(timeIntervalSince1970: ts)
+        }
+        set { defaults.set(newValue.timeIntervalSince1970, forKey: "liveActivityPushToStartRegisteredAt") }
+    }
+
+    nonisolated static var liveActivityPushToStartRegisteredToken: String? {
+        get { defaults.string(forKey: "liveActivityPushToStartRegisteredToken") }
+        set { defaults.set(newValue, forKey: "liveActivityPushToStartRegisteredToken") }
+    }
+
+    nonisolated static var liveActivityPushToStartRegisteredGroupID: String? {
+        get { defaults.string(forKey: "liveActivityPushToStartRegisteredGroupID") }
+        set { defaults.set(newValue, forKey: "liveActivityPushToStartRegisteredGroupID") }
+    }
+
+    nonisolated static var liveActivityPushToStartRegisteredRelayURLString: String? {
+        get { defaults.string(forKey: "liveActivityPushToStartRegisteredRelayURLString") }
+        set { defaults.set(newValue, forKey: "liveActivityPushToStartRegisteredRelayURLString") }
+    }
+
     // MARK: - NAS LLM Agent
 
     /// Base URL of the optional Python agent (`nas-agent/`), e.g. `http://192.168.50.10:8790`.

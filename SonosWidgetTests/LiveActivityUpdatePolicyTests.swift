@@ -373,6 +373,96 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
+    func testRelayPushToStartReadyRequiresRelayAndAPNsAndRegistration() {
+        XCTAssertTrue(
+            SonosManager.isRelayPushToStartReady(
+                relayAvailable: true,
+                apnsMode: .ready,
+                hasRegisteredPushToStartToken: true
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.isRelayPushToStartReady(
+                relayAvailable: true,
+                apnsMode: .dryRun,
+                hasRegisteredPushToStartToken: true
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.isRelayPushToStartReady(
+                relayAvailable: true,
+                apnsMode: .ready,
+                hasRegisteredPushToStartToken: false
+            )
+        )
+    }
+
+    func testPushToStartRegistrationMustMatchCurrentTokenGroupAndRelay() {
+        let registeredAt = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(
+            SonosManager.hasCurrentPushToStartRegistration(
+                token: "token-a",
+                registeredToken: "token-a",
+                currentGroupId: "group-a",
+                registeredGroupId: "group-a",
+                currentRelayURLString: "http://relay-a.local:8787",
+                registeredRelayURLString: "http://relay-a.local:8787",
+                registeredAt: registeredAt
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.hasCurrentPushToStartRegistration(
+                token: "token-a",
+                registeredToken: "token-b",
+                currentGroupId: "group-a",
+                registeredGroupId: "group-a",
+                currentRelayURLString: "http://relay-a.local:8787",
+                registeredRelayURLString: "http://relay-a.local:8787",
+                registeredAt: registeredAt
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.hasCurrentPushToStartRegistration(
+                token: "token-a",
+                registeredToken: "token-a",
+                currentGroupId: "group-a",
+                registeredGroupId: "group-b",
+                currentRelayURLString: "http://relay-a.local:8787",
+                registeredRelayURLString: "http://relay-a.local:8787",
+                registeredAt: registeredAt
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.hasCurrentPushToStartRegistration(
+                token: "token-a",
+                registeredToken: "token-a",
+                currentGroupId: "group-a",
+                registeredGroupId: "group-a",
+                currentRelayURLString: "http://relay-a.local:8787",
+                registeredRelayURLString: "http://relay-b.local:8787",
+                registeredAt: registeredAt
+            )
+        )
+
+        XCTAssertFalse(
+            SonosManager.hasCurrentPushToStartRegistration(
+                token: "token-a",
+                registeredToken: "token-a",
+                currentGroupId: "group-a",
+                registeredGroupId: "group-a",
+                currentRelayURLString: "http://relay-a.local:8787",
+                registeredRelayURLString: "http://relay-a.local:8787",
+                registeredAt: .distantPast
+            )
+        )
+    }
+
     func testTVSoundbarCommandsUseRelayWhenRelayIsPrimaryWriter() {
         XCTAssertTrue(
             SonosManager.shouldSendSoundbarCommandThroughRelay(
