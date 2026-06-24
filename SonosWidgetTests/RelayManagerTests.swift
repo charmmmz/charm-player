@@ -27,6 +27,27 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(attributes["speakerName"], "Playroom")
     }
 
+    func testPushToStartRegistrationEncodesClientGroupAndStyle() throws {
+        let body = RelayClient.PushToStartRegistrationBody(
+            groupId: "192.168.50.25",
+            token: "push-to-start-token",
+            clientId: "client-1",
+            speakerName: "Playroom",
+            liveActivityStyleRaw: "widget"
+        )
+
+        let data = try JSONEncoder().encode(body)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
+        XCTAssertEqual(json["token"] as? String, "push-to-start-token")
+        XCTAssertEqual(json["clientId"] as? String, "client-1")
+        XCTAssertEqual(json["speakerName"] as? String, "Playroom")
+        XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "widget")
+    }
+
     func testLiveActivityPreferencesRequestCanOmitNowPlayingHint() throws {
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: "192.168.50.25",

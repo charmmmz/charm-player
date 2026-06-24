@@ -433,6 +433,40 @@ enum RelayClient {
         try validate(response)
     }
 
+    /// Sent in the JSON body of `POST /api/register-push-to-start`.
+    struct PushToStartRegistrationBody: Encodable, Sendable {
+        let groupId: String
+        let token: String
+        let clientId: String
+        let speakerName: String?
+        let liveActivityStyleRaw: String?
+    }
+
+    static func registerPushToStart(
+        baseURL: URL,
+        groupId: String,
+        token: String,
+        clientId: String,
+        speakerName: String?,
+        liveActivityStyleRaw: String?
+    ) async throws {
+        let url = baseURL.appendingPathComponent("/api/register-push-to-start")
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            PushToStartRegistrationBody(
+                groupId: groupId,
+                token: token,
+                clientId: clientId,
+                speakerName: speakerName,
+                liveActivityStyleRaw: liveActivityStyleRaw
+            )
+        )
+        let (_, response) = try await noProxySession.data(for: request)
+        try validate(response)
+    }
+
     struct RelayPlaybackState: Decodable, Sendable {
         let groupId: String
         let speakerName: String?
