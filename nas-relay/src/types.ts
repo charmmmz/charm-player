@@ -79,3 +79,21 @@ export interface TokenEntry extends RegisterRequest {
   /// no-op pushes (e.g. positionSeconds drifting by 1 doesn't count).
   lastSentHash?: string;
 }
+
+export interface PushToStartRegisterRequest {
+  groupId: string;
+  token: string;
+  clientId?: string;
+  speakerName?: string;
+  liveActivityStyleRaw?: string | null;
+}
+
+export interface PushToStartTokenEntry extends PushToStartRegisterRequest {
+  registeredAt: string;
+  lastStartAt?: string;
+}
+
+export interface LiveActivityStartAttributes {
+  speakerName: string;
+  groupId?: string | null;
+}
