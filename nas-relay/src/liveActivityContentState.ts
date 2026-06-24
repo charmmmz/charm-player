@@ -7,9 +7,9 @@ import { normalizedAlbumArtUri } from './albumArtFetchCache.js';
 import type { LiveActivityContentState, SonosGroupSnapshot } from './types.js';
 
 const MAX_ALBUM_ART_BYTES = 5 * 1024 * 1024;
-const THUMBNAIL_SIZE = 60;
-const THUMBNAIL_JPEG_QUALITY = 65;
-const MAX_THUMBNAIL_BYTES = 15 * 1024;
+const THUMBNAIL_SIZE_CANDIDATES = [80, 76, 72, 68, 64, 60] as const;
+const THUMBNAIL_JPEG_QUALITY_CANDIDATES = [60, 55, 50, 45, 40, 35, 30] as const;
+const MAX_THUMBNAIL_BYTES = 2_400;
 const MAX_THUMBNAIL_CACHE_ENTRIES = 50;
 const albumArtCache = new Map<string, AlbumArtPresentation>();
 
@@ -148,12 +148,12 @@ async function albumArtPresentation(
     return presentation;
   } catch (err) {
     const presentation = { thumbnailBase64: null, dominantColorHex: null };
-    rememberAlbumArt(cacheKey, presentation);
     logAlbumArt(dependencies, 'warn', snap, {
       status: 'failed',
       albumArtUri,
       cacheKey,
       err,
+      cache: 'not-stored',
       ms: Date.now() - start,
     });
     return presentation;
@@ -257,17 +257,34 @@ function rememberAlbumArt(albumArtUri: string, presentation: AlbumArtPresentatio
 }
 
 function makeJpegThumbnailBase64(image: DecodedImage): string {
+  for (const size of THUMBNAIL_SIZE_CANDIDATES) {
+    const target = makeSquareThumbnailPixels(image, size);
+    for (const quality of THUMBNAIL_JPEG_QUALITY_CANDIDATES) {
+      const encoded = jpeg.encode(
+        { width: size, height: size, data: target },
+        quality,
+      );
+      if (encoded.data.length <= MAX_THUMBNAIL_BYTES) {
+        return encoded.data.toString('base64');
+      }
+    }
+  }
+
+  throw new Error('Live Activity album art thumbnail is too large');
+}
+
+function makeSquareThumbnailPixels(image: DecodedImage, size: number): Buffer {
   const sourceSide = Math.max(1, Math.min(image.width, image.height));
   const sourceX = Math.floor((image.width - sourceSide) / 2);
   const sourceY = Math.floor((image.height - sourceSide) / 2);
-  const target = Buffer.alloc(THUMBNAIL_SIZE * THUMBNAIL_SIZE * 4);
+  const target = Buffer.alloc(size * size * 4);
 
-  for (let y = 0; y < THUMBNAIL_SIZE; y += 1) {
-    const sy = sourceY + Math.min(sourceSide - 1, Math.floor(((y + 0.5) / THUMBNAIL_SIZE) * sourceSide));
-    for (let x = 0; x < THUMBNAIL_SIZE; x += 1) {
-      const sx = sourceX + Math.min(sourceSide - 1, Math.floor(((x + 0.5) / THUMBNAIL_SIZE) * sourceSide));
+  for (let y = 0; y < size; y += 1) {
+    const sy = sourceY + Math.min(sourceSide - 1, Math.floor(((y + 0.5) / size) * sourceSide));
+    for (let x = 0; x < size; x += 1) {
+      const sx = sourceX + Math.min(sourceSide - 1, Math.floor(((x + 0.5) / size) * sourceSide));
       const sourceIndex = (sy * image.width + sx) * 4;
-      const targetIndex = (y * THUMBNAIL_SIZE + x) * 4;
+      const targetIndex = (y * size + x) * 4;
       const alpha = image.data[sourceIndex + 3]! / 255;
       target[targetIndex] = compositeOverBlack(image.data[sourceIndex]!, alpha);
       target[targetIndex + 1] = compositeOverBlack(image.data[sourceIndex + 1]!, alpha);
@@ -275,15 +292,7 @@ function makeJpegThumbnailBase64(image: DecodedImage): string {
       target[targetIndex + 3] = 255;
     }
   }
-
-  const encoded = jpeg.encode(
-    { width: THUMBNAIL_SIZE, height: THUMBNAIL_SIZE, data: target },
-    THUMBNAIL_JPEG_QUALITY,
-  );
-  if (encoded.data.length > MAX_THUMBNAIL_BYTES) {
-    throw new Error('Live Activity album art thumbnail is too large');
-  }
-  return encoded.data.toString('base64');
+  return target;
 }
 
 function dominantColorHex(image: DecodedImage): string | null {

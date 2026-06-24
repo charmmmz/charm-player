@@ -38,6 +38,7 @@ export interface SonosLocalPlaybackQuality {
 }
 
 export interface SonosLocalControlClient {
+  playbackMetadata?(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackMetadata | null>;
   playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null>;
 }
 
@@ -63,12 +64,25 @@ interface SonosLocalPlaybackMetadata {
     id?: string | null;
   } | null;
   container?: {
+    name?: string | null;
+    imageUrl?: string | null;
     service?: {
       name?: string | null;
       id?: string | null;
     } | null;
   } | null;
   track?: {
+    name?: string | null;
+    imageUrl?: string | null;
+    durationMillis?: number | null;
+    artist?: {
+      name?: string | null;
+      imageUrl?: string | null;
+    } | null;
+    album?: {
+      name?: string | null;
+      imageUrl?: string | null;
+    } | null;
     service?: {
       name?: string | null;
       id?: string | null;
@@ -82,6 +96,17 @@ interface SonosLocalPlaybackMetadata {
   } | null;
   currentItem?: {
     track?: {
+      name?: string | null;
+      imageUrl?: string | null;
+      durationMillis?: number | null;
+      artist?: {
+        name?: string | null;
+        imageUrl?: string | null;
+      } | null;
+      album?: {
+        name?: string | null;
+        imageUrl?: string | null;
+      } | null;
       service?: {
         name?: string | null;
         id?: string | null;
@@ -111,13 +136,11 @@ class SonosLocalControlApiClient implements SonosLocalControlClient {
     private readonly timeoutMs = 4_000,
   ) {}
 
-  async playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null> {
+  async playbackMetadata(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackMetadata | null> {
     const cachedGroupId = this.groupIdsByPlayerId.get(input.playerId);
     if (cachedGroupId) {
       try {
-        return localPlaybackQualityFromPlaybackMetadata(
-          await this.getPlaybackMetadata(input.host, cachedGroupId),
-        );
+        return await this.getPlaybackMetadata(input.host, cachedGroupId);
       } catch (err) {
         this.groupIdsByPlayerId.delete(input.playerId);
         this.log.debug(
@@ -132,9 +155,12 @@ class SonosLocalControlApiClient implements SonosLocalControlClient {
     if (!groupId) return null;
 
     this.groupIdsByPlayerId.set(input.playerId, groupId);
-    return localPlaybackQualityFromPlaybackMetadata(
-      await this.getPlaybackMetadata(input.host, groupId),
-    );
+    return await this.getPlaybackMetadata(input.host, groupId);
+  }
+
+  async playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null> {
+    const metadata = await this.playbackMetadata(input);
+    return metadata ? localPlaybackQualityFromPlaybackMetadata(metadata) : null;
   }
 
   private async getPlayerInfo(host: string, playerId: string): Promise<SonosLocalPlayerInfo> {
@@ -468,6 +494,7 @@ export class SonosBridge extends EventEmitter {
       const durationSeconds = parseDuration(position.TrackDuration ?? '00:00:00');
       const metadata = trackMetadataFromMetadata(position.TrackMetaData);
       const metadataDiagnostic = trackMetadataDiagnostic(position.TrackMetaData);
+      let localPlaybackMetadata: SonosLocalPlaybackMetadata | null = null;
       let audioQualityLabel = audioQualityLabelFromMetadata(
         position.TrackMetaData,
         playbackSourceRaw,
@@ -476,7 +503,13 @@ export class SonosBridge extends EventEmitter {
         audioQualityLabel = await this.tvAudioQualityLabelForSnapshot(coordinator) ?? audioQualityLabel;
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
       } else {
-        const localQuality = await this.localControlPlaybackQuality(coordinator, device);
+        localPlaybackMetadata = await this.localControlPlaybackMetadata(coordinator, device);
+        if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+        const localQuality = localPlaybackMetadata
+          ? localPlaybackQualityFromPlaybackMetadata(localPlaybackMetadata)
+          : this.localControl?.playbackMetadata
+            ? null
+            : await this.localControlPlaybackQuality(coordinator, device);
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
         if (localQuality?.label) {
           audioQualityLabel = localQuality.label;
@@ -546,6 +579,18 @@ export class SonosBridge extends EventEmitter {
         durationSeconds,
         playbackSourceRaw,
       });
+      if (liveStream && localPlaybackMetadata) {
+        const localTrackMetadata = trackMetadataFromLocalPlaybackMetadata(localPlaybackMetadata);
+        trackTitle = firstMeaningfulMetadata('title', localTrackMetadata.title, trackTitle);
+        artist = firstMeaningfulMetadata('artist', localTrackMetadata.artist, artist);
+        album = firstMeaningfulMetadata('album', localTrackMetadata.album, album);
+        const localAlbumArtUri = sonosGetAAAlbumArtUri(
+          absoluteAlbumArtUri(localTrackMetadata.albumArtUri, albumArtHost),
+        );
+        if (localAlbumArtUri) {
+          albumArtUri = localAlbumArtUri;
+        }
+      }
       const heldPreviousLiveMetadata = shouldHoldPreviousLiveMetadata({
         liveStream,
         metadata,
@@ -709,6 +754,30 @@ export class SonosBridge extends EventEmitter {
       const quality = await this.localControl.playbackQuality({ host, playerId });
       this.logLocalControlPlaybackQuality({ host, playerId, quality });
       return quality;
+    } catch (err) {
+      this.logLocalControlPlaybackQuality({ host, playerId, err });
+      return null;
+    }
+  }
+
+  private async localControlPlaybackMetadata(
+    coordinator: Record<string, unknown>,
+    device: Record<string, unknown>,
+  ): Promise<SonosLocalPlaybackMetadata | null> {
+    if (!this.localControl?.playbackMetadata) return null;
+
+    const host = firstObjectString(coordinator.Host, device.Host);
+    const playerId = firstObjectString(coordinator.Uuid, device.Uuid);
+    if (!host || !playerId) return null;
+
+    try {
+      const metadata = await this.localControl.playbackMetadata({ host, playerId });
+      this.logLocalControlPlaybackQuality({
+        host,
+        playerId,
+        quality: metadata ? localPlaybackQualityFromPlaybackMetadata(metadata) : null,
+      });
+      return metadata;
     } catch (err) {
       this.logLocalControlPlaybackQuality({ host, playerId, err });
       return null;
@@ -1240,6 +1309,24 @@ export function localPlaybackQualityFromPlaybackMetadata(
     immersive: quality.immersive ?? null,
     bitDepth,
     sampleRate,
+  };
+}
+
+function trackMetadataFromLocalPlaybackMetadata(
+  metadata: SonosLocalPlaybackMetadata,
+): SonosTrackMetadata {
+  const track = metadata.currentItem?.track ?? metadata.track;
+  if (!track) return emptyTrackMetadata();
+
+  return {
+    title: firstObjectString(track.name),
+    artist: firstObjectString(track.artist?.name),
+    album: firstObjectString(track.album?.name),
+    albumArtUri: firstObjectString(
+      track.imageUrl,
+      track.album?.imageUrl,
+      metadata.container?.imageUrl,
+    ),
   };
 }
 

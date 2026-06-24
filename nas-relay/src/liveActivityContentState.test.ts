@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
+import jpeg from 'jpeg-js';
 import pino from 'pino';
 import { PNG } from 'pngjs';
 
@@ -10,19 +11,23 @@ import {
 } from './liveActivityContentState.js';
 import type { SonosGroupSnapshot } from './types.js';
 
-test('Live Activity content state embeds fetched album art as a small base64 JPEG thumbnail', async () => {
+test('Live Activity content state embeds fetched album art as a push-sized high-density JPEG thumbnail', async () => {
   const state = await buildLiveActivityContentState(snapshot({
     albumArtUri: 'http://192.168.50.25:1400/getaa?s=1',
   }), {
-    fetchAlbumArt: async () => makeSolidPng(96, 96),
+    fetchAlbumArt: async () => makeDetailedPng(400, 400),
   });
 
   assert.ok(state.albumArtThumbnail);
   const thumbnail = Buffer.from(state.albumArtThumbnail, 'base64');
   assert.equal(thumbnail[0], 0xff);
   assert.equal(thumbnail[1], 0xd8);
+  const decoded = jpeg.decode(thumbnail, { useTArray: true });
+  assert.ok(decoded.width >= 72);
+  assert.equal(decoded.width, decoded.height);
   assert.ok(thumbnail.length > 0);
-  assert.ok(thumbnail.length <= 15 * 1024);
+  assert.ok(thumbnail.length <= 2_400);
+  assert.ok(estimatedLiveActivityPayloadBytes(state) <= 4_096);
 });
 
 test('Live Activity content state derives a dominant theme color from fetched album art', async () => {
@@ -205,7 +210,7 @@ test('Live Activity content hash changes when the audio quality label changes', 
   assert.notEqual(lossless, atmos);
 });
 
-test('Live Activity album art extraction does not retry a failed fetch for the same song', async () => {
+test('Live Activity album art extraction retries a transient failed fetch for the same song', async () => {
   let requestCount = 0;
   const server = http.createServer((_req, res) => {
     requestCount += 1;
@@ -234,9 +239,9 @@ test('Live Activity album art extraction does not retry a failed fetch for the s
 
     assert.equal(failedState.albumArtThumbnail, null);
     assert.equal(failedState.dominantColorHex, null);
-    assert.equal(recoveredState.albumArtThumbnail, null);
-    assert.equal(recoveredState.dominantColorHex, null);
-    assert.equal(requestCount, 1);
+    assert.ok(recoveredState.albumArtThumbnail);
+    assert.match(recoveredState.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
+    assert.equal(requestCount, 2);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
@@ -321,6 +326,31 @@ function makeSolidPng(width: number, height: number): Buffer {
     png.data[index + 3] = 255;
   }
   return PNG.sync.write(png);
+}
+
+function makeDetailedPng(width: number, height: number): Buffer {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      png.data[index] = (x * 3 + y) % 256;
+      png.data[index + 1] = (x + y * 2) % 256;
+      png.data[index + 2] = (192 + x - y) % 256;
+      png.data[index + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
+}
+
+function estimatedLiveActivityPayloadBytes(state: ReturnType<typeof baseContentState>): number {
+  return Buffer.byteLength(JSON.stringify({
+    aps: {
+      timestamp: 1_780_000_000,
+      event: 'update',
+      'content-state': state,
+      'stale-date': 1_780_028_800,
+    },
+  }));
 }
 
 function captureLogger(): { logger: pino.Logger; lines: string[] } {

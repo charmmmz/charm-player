@@ -859,6 +859,48 @@ test('bridge prefers local Control API playback quality over generic track metad
   assert.equal(snapshot?.audioQualityLabel, 'Hi-Res Lossless');
 });
 
+test('bridge prefers local Control API current track artwork for Apple Music radio streams', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackQuality: async () => null,
+      playbackMetadata: async () => ({
+        container: {
+          name: 'Apple Music Chill',
+          imageUrl: 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3Astation',
+        },
+        currentItem: {
+          track: {
+            name: 'Too Young To Know Better',
+            artist: { name: 'Snazzy' },
+            album: { name: 'Too Young To Know Better' },
+            imageUrl: 'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a123456.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
+            service: { name: 'Apple Music' },
+          },
+        },
+      }),
+    },
+    artworkResolver: null,
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, appleMusicRadioPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.trackTitle, 'Too Young To Know Better');
+  assert.equal(snapshot?.artist, 'Snazzy');
+  assert.equal(snapshot?.album, 'Too Young To Know Better');
+  assert.equal(
+    snapshot?.albumArtUri,
+    'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a123456.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
+  );
+});
+
 test('local Control API playback quality maps immersive tracks to Dolby Atmos', async () => {
   const bridge = new SonosBridge(pino({ enabled: false }), {
     localControl: {
@@ -1040,6 +1082,23 @@ function genericAppleMusicPositionInfo(): Record<string, string> {
       + '<upnp:albumArtURI>/getaa?s=1&amp;u=x-sonos-http%3asong%253a1839352407.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2</upnp:albumArtURI>'
       + '<res protocolInfo="sonos.com-http:*:audio/mp4:*">'
       + 'x-sonos-http:song%3a1839352407.mp4?sid=204&amp;flags=8232&amp;sn=2'
+      + '</res>'
+      + '</item></DIDL-Lite>',
+  };
+}
+
+function appleMusicRadioPositionInfo(): Record<string, string> {
+  return {
+    ...positionInfo('Apple Music Chill'),
+    TrackDuration: '00:00:00',
+    TrackURI: 'x-sonosapi-hls:hls:ra.1740614260?sid=204&flags=8232&sn=2',
+    TrackMetaData: '<DIDL-Lite><item>'
+      + '<dc:title>Apple Music Chill</dc:title>'
+      + '<dc:creator>TYPE=SNG|TITLE Too Young To Know Better|ARTIST Snazzy|ALBUM Too Young To Know Better</dc:creator>'
+      + '<upnp:album>Apple Music Chill</upnp:album>'
+      + '<upnp:albumArtURI>/getaa?s=1&amp;u=x-sonosapi-hls%3ahls%3ara.1740614260%3fsid%3d204%26flags%3d8232%26sn%3d2</upnp:albumArtURI>'
+      + '<res protocolInfo="sonos.com-http:*:audio/mp4:*">'
+      + 'x-sonosapi-hls:hls:ra.1740614260?sid=204&amp;flags=8232&amp;sn=2'
       + '</res>'
       + '</item></DIDL-Lite>',
   };
