@@ -550,6 +550,7 @@ export class SonosBridge extends EventEmitter {
       );
       let albumArtUri = sonosGetAAAlbumArtUri(metadataAlbumArtUri)
         ?? albumArtUriFromTrackUri(trackUri, albumArtHost);
+      let albumArtFallbackUri: string | null = null;
 
       if (shouldSuppressTransientNonPlayingSnapshot({
         options,
@@ -584,7 +585,7 @@ export class SonosBridge extends EventEmitter {
         trackTitle = firstMeaningfulMetadata('title', localTrackMetadata.title, trackTitle);
         artist = firstMeaningfulMetadata('artist', localTrackMetadata.artist, artist);
         album = firstMeaningfulMetadata('album', localTrackMetadata.album, album);
-        const localAlbumArtUri = sonosGetAAAlbumArtUri(
+        const localAlbumArtUri = usableAlbumArtUri(
           absoluteAlbumArtUri(localTrackMetadata.albumArtUri, albumArtHost),
         );
         if (localAlbumArtUri) {
@@ -604,6 +605,7 @@ export class SonosBridge extends EventEmitter {
         artist = previousSnapshot.artist;
         album = previousSnapshot.album;
         albumArtUri = previousSnapshot.albumArtUri ?? albumArtUri;
+        albumArtFallbackUri = previousSnapshot.albumArtFallbackUri ?? albumArtFallbackUri;
       }
       if (this.artworkResolver) {
         const artworkResolution = await this.artworkResolver.resolve({
@@ -634,19 +636,24 @@ export class SonosBridge extends EventEmitter {
             'snapshot album art resolver applied',
           );
           albumArtUri = artworkResolution.url;
+          albumArtFallbackUri = null;
         } else {
+          albumArtFallbackUri = usableAlbumArtUri(artworkResolution.fallbackUrl) ?? null;
           this.log.info(
             {
               groupId: resolvedGroupId,
               trigger,
               source: artworkResolution.source,
               catalogID: artworkResolution.catalogID ?? null,
+              fallbackSource: artworkResolution.fallbackSource ?? null,
+              fallbackCatalogID: artworkResolution.fallbackCatalogID ?? null,
               title: trackTitle,
               artist,
               album,
               playbackSourceRaw,
               trackUri: summarizeTrackUri(trackUri),
               albumArtUri: summarizeAlbumArtUri(albumArtUri),
+              fallbackAlbumArtUri: summarizeAlbumArtUri(albumArtFallbackUri),
             },
             'snapshot album art resolver kept current artwork',
           );
@@ -680,6 +687,7 @@ export class SonosBridge extends EventEmitter {
         artist,
         album,
         albumArtUri,
+        albumArtFallbackUri,
         isPlaying,
         playbackSourceRaw,
         soundbarNightMode: soundbarEQ.soundbarNightMode,
@@ -1551,7 +1559,10 @@ function shouldHoldPreviousLiveMetadata(input: {
   if (!input.liveStream || !input.previousSnapshot?.isPlaying) return false;
   if (input.previousSnapshot.durationSeconds > 0) return false;
   if (!normalizedMetadata(input.previousSnapshot.trackTitle)) return false;
-  if (input.metadataDiagnostic.streamFields.title || input.metadataDiagnostic.streamFields.artist) return false;
+  if (input.metadataDiagnostic.streamFields.title || input.metadataDiagnostic.streamFields.artist) {
+    return isGenericLiveFallback(input.metadataDiagnostic.streamFields.title)
+      || isGenericLiveFallback(input.trackTitle);
+  }
   if (normalizedMetadata(input.metadata.title) || normalizedMetadata(input.metadata.artist)) return false;
 
   return !normalizedMetadata(input.trackTitle)
@@ -1598,6 +1609,12 @@ function isGenericLiveFallback(value: string | null | undefined): boolean {
     'track',
     'music',
     'apple music',
+    'apple music 1',
+    'apple music chill',
+    'apple music classical',
+    'apple music club',
+    'apple music country',
+    'apple music hits',
     'apple music radio',
     'radio',
     'station',
@@ -1726,6 +1743,18 @@ function sonosGetAAAlbumArtUri(uri: string | null | undefined): string | null {
     return parsed.pathname.toLowerCase().includes('/getaa') ? trimmed : null;
   } catch {
     return trimmed.startsWith('/getaa') ? trimmed : null;
+  }
+}
+
+function usableAlbumArtUri(uri: string | null | undefined): string | null {
+  const trimmed = uri?.trim() ?? '';
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return trimmed;
+  } catch {
+    return sonosGetAAAlbumArtUri(trimmed);
   }
 }
 

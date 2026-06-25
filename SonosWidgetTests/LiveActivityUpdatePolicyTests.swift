@@ -325,8 +325,8 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
-    func testAppTemporarilyUpdatesRelayActivityUntilTokenRegistrationSucceeds() {
-        XCTAssertTrue(
+    func testAppDoesNotOverwriteRelayActivityBeforeTokenRegistrationSucceeds() {
+        XCTAssertFalse(
             SonosManager.shouldPerformLocalLiveActivityUpdate(
                 usesRelay: true,
                 relayWriterReady: false
@@ -588,6 +588,18 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertTrue(
             SonosManager.shouldRecreateLiveActivityForSpeakerChange(
                 currentActivityExists: true,
+                usesRelay: false,
+                previousGroupId: "192.168.50.25",
+                nextGroupId: "192.168.50.30"
+            )
+        )
+    }
+
+    func testKeepsRelayLiveActivityWhenSelectedSpeakerGroupChanges() {
+        XCTAssertFalse(
+            SonosManager.shouldRecreateLiveActivityForSpeakerChange(
+                currentActivityExists: true,
+                usesRelay: true,
                 previousGroupId: "192.168.50.25",
                 nextGroupId: "192.168.50.30"
             )
@@ -598,6 +610,7 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertFalse(
             SonosManager.shouldRecreateLiveActivityForSpeakerChange(
                 currentActivityExists: true,
+                usesRelay: false,
                 previousGroupId: "192.168.50.25",
                 nextGroupId: "192.168.50.25"
             )
@@ -608,6 +621,7 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertFalse(
             SonosManager.shouldRecreateLiveActivityForSpeakerChange(
                 currentActivityExists: false,
+                usesRelay: false,
                 previousGroupId: "192.168.50.25",
                 nextGroupId: "192.168.50.30"
             )
@@ -731,6 +745,19 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(data, cachedArtwork)
+    }
+
+    func testLiveActivityRenderableArtworkFallsBackToPayloadThumbnailWhenPreferredArtworkCannotRender() {
+        let cachedArtwork = Data([4, 5, 6])
+        let payloadThumbnail = Data([1, 2, 3])
+
+        let data = LiveActivityArtworkData.renderableData(
+            primary: cachedArtwork,
+            fallback: payloadThumbnail,
+            isRenderable: { $0 == payloadThumbnail }
+        )
+
+        XCTAssertEqual(data, payloadThumbnail)
     }
 
     func testLiveActivityPlaybackLayoutMetricsStayStableAcrossPlayState() {

@@ -33,7 +33,9 @@ final class RelayManagerTests: XCTestCase {
             token: "push-to-start-token",
             clientId: "client-1",
             speakerName: "Playroom",
-            liveActivityStyleRaw: "widget"
+            liveActivityStyleRaw: "widget",
+            activeActivityIds: ["activity-1", "activity-2"],
+            clearDismissalSuppression: true
         )
 
         let data = try JSONEncoder().encode(body)
@@ -46,6 +48,8 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(json["clientId"] as? String, "client-1")
         XCTAssertEqual(json["speakerName"] as? String, "Playroom")
         XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "widget")
+        XCTAssertEqual(json["activeActivityIds"] as? [String], ["activity-1", "activity-2"])
+        XCTAssertEqual(json["clearDismissalSuppression"] as? Bool, true)
     }
 
     func testLiveActivityDismissalEncodesClientActivityAndSuppressionWindow() throws {
@@ -69,11 +73,10 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(json["suppressForSeconds"] as? Int, 1800)
     }
 
-    func testLiveActivityPreferencesRequestCanOmitNowPlayingHint() throws {
+    func testLiveActivityPreferencesRequestEncodesStyleOnly() throws {
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: "192.168.50.25",
-            liveActivityStyleRaw: "classic",
-            nowPlaying: nil
+            liveActivityStyleRaw: "classic"
         )
 
         let data = try JSONEncoder().encode(body)
@@ -86,38 +89,106 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertNil(json["nowPlaying"])
     }
 
-    func testLiveActivityPreferencesRequestEncodesNowPlayingHint() throws {
-        let body = RelayClient.LiveActivityPreferencesBody(
-            groupId: "192.168.50.25",
-            liveActivityStyleRaw: "classic",
-            nowPlaying: .init(
-                trackTitle: "Correct Radio Song",
-                artist: "Correct Artist",
-                album: "Correct Album",
-                albumArtUri: "https://example.com/correct.jpg",
-                isPlaying: true,
-                positionSeconds: 0,
-                durationSeconds: 0,
-                playbackSourceRaw: "appleMusic",
-                audioQualityLabel: "Lossless"
-            )
+    func testDeviceLogBodyEncodesClientProcessAndEntries() throws {
+        let body = RelayClient.DeviceLogBody(
+            clientId: "client-1",
+            bundleId: "com.charm.SonosWidget",
+            processName: "TheWidgetExtension",
+            entries: [
+                .init(
+                    timestamp: "2026-06-25T01:02:03.000Z",
+                    category: "NowPlaying",
+                    level: "error",
+                    message: "art decode failed",
+                    line: "[NowPlaying] ERROR: art decode failed"
+                )
+            ]
         )
 
         let data = try JSONEncoder().encode(body)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
-        let nowPlaying = try XCTUnwrap(json["nowPlaying"] as? [String: Any])
 
-        XCTAssertEqual(nowPlaying["trackTitle"] as? String, "Correct Radio Song")
-        XCTAssertEqual(nowPlaying["artist"] as? String, "Correct Artist")
-        XCTAssertEqual(nowPlaying["album"] as? String, "Correct Album")
-        XCTAssertEqual(nowPlaying["albumArtUri"] as? String, "https://example.com/correct.jpg")
-        XCTAssertEqual(nowPlaying["isPlaying"] as? Bool, true)
-        XCTAssertEqual(nowPlaying["positionSeconds"] as? Double, 0)
-        XCTAssertEqual(nowPlaying["durationSeconds"] as? Double, 0)
-        XCTAssertEqual(nowPlaying["playbackSourceRaw"] as? String, "appleMusic")
-        XCTAssertEqual(nowPlaying["audioQualityLabel"] as? String, "Lossless")
+        XCTAssertEqual(json["clientId"] as? String, "client-1")
+        XCTAssertEqual(json["bundleId"] as? String, "com.charm.SonosWidget")
+        XCTAssertEqual(json["processName"] as? String, "TheWidgetExtension")
+        let entries = try XCTUnwrap(json["entries"] as? [[String: String]])
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0]["timestamp"], "2026-06-25T01:02:03.000Z")
+        XCTAssertEqual(entries[0]["category"], "NowPlaying")
+        XCTAssertEqual(entries[0]["level"], "error")
+        XCTAssertEqual(entries[0]["message"], "art decode failed")
+        XCTAssertEqual(entries[0]["line"], "[NowPlaying] ERROR: art decode failed")
+    }
+
+    func testDeviceLogsURLUsesRelayBaseURL() throws {
+        let url = RelayClient.deviceLogsURL(
+            baseURL: URL(string: "http://192.168.50.2:8787")!
+        )
+
+        XCTAssertEqual(url.scheme, "http")
+        XCTAssertEqual(url.host, "192.168.50.2")
+        XCTAssertEqual(url.port, 8787)
+        XCTAssertEqual(url.path, "/api/device-logs")
+    }
+
+    func testLiveActivityContentStateDecodesArtworkTraceId() throws {
+        let data = Data("""
+        {
+          "trackTitle": "Trust",
+          "artist": "Artist A",
+          "album": "Album A",
+          "isPlaying": true,
+          "positionSeconds": 42,
+          "durationSeconds": 240,
+          "dominantColorHex": "#3366CC",
+          "albumArtThumbnail": "AQID",
+          "artworkTraceId": "art_123456789abc",
+          "groupMemberCount": 1,
+          "playbackSourceRaw": "appleMusic",
+          "liveActivityStyleRaw": "widget",
+          "audioQualityLabel": "Lossless"
+        }
+        """.utf8)
+
+        let state = try JSONDecoder().decode(SonosActivityAttributes.ContentState.self, from: data)
+
+        XCTAssertEqual(state.artworkTraceId, "art_123456789abc")
+        XCTAssertEqual(state.albumArtThumbnail, Data([1, 2, 3]))
+    }
+
+    func testActivityRegistrationResponseDecodesInitialStateArtwork() throws {
+        let data = Data("""
+        {
+          "ok": true,
+          "initialState": {
+            "trackTitle": "99 Problems",
+            "artist": "JAŸ-Z",
+            "album": "The Black Album",
+            "isPlaying": true,
+            "positionSeconds": 3011,
+            "durationSeconds": 0,
+            "dominantColorHex": "#D16060",
+            "albumArtThumbnail": "AQIDBA==",
+            "artworkTraceId": "art_f2157cf2d8d1",
+            "groupMemberCount": 1,
+            "playbackSourceRaw": "appleMusic",
+            "liveActivityStyleRaw": "widget",
+            "audioQualityLabel": "16-bit/48 kHz"
+          }
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(
+            RelayClient.ActivityRegistrationResponse.self,
+            from: data
+        )
+
+        let state = try XCTUnwrap(response.initialState)
+        XCTAssertEqual(state.trackTitle, "99 Problems")
+        XCTAssertEqual(state.albumArtThumbnail, Data([1, 2, 3, 4]))
+        XCTAssertEqual(state.artworkTraceId, "art_f2157cf2d8d1")
     }
 
     func testLiveActivityCommandEncodesSoundbarFields() throws {

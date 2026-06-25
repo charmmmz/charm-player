@@ -579,8 +579,10 @@ struct PlayerView: View {
 
     private func handleSpeakerGroupCardTap(_ group: SpeakerGroupStatus) {
         guard pendingAppleMusicShare != nil else {
-            if !isCurrentGroup(group) {
-                Task { await manager.selectSpeaker(group.coordinator) }
+            Task {
+                await manager.selectSpeaker(
+                    group.coordinator,
+                    userInitiatedLiveActivityResume: true)
             }
             return
         }
@@ -601,7 +603,9 @@ struct PlayerView: View {
 
         Task {
             do {
-                await manager.selectSpeaker(group.coordinator)
+                await manager.selectSpeaker(
+                    group.coordinator,
+                    userInitiatedLiveActivityResume: true)
                 let playable = try await AppleMusicSharePlayableResolver.shared.resolve(share)
                 let didStart = await searchManager.playLocalAppleMusic(playable, manager: manager)
                 guard didStart else {
@@ -823,6 +827,12 @@ private struct SpeakerGroupCardView: View {
         group.coordinator.id == manager.selectedSpeaker?.id
             || group.coordinator.groupId == manager.selectedSpeaker?.groupId
     }
+    private var isLiveStream: Bool {
+        if isCurrentGroup, let trackInfo = manager.trackInfo {
+            return trackInfo.isLiveStream
+        }
+        return group.trackInfo?.isLiveStream == true
+    }
     private var accent: Color { manager.groupAlbumColors[group.id] ?? .secondary }
     private var artImage: UIImage? { manager.groupAlbumImages[group.id] }
     private var visibleMembers: [SonosPlayer] {
@@ -898,6 +908,9 @@ private struct SpeakerGroupCardView: View {
                     CircularProgressPlayButton(
                         isPlaying: group.transportState == .playing,
                         progress: {
+                            guard PlaybackControlPresentation.showsProgressRing(isLiveStream: isLiveStream) else {
+                                return 0
+                            }
                             if isCurrentGroup, manager.durationSeconds > 0 {
                                 return manager.positionSeconds / manager.durationSeconds
                             }
@@ -908,7 +921,8 @@ private struct SpeakerGroupCardView: View {
                         }(),
                         accent: isCurrentGroup ? accent : .white.opacity(0.55),
                         size: 32,
-                        ringWidth: 2.5
+                        ringWidth: 2.5,
+                        isLiveStream: isLiveStream
                     ) {
                         Task {
                             await manager.togglePlayPauseForGroup(
@@ -1101,22 +1115,31 @@ private struct CircularProgressPlayButton: View {
     var accent: Color
     var size: CGFloat
     var ringWidth: CGFloat = 3
+    var isLiveStream: Bool = false
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Track ring
-                Circle()
-                    .stroke(accent.opacity(0.22), lineWidth: ringWidth)
-                // Progress ring — animates linearly with each position tick
-                Circle()
-                    .trim(from: 0, to: max(0, min(1, progress)))
-                    .stroke(accent, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 1), value: progress)
+                if PlaybackControlPresentation.showsProgressRing(isLiveStream: isLiveStream) {
+                    // Track ring
+                    Circle()
+                        .stroke(accent.opacity(0.22), lineWidth: ringWidth)
+                    // Progress ring — animates linearly with each position tick
+                    Circle()
+                        .trim(from: 0, to: max(0, min(1, progress)))
+                        .stroke(accent, style: StrokeStyle(lineWidth: ringWidth, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 1), value: progress)
+                } else {
+                    Circle()
+                        .fill(accent.opacity(0.16))
+                }
                 // Icon
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: PlaybackControlPresentation.primarySystemImage(
+                    isPlaying: isPlaying,
+                    isLiveStream: isLiveStream
+                ))
                     .font(.system(size: size * 0.34, weight: .semibold))
                     .foregroundStyle(.white)
                     .contentTransition(.symbolEffect(.replace))
@@ -1124,6 +1147,10 @@ private struct CircularProgressPlayButton: View {
             .frame(width: size, height: size)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(PlaybackControlPresentation.primaryAccessibilityLabel(
+            isPlaying: isPlaying,
+            isLiveStream: isLiveStream
+        ))
     }
 }
 
@@ -1175,6 +1202,7 @@ struct NowPlayingOverlay: View {
     @State private var nowPlayingInfo: SonosCloudAPI.NowPlayingResponse?
     @State private var lastFetchedTrackURI: String?
     @State private var isOpeningAppleMusicLink = false
+    @State private var currentAppleMusicTrackURL: URL?
     /// Handle on the in-flight NowPlaying fetch so we can cancel it when
     /// the track changes again before the previous lookup resolves. Without
     /// this, a slow fetch for track A could land after track B's fetch and
@@ -1274,6 +1302,9 @@ struct NowPlayingOverlay: View {
                 lastFetchedTrackURI = uri
                 await fetchNowPlaying(trackURI: uri)
             }
+        }
+        .task(id: currentAppleMusicLinkLookupID) {
+            await refreshCurrentAppleMusicTrackURL()
         }
         .sheet(isPresented: $manager.showingSpeakerPicker) {
             SpeakerPickerView(manager: manager)
@@ -1624,7 +1655,7 @@ struct NowPlayingOverlay: View {
     private func sourceBadge(_ source: PlaybackSource) -> some View {
         let badge = SourceBadgeView(source: source, tintColor: manager.albumArtDominantColor)
 
-        if source == .appleMusic, currentAppleMusicTrackResource != nil {
+        if source == .appleMusic, canOpenCurrentAppleMusicTrack {
             Button {
                 openCurrentAppleMusicTrack()
             } label: {
@@ -1640,27 +1671,50 @@ struct NowPlayingOverlay: View {
 
     private func openCurrentAppleMusicTrack() {
         guard !isOpeningAppleMusicLink,
-              let resource = currentAppleMusicTrackResource else { return }
+              canOpenCurrentAppleMusicTrack,
+              let info = manager.trackInfo else { return }
+        let cachedURL = currentAppleMusicTrackURL
+        let resource = currentAppleMusicTrackResource
+        let lookupID = currentAppleMusicLinkLookupID
         isOpeningAppleMusicLink = true
 
         Task { @MainActor in
             defer { isOpeningAppleMusicLink = false }
             do {
-                guard let url = try await AppleMusicExternalLinkResolver.appleMusicURL(for: resource) else {
+                let resolvedURL: URL?
+                if let cachedURL {
+                    resolvedURL = cachedURL
+                } else {
+                    resolvedURL = try await AppleMusicExternalLinkFallbackResolver().songURL(
+                        directResource: resource,
+                        title: info.title,
+                        artist: info.artist,
+                        album: info.album
+                    )
+                    if currentAppleMusicLinkLookupID == lookupID {
+                        currentAppleMusicTrackURL = resolvedURL
+                    }
+                }
+
+                guard let url = resolvedURL else {
                     SonosLog.debug(
                         .nowPlaying,
-                        "Apple Music current artwork lookup produced no URL id='\(resource.id)'"
+                        "Apple Music current artwork lookup produced no URL " +
+                            "title='\(info.title)' artist='\(info.artist)' album='\(info.album)' " +
+                            "directID='\(resource?.id ?? "nil")'"
                     )
                     return
                 }
                 AppleMusicExternalLinkOpener.open(
                     url,
-                    context: "now-playing-source-badge id='\(resource.id)'"
+                    context: "now-playing-source-badge title='\(info.title)' directID='\(resource?.id ?? "nil")'"
                 )
             } catch {
                 SonosLog.error(
                     .nowPlaying,
-                    "Apple Music current artwork lookup failed id='\(resource.id)' error=\(error)"
+                    "Apple Music current artwork lookup failed " +
+                        "title='\(info.title)' artist='\(info.artist)' album='\(info.album)' " +
+                        "directID='\(resource?.id ?? "nil")' error=\(error)"
                 )
             }
         }
@@ -1780,6 +1834,70 @@ struct NowPlayingOverlay: View {
             trackURI: manager.trackInfo?.trackURI,
             nowPlayingObjectID: nowPlayingObjectID
         )
+    }
+
+    private var canOpenCurrentAppleMusicTrack: Bool {
+        currentAppleMusicTrackResource != nil || currentAppleMusicTrackURL != nil || hasCurrentAppleMusicTrackSearchMetadata
+    }
+
+    private var hasCurrentAppleMusicTrackSearchMetadata: Bool {
+        guard manager.trackInfo?.source == .appleMusic,
+              let info = manager.trackInfo else { return false }
+        return meaningfulAppleMusicSearchValue(info.title) != nil
+            && meaningfulAppleMusicSearchValue(info.artist) != nil
+    }
+
+    private var currentAppleMusicLinkLookupID: String {
+        guard manager.trackInfo?.source == .appleMusic,
+              let info = manager.trackInfo else {
+            return "not-apple-music"
+        }
+        let nowPlayingObjectID = nowPlayingInfo?.item?.resource?.id?.objectId
+            ?? nowPlayingInfo?.item?.id
+            ?? ""
+        return [
+            info.trackURI ?? "",
+            nowPlayingObjectID,
+            info.title,
+            info.artist,
+            info.album
+        ].joined(separator: "|")
+    }
+
+    @MainActor
+    private func refreshCurrentAppleMusicTrackURL() async {
+        currentAppleMusicTrackURL = nil
+        guard hasCurrentAppleMusicTrackSearchMetadata,
+              let info = manager.trackInfo else { return }
+
+        let lookupID = currentAppleMusicLinkLookupID
+        do {
+            let url = try await AppleMusicExternalLinkFallbackResolver().songURL(
+                directResource: currentAppleMusicTrackResource,
+                title: info.title,
+                artist: info.artist,
+                album: info.album
+            )
+            guard currentAppleMusicLinkLookupID == lookupID else { return }
+            currentAppleMusicTrackURL = url
+        } catch {
+            guard currentAppleMusicLinkLookupID == lookupID else { return }
+            SonosLog.debug(
+                .nowPlaying,
+                "Apple Music current track URL preload failed title='\(info.title)' artist='\(info.artist)' error=\(error)"
+            )
+        }
+    }
+
+    private func meaningfulAppleMusicSearchValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed != "—",
+              trimmed.localizedCaseInsensitiveCompare("unknown") != .orderedSame else {
+            return nil
+        }
+        return trimmed
     }
 
     private var artistBrowseItem: BrowseItem? {
@@ -2547,6 +2665,30 @@ enum MiniPlayerLayoutMetrics {
     }
 }
 
+nonisolated enum PlaybackControlPresentation {
+    static func primarySystemImage(isPlaying: Bool, isLiveStream: Bool) -> String {
+        if isLiveStream {
+            return isPlaying ? "stop.fill" : "play.fill"
+        }
+        return isPlaying ? "pause.fill" : "play.fill"
+    }
+
+    static func primaryAccessibilityLabel(isPlaying: Bool, isLiveStream: Bool) -> String {
+        if isLiveStream {
+            return isPlaying ? "Stop Live Stream" : "Play Live Stream"
+        }
+        return isPlaying ? "Pause" : "Play"
+    }
+
+    static func showsNextButton(isLiveStream: Bool) -> Bool {
+        !isLiveStream
+    }
+
+    static func showsProgressRing(isLiveStream: Bool) -> Bool {
+        !isLiveStream
+    }
+}
+
 /// Compact now-playing bar that lives at the bottom of the app and stays
 /// visible on every tab (Home / Search / …) — tapping it opens the full
 /// player; dragging up does the same with an interactive rubber-band.
@@ -2571,6 +2713,7 @@ struct MiniPlayerBar: View {
         } label: {
             HStack(spacing: 12) {
                 let isTV = manager.trackInfo?.source == .tv
+                let isLiveStream = manager.trackInfo?.isLiveStream == true
                 let artSize: CGFloat = inSystemAccessory ? 32 : 44
                 let cornerRadius: CGFloat = inSystemAccessory ? 6 : 8
                 if isTV {
@@ -2618,18 +2761,27 @@ struct MiniPlayerBar: View {
                 Button {
                     Task { await manager.togglePlayPause() }
                 } label: {
-                    Image(systemName: manager.isPlaying ? "pause.fill" : "play.fill")
+                    Image(systemName: PlaybackControlPresentation.primarySystemImage(
+                        isPlaying: manager.isPlaying,
+                        isLiveStream: isLiveStream
+                    ))
                         .font(.title3)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(PlaybackControlPresentation.primaryAccessibilityLabel(
+                    isPlaying: manager.isPlaying,
+                    isLiveStream: isLiveStream
+                ))
 
-                Button {
-                    Task { await manager.nextTrack() }
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.subheadline)
+                if PlaybackControlPresentation.showsNextButton(isLiveStream: isLiveStream) {
+                    Button {
+                        Task { await manager.nextTrack() }
+                    } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, inSystemAccessory ? 12 : 16)
             .padding(.vertical, inSystemAccessory ? 6 : 10)

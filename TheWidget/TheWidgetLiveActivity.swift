@@ -1,5 +1,6 @@
 import ActivityKit
 import AppIntents
+import Foundation
 import SwiftUI
 import WidgetKit
 
@@ -14,7 +15,11 @@ struct SonosLiveActivity: Widget {
             let islandSource = context.state.playbackSource
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    ArtView(data: context.state.preferredAlbumArtData, size: 50, source: islandSource)
+                    ArtView(
+                        data: context.state.preferredAlbumArtData,
+                        size: 50,
+                        source: islandSource,
+                        state: context.state)
                         .padding(.leading, 2)
                         .padding(.trailing, 6)
                         .frame(maxHeight: .infinity, alignment: .bottom)
@@ -65,11 +70,14 @@ struct SonosLiveActivity: Widget {
                     VStack(spacing: 8) {
                         LiveProgressView(state: context.state)
                         if context.state.isTVSource {
-                            TVRemoteControlsView(state: context.state, accent: accent)
+                            TVRemoteControlsView(
+                                state: context.state,
+                                accent: accent,
+                                groupId: context.attributes.groupId)
                         } else {
                             HStack(spacing: 40) {
                                 if context.state.isLiveStream {
-                                    Button(intent: PlayPauseIntent()) {
+                                    Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
                                             .font(.title2)
                                             .foregroundStyle(accent)
@@ -78,7 +86,7 @@ struct SonosLiveActivity: Widget {
                                                 height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
                                 } else {
-                                    Button(intent: PreviousTrackIntent()) {
+                                    Button(intent: PreviousTrackIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: "backward.fill")
                                             .font(.callout)
                                             .foregroundStyle(.white.opacity(0.85))
@@ -87,7 +95,7 @@ struct SonosLiveActivity: Widget {
                                                 height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
 
-                                    Button(intent: PlayPauseIntent()) {
+                                    Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
                                             .font(.title2)
                                             .foregroundStyle(accent)
@@ -96,7 +104,7 @@ struct SonosLiveActivity: Widget {
                                                 height: LiveActivityLayoutMetrics.transportHeight)
                                     }.buttonStyle(.plain)
 
-                                    Button(intent: NextTrackIntent()) {
+                                    Button(intent: NextTrackIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: "forward.fill")
                                             .font(.callout)
                                             .foregroundStyle(.white.opacity(0.85))
@@ -113,7 +121,11 @@ struct SonosLiveActivity: Widget {
                 }
             } compactLeading: {
                 // Compact/minimal views are static-only per Apple docs — no animation supported.
-                ArtView(data: context.state.compactAlbumArtData, size: 20, source: islandSource)
+                ArtView(
+                    data: context.state.compactAlbumArtData,
+                    size: 20,
+                    source: islandSource,
+                    state: context.state)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             } compactTrailing: {
                 // Compact/minimal regions are static-only — no animation supported by Apple.
@@ -122,7 +134,11 @@ struct SonosLiveActivity: Widget {
                     .foregroundStyle(themeColor(from: context.state.dominantColorHex))
                     .padding(.trailing, 4)
             } minimal: {
-                ArtView(data: context.state.compactAlbumArtData, size: 20, source: islandSource)
+                ArtView(
+                    data: context.state.compactAlbumArtData,
+                    size: 20,
+                    source: islandSource,
+                    state: context.state)
                     .clipShape(Circle())
             }
         }
@@ -159,7 +175,11 @@ private struct ClassicLockScreenView: View {
         VStack(spacing: 6) {
             // ── Single row: art | text | controls ──
             HStack(spacing: 12) {
-                ArtView(data: context.state.preferredAlbumArtData, size: 48, source: source)
+                ArtView(
+                    data: context.state.preferredAlbumArtData,
+                    size: 48,
+                    source: source,
+                    state: context.state)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(context.state.trackTitle)
@@ -189,25 +209,26 @@ private struct ClassicLockScreenView: View {
                         TVSoundbarControlsView(
                             state: context.state,
                             accent: accent,
+                            groupId: context.attributes.groupId,
                             compact: true)
                     } else if context.state.isLiveStream {
-                        Button(intent: PlayPauseIntent()) {
+                        Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
                                 .font(.title3)
                                 .foregroundStyle(accent)
                         }.buttonStyle(.plain)
                     } else {
-                        Button(intent: PreviousTrackIntent()) {
+                        Button(intent: PreviousTrackIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: "backward.fill").font(.callout)
                         }.buttonStyle(.plain)
 
-                        Button(intent: PlayPauseIntent()) {
+                        Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
                                 .font(.title3)
                                 .foregroundStyle(accent)
                         }.buttonStyle(.plain)
 
-                        Button(intent: NextTrackIntent()) {
+                        Button(intent: NextTrackIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: "forward.fill").font(.callout)
                         }.buttonStyle(.plain)
                     }
@@ -259,7 +280,11 @@ private struct WidgetCardLockScreenView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                ArtView(data: state.preferredAlbumArtData, size: 58, source: source)
+                ArtView(
+                    data: state.preferredAlbumArtData,
+                    size: 58,
+                    source: source,
+                    state: state)
                     .shadow(color: .black.opacity(0.35), radius: 7, y: 4)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -298,7 +323,10 @@ private struct WidgetCardLockScreenView: View {
 
             LiveProgressView(state: state)
 
-            WidgetTransportControlsView(state: state, accent: accent)
+            WidgetTransportControlsView(
+                state: state,
+                accent: accent,
+                groupId: context.attributes.groupId)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 13)
@@ -321,7 +349,11 @@ private struct WidgetTVRemoteLockScreenView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                ArtView(data: state.preferredAlbumArtData, size: 50, source: .tv)
+                ArtView(
+                    data: state.preferredAlbumArtData,
+                    size: 50,
+                    source: .tv,
+                    state: state)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -353,7 +385,10 @@ private struct WidgetTVRemoteLockScreenView: View {
 
             LiveProgressView(state: state)
 
-            TVRemoteControlsView(state: state, accent: accent)
+            TVRemoteControlsView(
+                state: state,
+                accent: accent,
+                groupId: context.attributes.groupId)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 13)
@@ -414,10 +449,11 @@ private struct QualityBadgeRow: View {
 private struct WidgetTransportControlsView: View {
     let state: SonosActivityAttributes.ContentState
     let accent: Color
+    let groupId: String?
 
     var body: some View {
         HStack(spacing: 16) {
-            Button(intent: VolumeDownIntent()) {
+            Button(intent: VolumeDownIntent(groupId: groupId)) {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
@@ -428,7 +464,7 @@ private struct WidgetTransportControlsView: View {
 
             HStack(spacing: state.isLiveStream ? 0 : 22) {
                 if state.isLiveStream {
-                    Button(intent: PlayPauseIntent()) {
+                    Button(intent: PlayPauseIntent(groupId: groupId)) {
                         Image(systemName: state.isPlaying ? "stop.fill" : "play.fill")
                             .font(.title3.weight(.semibold))
                             .frame(
@@ -438,7 +474,7 @@ private struct WidgetTransportControlsView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(accent)
                 } else {
-                    Button(intent: PreviousTrackIntent()) {
+                    Button(intent: PreviousTrackIntent(groupId: groupId)) {
                         Image(systemName: "backward.fill")
                             .font(.callout.weight(.semibold))
                             .frame(
@@ -447,7 +483,7 @@ private struct WidgetTransportControlsView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button(intent: PlayPauseIntent()) {
+                    Button(intent: PlayPauseIntent(groupId: groupId)) {
                         Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(accent)
@@ -457,7 +493,7 @@ private struct WidgetTransportControlsView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button(intent: NextTrackIntent()) {
+                    Button(intent: NextTrackIntent(groupId: groupId)) {
                         Image(systemName: "forward.fill")
                             .font(.callout.weight(.semibold))
                             .frame(
@@ -474,7 +510,7 @@ private struct WidgetTransportControlsView: View {
 
             Spacer(minLength: 0)
 
-            Button(intent: VolumeUpIntent()) {
+            Button(intent: VolumeUpIntent(groupId: groupId)) {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
@@ -488,10 +524,11 @@ private struct WidgetTransportControlsView: View {
 private struct TVRemoteControlsView: View {
     let state: SonosActivityAttributes.ContentState
     let accent: Color
+    let groupId: String?
 
     var body: some View {
         HStack(spacing: 12) {
-            Button(intent: VolumeDownIntent()) {
+            Button(intent: VolumeDownIntent(groupId: groupId)) {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
@@ -500,11 +537,15 @@ private struct TVRemoteControlsView: View {
 
             Spacer(minLength: 0)
 
-            TVSoundbarControlsView(state: state, accent: accent, compact: false)
+            TVSoundbarControlsView(
+                state: state,
+                accent: accent,
+                groupId: groupId,
+                compact: false)
 
             Spacer(minLength: 0)
 
-            Button(intent: VolumeUpIntent()) {
+            Button(intent: VolumeUpIntent(groupId: groupId)) {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
@@ -572,6 +613,7 @@ private struct WidgetLiveActivityBackdrop: View {
 private struct TVSoundbarControlsView: View {
     let state: SonosActivityAttributes.ContentState
     let accent: Color
+    let groupId: String?
     var compact: Bool
 
     var body: some View {
@@ -579,7 +621,7 @@ private struct TVSoundbarControlsView: View {
         let speechLevel = state.soundbarSpeechEnhancementLevel
 
         HStack(spacing: compact ? 8 : 12) {
-            Button(intent: ToggleNightModeIntent()) {
+            Button(intent: ToggleNightModeIntent(groupId: groupId)) {
                 TVSoundbarControlContent(
                     icon: nightOn ? "moon.fill" : "moon",
                     title: "Night",
@@ -590,7 +632,7 @@ private struct TVSoundbarControlsView: View {
             }
             .buttonStyle(.plain)
 
-            Button(intent: ToggleSpeechEnhancementIntent()) {
+            Button(intent: ToggleSpeechEnhancementIntent(groupId: groupId)) {
                 TVSoundbarControlContent(
                     icon: speechLevel.isOn ? "text.bubble.fill" : "text.bubble",
                     title: compact ? "Voice" : "Speech",
@@ -757,15 +799,35 @@ private struct ArtView: View {
     /// art clear can race against Live Activity push updates) and render a
     /// `tv` glyph instead so the lock screen / Dynamic Island stay accurate.
     var source: PlaybackSource = .unknown
+    let state: SonosActivityAttributes.ContentState
 
     var body: some View {
-        if source != .tv, let data, let img = UIImage(data: data) {
+        let renderData = LiveActivityArtworkData.renderableData(
+            primary: data,
+            fallback: state.albumArtThumbnail,
+            isRenderable: { UIImage(data: $0) != nil }
+        )
+        if source != .tv, let renderData, let img = UIImage(data: renderData) {
+            let _ = LiveActivityArtworkRenderDiagnostics.logIfNeeded(
+                reason: "render-success",
+                state: state,
+                source: source,
+                dataBytes: renderData.count,
+                size: size)
             Image(uiImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.18))
         } else {
+            let _ = source != .tv
+                ? LiveActivityArtworkRenderDiagnostics.logIfNeeded(
+                    reason: renderData == nil ? "missing-data" : "decode-failed",
+                    state: state,
+                    source: source,
+                    dataBytes: renderData?.count ?? 0,
+                    size: size)
+                : ()
             RoundedRectangle(cornerRadius: size * 0.18)
                 .fill(Color.white.opacity(0.15))
                 .frame(width: size, height: size)
@@ -775,6 +837,69 @@ private struct ArtView: View {
                         .foregroundStyle(.secondary)
                 }
         }
+    }
+}
+
+private enum LiveActivityArtworkRenderDiagnostics {
+    static func logIfNeeded(
+        reason: String,
+        state: SonosActivityAttributes.ContentState,
+        source: PlaybackSource,
+        dataBytes: Int,
+        size: CGFloat
+    ) {
+        let key = [
+            reason,
+            state.artworkTraceId ?? "nil",
+            state.trackTitle,
+            state.artist,
+            source.rawValue,
+            String(dataBytes),
+            String(Int(size.rounded()))
+        ].joined(separator: "|")
+        guard LiveActivityArtworkRenderLogRegistry.shared.claim(key) else { return }
+
+        SonosLog.info(.station, [
+            "live_activity_artwork",
+            "source=widget",
+            "action=art-render",
+            "reason=\(reason)",
+            "trace=\(state.artworkTraceId ?? "nil")",
+            "track=\(logValue(state.trackTitle))",
+            "artist=\(logValue(state.artist))",
+            "sourceRaw=\(state.playbackSourceRaw ?? "nil")",
+            "viewSource=\(source.rawValue)",
+            "payloadArtBytes=\(state.albumArtThumbnail?.count ?? 0)",
+            "renderArtBytes=\(dataBytes)",
+            "size=\(Int(size.rounded()))"
+        ].joined(separator: " "), flushRemoteImmediately: true)
+    }
+
+    private static func logValue(_ value: String) -> String {
+        let sanitized = value
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return "'\(sanitized)'"
+    }
+}
+
+private final class LiveActivityArtworkRenderLogRegistry {
+    static let shared = LiveActivityArtworkRenderLogRegistry()
+
+    private let lock = NSLock()
+    private var loggedKeys = Set<String>()
+
+    func claim(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if loggedKeys.contains(key) {
+            return false
+        }
+        if loggedKeys.count > 80 {
+            loggedKeys.removeAll(keepingCapacity: true)
+        }
+        loggedKeys.insert(key)
+        return true
     }
 }
 

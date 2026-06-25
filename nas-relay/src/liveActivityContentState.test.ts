@@ -23,10 +23,10 @@ test('Live Activity content state embeds fetched album art as a push-sized high-
   assert.equal(thumbnail[0], 0xff);
   assert.equal(thumbnail[1], 0xd8);
   const decoded = jpeg.decode(thumbnail, { useTArray: true });
-  assert.ok(decoded.width >= 80);
+  assert.ok(decoded.width >= 112);
   assert.equal(decoded.width, decoded.height);
   assert.ok(thumbnail.length > 0);
-  assert.ok(thumbnail.length <= 1_800);
+  assert.ok(thumbnail.length <= 2_500);
   assert.ok(estimatedLiveActivityPayloadBytes(state) <= 4_096);
 });
 
@@ -39,6 +39,42 @@ test('Live Activity content state derives a dominant theme color from fetched al
 
   assert.match(state.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
   assert.notEqual(state.dominantColorHex, '#FFFFFF');
+});
+
+test('Live Activity album art fetches public Apple Music artwork URLs', async () => {
+  let requestedUri: string | null = null;
+  const albumArtUri = 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/fc/db/cover.jpg/600x600bb.jpg';
+
+  const state = await buildLiveActivityContentState(snapshot({ albumArtUri }), {
+    fetchAlbumArt: async uri => {
+      requestedUri = uri;
+      return makeSolidPng(96, 96);
+    },
+  });
+
+  assert.equal(requestedUri, albumArtUri);
+  assert.ok(state.albumArtThumbnail);
+  assert.match(state.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
+});
+
+test('Live Activity content state carries an artwork trace id through album art logs', async () => {
+  const { logger, lines } = captureLogger();
+  const albumArtUri = 'http://192.168.50.25:1400/getaa?s=trace';
+
+  const state = await buildLiveActivityContentState(snapshot({ albumArtUri }), {
+    logger,
+    logContext: { trigger: 'unit-test' },
+    fetchAlbumArt: async () => makeSolidPng(96, 96),
+  });
+
+  assert.match(state.artworkTraceId ?? '', /^art_[0-9a-f]{12}$/);
+  const albumArtLog = lines.map(parseLogLine).find(entry => entry?.action === 'album-art');
+
+  assert.equal(albumArtLog?.status, 'resolved');
+  assert.equal(albumArtLog?.trigger, 'unit-test');
+  assert.equal(albumArtLog?.artworkTraceId, state.artworkTraceId);
+  assert.equal(albumArtLog?.thumbnailBytes, Buffer.byteLength(state.albumArtThumbnail ?? '', 'base64'));
+  assert.equal(albumArtLog?.thumbnailBase64Length, state.albumArtThumbnail?.length);
 });
 
 test('Live Activity album art fetches getaa once for the same song', async () => {
@@ -125,6 +161,21 @@ test('Live Activity content hash changes when album art becomes available', () =
   });
 
   assert.notEqual(withoutArt, withArt);
+});
+
+test('Live Activity content hash ignores diagnostic artwork trace ids', () => {
+  const first = hashLiveActivityContentState({
+    ...baseContentState(),
+    albumArtThumbnail: Buffer.from('cover').toString('base64'),
+    artworkTraceId: 'art_111111111111',
+  });
+  const second = hashLiveActivityContentState({
+    ...baseContentState(),
+    albumArtThumbnail: Buffer.from('cover').toString('base64'),
+    artworkTraceId: 'art_222222222222',
+  });
+
+  assert.equal(first, second);
 });
 
 test('Live Activity content hash changes when the dominant theme color changes', () => {
@@ -247,6 +298,36 @@ test('Live Activity album art extraction retries a transient failed fetch for th
   }
 });
 
+test('Live Activity album art uses fallback artwork when the primary getaa fetch fails', async () => {
+  const { logger, lines } = captureLogger();
+  const primaryUri = 'http://192.168.50.25:1400/getaa?s=primary';
+  const fallbackUri = 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/fallback/600x600bb.jpg';
+  const requested: string[] = [];
+
+  const state = await buildLiveActivityContentState(snapshot({
+    albumArtUri: primaryUri,
+    albumArtFallbackUri: fallbackUri,
+  }), {
+    logger,
+    logContext: { trigger: 'unit-test' },
+    fetchAlbumArt: async uri => {
+      requested.push(uri);
+      if (uri === primaryUri) throw new Error('speaker getaa timed out');
+      return makeSolidPng(96, 96);
+    },
+  });
+
+  assert.deepEqual(requested, [primaryUri, fallbackUri]);
+  assert.ok(state.albumArtThumbnail);
+  assert.match(state.dominantColorHex ?? '', /^#[0-9A-F]{6}$/);
+  assert.equal(lines.some(line =>
+    line.includes('"msg":"live activity album art"')
+    && line.includes('"status":"fallback-resolved"')
+    && line.includes('"trigger":"unit-test"')
+    && line.includes('"speaker getaa timed out"')
+  ), true);
+});
+
 test('Live Activity content state logs missing album art URI', async () => {
   const { logger, lines } = captureLogger();
 
@@ -361,4 +442,12 @@ function captureLogger(): { logger: pino.Logger; lines: string[] } {
     },
   };
   return { logger: pino({ level: 'info' }, destination), lines };
+}
+
+function parseLogLine(line: string): Record<string, any> | null {
+  try {
+    return JSON.parse(line) as Record<string, any>;
+  } catch {
+    return null;
+  }
 }

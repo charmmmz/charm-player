@@ -77,6 +77,19 @@ final class PendingAppleMusicShareStorageTests: XCTestCase {
         XCTAssertEqual(SharedStorage.speakerID, "RINCON_12345678901400")
     }
 
+    func testDiscoveredRelayURLRoundTripsThroughSharedStorage() {
+        let previous = SharedStorage.discoveredRelayURLString
+        defer { SharedStorage.discoveredRelayURLString = previous }
+
+        SharedStorage.discoveredRelayURLString = "http://192.168.50.20:8787"
+
+        XCTAssertEqual(SharedStorage.discoveredRelayURLString, "http://192.168.50.20:8787")
+
+        SharedStorage.discoveredRelayURLString = nil
+
+        XCTAssertNil(SharedStorage.discoveredRelayURLString)
+    }
+
     func testRouteRecognizesAppleMusicShareURL() {
         let route = AppRoute.route(for: URL(string: "sonoswidget://share/apple-music")!)
 

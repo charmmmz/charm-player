@@ -14,6 +14,7 @@ struct AlbumDetailView: View {
     @State private var coverImage: UIImage?
     @State private var themeColor: Color?
     @State private var isOpeningAppleMusicLink = false
+    @State private var fallbackAppleMusicArtworkURL: URL?
 
     private var albumTitle: String { response?.title ?? albumItem.title }
     private var artistName: String { response?.subtitle ?? albumItem.artist }
@@ -38,6 +39,24 @@ struct AlbumDetailView: View {
             allowedTypes: [.albums]
         )
     }
+    private var canOpenAppleMusicArtwork: Bool {
+        appleMusicArtworkResource != nil || fallbackAppleMusicArtworkURL != nil || canSearchAppleMusicAlbumURL
+    }
+    private var canSearchAppleMusicAlbumURL: Bool {
+        AppleMusicExternalLinkResolver.isAppleMusicItem(albumItem, searchManager: searchManager)
+            && AppleMusicFavoriteResourceType(cloudType: albumItem.cloudType) == .albums
+            && meaningfulAppleMusicSearchValue(albumTitle) != nil
+            && meaningfulAppleMusicSearchValue(artistName) != nil
+    }
+    private var appleMusicAlbumLinkLookupID: String {
+        [
+            albumItem.id,
+            albumItem.uri ?? "",
+            albumTitle,
+            artistName,
+            appleMusicArtworkResource?.id ?? ""
+        ].joined(separator: "|")
+    }
 
     var body: some View {
         ScrollView {
@@ -60,6 +79,9 @@ struct AlbumDetailView: View {
         }
         .task { await loadAlbum() }
         .task(id: coverURL) { await loadCoverImage() }
+        .task(id: appleMusicAlbumLinkLookupID) {
+            await refreshAppleMusicArtworkURL()
+        }
         .task {
             // Sonos Favorites are only fetched by SearchView's task; if the
             // user opens this page before visiting Browse, `isFavorited`
@@ -177,9 +199,9 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var headerArtwork: some View {
-        if let resource = appleMusicArtworkResource {
+        if canOpenAppleMusicArtwork {
             Button {
-                openAppleMusicFromArtwork(resource: resource)
+                openAppleMusicFromArtwork()
             } label: {
                 headerArtworkImage
             }
@@ -213,17 +235,84 @@ struct AlbumDetailView: View {
         .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
     }
 
-    private func openAppleMusicFromArtwork(resource: AppleMusicFavoriteResource) {
+    private func openAppleMusicFromArtwork() {
         guard !isOpeningAppleMusicLink else { return }
+        let cachedURL = fallbackAppleMusicArtworkURL
+        let resource = appleMusicArtworkResource
+        let lookupID = appleMusicAlbumLinkLookupID
+        let title = albumTitle
+        let artist = artistName
         isOpeningAppleMusicLink = true
         Task { @MainActor in
             defer { isOpeningAppleMusicLink = false }
-            await AppleMusicDetailArtworkLink.open(
-                resource: resource,
-                title: albumTitle,
-                context: "sonos-album-artwork"
+            do {
+                let resolvedURL: URL?
+                if let cachedURL {
+                    resolvedURL = cachedURL
+                } else {
+                    resolvedURL = try await AppleMusicExternalLinkFallbackResolver().albumURL(
+                        directResource: resource,
+                        title: title,
+                        artist: artist
+                    )
+                    if appleMusicAlbumLinkLookupID == lookupID {
+                        fallbackAppleMusicArtworkURL = resolvedURL
+                    }
+                }
+
+                guard let url = resolvedURL else {
+                    SonosLog.debug(
+                        .localService,
+                        "Apple Music album artwork lookup produced no URL title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")'"
+                    )
+                    return
+                }
+                AppleMusicExternalLinkOpener.open(
+                    url,
+                    context: "sonos-album-artwork title='\(title)' id='\(resource?.id ?? "nil")'"
+                )
+            } catch {
+                SonosLog.error(
+                    .localService,
+                    "Apple Music album artwork lookup failed title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")' error=\(error)"
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshAppleMusicArtworkURL() async {
+        fallbackAppleMusicArtworkURL = nil
+        guard canSearchAppleMusicAlbumURL || appleMusicArtworkResource != nil else { return }
+        let lookupID = appleMusicAlbumLinkLookupID
+        let title = albumTitle
+        let artist = artistName
+        do {
+            let url = try await AppleMusicExternalLinkFallbackResolver().albumURL(
+                directResource: appleMusicArtworkResource,
+                title: title,
+                artist: artist
+            )
+            guard appleMusicAlbumLinkLookupID == lookupID else { return }
+            fallbackAppleMusicArtworkURL = url
+        } catch {
+            guard appleMusicAlbumLinkLookupID == lookupID else { return }
+            SonosLog.debug(
+                .localService,
+                "Apple Music album URL preload failed title='\(title)' artist='\(artist)' error=\(error)"
             )
         }
+    }
+
+    private func meaningfulAppleMusicSearchValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed != "—",
+              trimmed.localizedCaseInsensitiveCompare("unknown") != .orderedSame else {
+            return nil
+        }
+        return trimmed
     }
 
     @ViewBuilder

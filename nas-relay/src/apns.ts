@@ -12,6 +12,9 @@ export function toSwiftDate(unixSeconds: number): number {
   return unixSeconds - SWIFT_DATE_EPOCH_OFFSET;
 }
 
+const DEFAULT_APNS_MAX_ATTEMPTS = 3;
+const DEFAULT_APNS_RETRY_DELAYS_MS = [250, 750] as const;
+
 export interface ApnsConfig {
   bundleId: string;
   keyPath: string;
@@ -85,11 +88,25 @@ export function makeLiveActivityStartNotification(
   note.attributes = attributes as unknown as Record<string, unknown>;
   note.contentState = contentState as unknown as Record<string, unknown>;
   note.inputPushToken = 1;
+  note.alert = {
+    title: contentState.trackTitle,
+    body: liveActivityStartAlertBody(attributes, contentState),
+  };
   return note;
 }
 
 export function liveActivityNotificationPayloadBytes(note: apn.Notification): number {
   return Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8');
+}
+
+function liveActivityStartAlertBody(
+  attributes: LiveActivityStartAttributes,
+  contentState: LiveActivityContentState,
+): string {
+  const artist = contentState.artist?.trim();
+  const speakerName = attributes.speakerName?.trim();
+  if (artist && speakerName) return `${artist} on ${speakerName}`;
+  return artist || speakerName || 'Now playing';
 }
 
 /// Wraps `@parse/node-apn`. When the `.p8` key isn't present yet (Apple
@@ -102,6 +119,7 @@ export class ApnsClient {
   private readonly config: ApnsConfig;
   private readonly dryRun: boolean;
   private readonly apnsStatus: ApnsStatus;
+  private readonly retryDelaysMs: readonly number[] = DEFAULT_APNS_RETRY_DELAYS_MS;
 
   private constructor(config: ApnsConfig, status: ApnsStatus, log: Logger) {
     this.config = config;
@@ -220,40 +238,90 @@ export class ApnsClient {
     }
 
     const result: ApnsResult = { sent: 0, failed: 0, unregistered: [] };
-    try {
-      if (event === 'start') {
+    let pendingTokens = [...tokens];
+    for (let attempt = 1; pendingTokens.length > 0 && attempt <= DEFAULT_APNS_MAX_ATTEMPTS; attempt += 1) {
+      try {
         this.log.info(
           {
             source: 'relay',
-            action: 'apns-payload',
+            action: attempt === 1 ? 'apns-payload' : 'apns-retry',
             event,
-            tokens: tokens.length,
+            attempt,
+            tokens: pendingTokens.length,
             payloadBytes,
             state: summarizeLiveActivityState(contentState),
           },
           'live_activity',
         );
-      }
-      const response = await this.provider.send(note, tokens);
-      result.sent = response.sent.length;
-      for (const failure of response.failed) {
-        result.failed += 1;
-        // 410 Unregistered = device de-installed app or token rotated;
-        // surface so the caller can prune the token store.
-        if (failure.status === 410 && failure.device) {
-          result.unregistered.push(failure.device);
-          this.log.info(
-            { token: failure.device.slice(0, 8) + '…' },
-            'APNs reported token Unregistered — pruning',
-          );
-        } else {
+
+        const response = await this.provider.send(note, pendingTokens);
+        result.sent += response.sent.length;
+
+        const retryTokens: string[] = [];
+        for (const failure of response.failed) {
+          // 410 Unregistered = device de-installed app or token rotated;
+          // surface so the caller can prune the token store.
+          if (failure.status === 410 && failure.device) {
+            result.failed += 1;
+            result.unregistered.push(failure.device);
+            this.log.info(
+              { token: failure.device.slice(0, 8) + '…' },
+              'APNs reported token Unregistered — pruning',
+            );
+            continue;
+          }
+
+          if (
+            attempt < DEFAULT_APNS_MAX_ATTEMPTS
+            && failure.device
+            && isRetryableApnsFailure(failure)
+          ) {
+            retryTokens.push(failure.device);
+            this.log.warn(
+              {
+                source: 'relay',
+                action: 'apns-retry-scheduled',
+                event,
+                attempt,
+                nextAttempt: attempt + 1,
+                token: failure.device.slice(0, 8) + '…',
+                reason: apnsFailureReason(failure),
+              },
+              'live_activity',
+            );
+            continue;
+          }
+
+          result.failed += 1;
           this.log.warn({ failure }, 'APNs push failed');
         }
+
+        pendingTokens = retryTokens;
+      } catch (err) {
+        if (attempt < DEFAULT_APNS_MAX_ATTEMPTS && isRetryableApnsError(err)) {
+          this.log.warn(
+            {
+              source: 'relay',
+              action: 'apns-retry-scheduled',
+              event,
+              attempt,
+              nextAttempt: attempt + 1,
+              err,
+            },
+            'live_activity',
+          );
+        } else {
+          this.log.error({ err }, 'APNs send threw');
+          result.failed += pendingTokens.length;
+          pendingTokens = [];
+        }
       }
-    } catch (err) {
-      this.log.error({ err }, 'APNs send threw');
-      result.failed = tokens.length;
+
+      if (pendingTokens.length > 0 && attempt < DEFAULT_APNS_MAX_ATTEMPTS) {
+        await sleep(this.apnsRetryDelayMs(attempt));
+      }
     }
+
     this.log.debug(
       {
         source: 'relay',
@@ -271,9 +339,102 @@ export class ApnsClient {
     return result;
   }
 
+  private apnsRetryDelayMs(attempt: number): number {
+    const retryDelays = this.retryDelaysMs ?? DEFAULT_APNS_RETRY_DELAYS_MS;
+    return retryDelays[Math.min(attempt - 1, retryDelays.length - 1)] ?? 0;
+  }
+
   shutdown(): void {
     this.provider?.shutdown();
   }
+}
+
+function isRetryableApnsFailure(failure: unknown): boolean {
+  const status = numericValue((failure as { status?: unknown })?.status);
+  if (status !== null && status >= 400 && status < 500) return false;
+  return retryableApnsText(apnsFailureReason(failure));
+}
+
+function isRetryableApnsError(err: unknown): boolean {
+  return retryableApnsText(apnsFailureReason({ error: err }));
+}
+
+function retryableApnsText(text: string): boolean {
+  const value = text.toLowerCase();
+  return [
+    'timeout',
+    'timed out',
+    'etimedout',
+    'econnreset',
+    'econnrefused',
+    'socket',
+    'network',
+  ].some(pattern => value.includes(pattern));
+}
+
+function apnsFailureReason(failure: unknown): string {
+  const value = failure as {
+    error?: unknown;
+    response?: unknown;
+    reason?: unknown;
+    code?: unknown;
+    status?: unknown;
+  };
+  return [
+    errorDescription(value?.error),
+    objectDescription(value?.response),
+    stringValue(value?.reason),
+    stringValue(value?.code),
+    stringValue(value?.status),
+  ].filter(Boolean).join(' ');
+}
+
+function errorDescription(error: unknown): string {
+  if (!error) return '';
+  const value = error as {
+    message?: unknown;
+    code?: unknown;
+    reason?: unknown;
+    jse_shortmsg?: unknown;
+    stack?: unknown;
+  };
+  return [
+    stringValue(value.message),
+    stringValue(value.code),
+    stringValue(value.reason),
+    stringValue(value.jse_shortmsg),
+    stringValue(value.stack),
+    typeof error === 'string' ? error : '',
+  ].filter(Boolean).join(' ');
+}
+
+function objectDescription(value: unknown): string {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value !== 'object') return String(value);
+  const object = value as { reason?: unknown; error?: unknown; status?: unknown };
+  return [
+    stringValue(object.reason),
+    stringValue(object.error),
+    stringValue(object.status),
+  ].filter(Boolean).join(' ');
+}
+
+function stringValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'string' ? value : String(value);
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -294,6 +455,7 @@ function summarizeLiveActivityState(state: LiveActivityContentState): Record<str
     durationSeconds: Math.round(state.durationSeconds),
     color: state.dominantColorHex ?? null,
     artBytes: base64ByteLength(state.albumArtThumbnail),
+    artworkTraceId: state.artworkTraceId ?? null,
     groupMemberCount: state.groupMemberCount,
     playbackSourceRaw: state.playbackSourceRaw ?? null,
     liveActivityStyleRaw: state.liveActivityStyleRaw ?? null,

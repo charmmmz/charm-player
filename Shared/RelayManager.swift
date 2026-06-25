@@ -112,6 +112,7 @@ final class RelayManager {
 
     private init() {
         urlString = SharedStorage.relayURLString ?? ""
+        discoveredURLString = SharedStorage.discoveredRelayURLString
         discovery.onCandidate = { [weak self] url in
             Task { @MainActor in
                 await self?.handleDiscoveredRelay(url)
@@ -139,6 +140,7 @@ final class RelayManager {
         }
         discovery.stop()
         discoveredURLString = nil
+        SharedStorage.discoveredRelayURLString = nil
         Task { await probeNow() }
         startPeriodicProbe()
     }
@@ -222,6 +224,7 @@ final class RelayManager {
         guard manualURL == nil else { return }
         SonosLog.info(.relay, "received relay candidate url=\(url.absoluteString)")
         discoveredURLString = url.absoluteString
+        SharedStorage.discoveredRelayURLString = url.absoluteString
         await probeNow()
     }
 

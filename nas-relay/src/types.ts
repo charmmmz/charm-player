@@ -22,6 +22,7 @@ export interface LiveActivityContentState {
   startedAt?: number | null;        // Swift Date, seconds since 2001-01-01 UTC
   endsAt?: number | null;           // Swift Date, seconds since 2001-01-01 UTC
   albumArtThumbnail?: string | null; // base64 (Swift Data ↔ JSON)
+  artworkTraceId?: string | null;    // diagnostic-only id for correlating artwork logs
   groupMemberCount: number;
   playbackSourceRaw?: string | null;
   soundbarNightMode?: boolean | null;
@@ -39,6 +40,7 @@ export interface SonosGroupSnapshot {
   artist: string;
   album: string;
   albumArtUri?: string | null;
+  albumArtFallbackUri?: string | null;
   isPlaying: boolean;
   playbackSourceRaw?: string | null;
   soundbarNightMode?: boolean | null;
@@ -86,6 +88,8 @@ export interface PushToStartRegisterRequest {
   clientId?: string;
   speakerName?: string;
   liveActivityStyleRaw?: string | null;
+  activeActivityIds?: string[];
+  clearDismissalSuppression?: boolean;
 }
 
 export interface PushToStartTokenEntry extends PushToStartRegisterRequest {

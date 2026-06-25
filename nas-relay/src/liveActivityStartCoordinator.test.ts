@@ -138,8 +138,8 @@ test('unregisters unregistered start tokens from APNs result', async () => {
   assert.deepEqual(unregistered, ['start-token-b']);
 });
 
-test('records start timestamp for each target attempted', async () => {
-  const recorded: Array<{ token: string; date: Date }> = [];
+test('records start timestamp for each target attempted in the snapshot group', async () => {
+  const recorded: Array<{ token: string; date: Date; groupId: string }> = [];
   const now = new Date('2026-06-24T08:00:00.000Z');
 
   await maybeStartLiveActivityForSnapshot({
@@ -151,13 +151,13 @@ test('records start timestamp for each target attempted', async () => {
     activityTokens: [],
     buildState: async () => contentState,
     pushStart: async () => ({ sent: 1, failed: 1, unregistered: [] }),
-    recordStart: (token, date) => recorded.push({ token, date }),
+    recordStart: (token, date, groupId) => recorded.push({ token, date, groupId }),
     unregisterStartToken: () => {},
     now,
   });
 
   assert.deepEqual(recorded, [
-    { token: 'start-token-a', date: now },
-    { token: 'start-token-b', date: now },
+    { token: 'start-token-a', date: now, groupId: '192.168.50.25' },
+    { token: 'start-token-b', date: now, groupId: '192.168.50.25' },
   ]);
 });

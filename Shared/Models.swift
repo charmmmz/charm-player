@@ -658,6 +658,8 @@ struct AudioQuality: Codable, Equatable, Sendable {
     nonisolated static func from(cloudQuality q: SonosCloudAPI.CloudTrackQuality) -> AudioQuality? {
         let rawCodec = q.codec?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let codec = rawCodec.lowercased()
+        let hasAudioParameters = q.bitDepth != nil || q.sampleRate != nil
+        let hasGenericCodec = codec.isEmpty || codec == "audio"
 
         let mappedCodec: String
         if q.immersive == true || codec.contains("dolby") || codec.contains("atmos")
@@ -668,10 +670,10 @@ struct AudioQuality: Codable, Equatable, Sendable {
             else if codec.contains("alac") { mappedCodec = "ALAC" }
             else if codec.isEmpty { mappedCodec = "Lossless" }
             else { mappedCodec = codec.uppercased() }
-        } else if !rawCodec.isEmpty {
-            mappedCodec = rawCodec.uppercased()
-        } else if q.bitDepth != nil || q.sampleRate != nil {
+        } else if q.lossless == false, hasAudioParameters, hasGenericCodec {
             mappedCodec = "Audio"
+        } else if !rawCodec.isEmpty, !hasGenericCodec {
+            mappedCodec = rawCodec.uppercased()
         } else {
             return nil
         }
@@ -1025,6 +1027,9 @@ struct SonosActivityAttributes: ActivityAttributes {
         /// Album art compressed to a tiny thumbnail so ActivityKit's ContentState
         /// payload stays below its hard size limit.
         var albumArtThumbnail: Data?
+        /// Diagnostic-only id used to correlate relay APNs payload logs with
+        /// app/widget artwork rendering logs.
+        var artworkTraceId: String? = nil
         /// Number of speakers in the current group (1 = standalone).
         var groupMemberCount: Int = 1
         /// PlaybackSource raw value for displaying streaming service badge.
@@ -1044,6 +1049,21 @@ struct SonosActivityAttributes: ActivityAttributes {
 }
 
 enum LiveActivityArtworkData {
+    static func renderableData(
+        primary: Data?,
+        fallback: Data?,
+        isRenderable: (Data) -> Bool
+    ) -> Data? {
+        guard let primary, !primary.isEmpty else { return fallback }
+        if isRenderable(primary) {
+            return primary
+        }
+        guard let fallback, !fallback.isEmpty, fallback != primary, isRenderable(fallback) else {
+            return primary
+        }
+        return fallback
+    }
+
     static func resolveCompact(
         for state: SonosActivityAttributes.ContentState,
         cachedTrackTitle: String?,

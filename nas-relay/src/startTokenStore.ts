@@ -34,7 +34,7 @@ export class StartTokenStore {
       const raw = await fs.readFile(this.path, 'utf8');
       const parsed = JSON.parse(raw) as PushToStartTokenEntry[];
       this.tokens.clear();
-      for (const entry of parsed) this.tokens.set(entry.token, entry);
+      for (const entry of parsed) this.tokens.set(entryKey(entry.groupId, entry.clientId, entry.token), entry);
       this.log.info({ count: this.tokens.size }, 'loaded persisted push-to-start tokens');
     } catch (err: any) {
       if (err.code !== 'ENOENT') {
@@ -44,7 +44,8 @@ export class StartTokenStore {
   }
 
   register(req: PushToStartRegisterRequest): PushToStartTokenEntry {
-    const existing = this.tokens.get(req.token);
+    const key = entryKey(req.groupId, req.clientId, req.token);
+    const existing = this.tokens.get(key);
     const removed = this.pruneSupersededTokens(req);
     const entry: PushToStartTokenEntry = {
       ...req,
@@ -52,7 +53,7 @@ export class StartTokenStore {
       lastStartAt: existing?.lastStartAt,
       startAttemptCount: existing?.startAttemptCount,
     };
-    this.tokens.set(req.token, entry);
+    this.tokens.set(key, entry);
     this.markDirty();
     this.log.info({
       token: shortToken(req.token),
@@ -65,12 +66,17 @@ export class StartTokenStore {
   }
 
   unregister(token: string): boolean {
-    const removed = this.tokens.delete(token);
-    if (removed) {
-      this.markDirty();
-      this.log.info({ token: shortToken(token) }, 'unregistered push-to-start token');
+    let removed = 0;
+    for (const [key, entry] of this.tokens.entries()) {
+      if (entry.token !== token) continue;
+      this.tokens.delete(key);
+      removed += 1;
     }
-    return removed;
+    if (removed > 0) {
+      this.markDirty();
+      this.log.info({ token: shortToken(token), removed }, 'unregistered push-to-start token');
+    }
+    return removed > 0;
   }
 
   forGroup(groupId: string): PushToStartTokenEntry[] {
@@ -81,13 +87,16 @@ export class StartTokenStore {
     return out;
   }
 
-  recordStart(token: string, date: Date): void {
-    const entry = this.tokens.get(token);
-    if (entry) {
+  recordStart(token: string, date: Date, groupId?: string): void {
+    let changed = false;
+    for (const entry of this.tokens.values()) {
+      if (entry.token !== token) continue;
+      if (groupId && entry.groupId !== groupId) continue;
       entry.lastStartAt = date.toISOString();
       entry.startAttemptCount = (entry.startAttemptCount ?? 0) + 1;
-      this.markDirty();
+      changed = true;
     }
+    if (changed) this.markDirty();
   }
 
   recordActivityRegistered(groupId: string, clientId?: string): void {
@@ -141,16 +150,24 @@ export class StartTokenStore {
     if (!req.clientId) return 0;
 
     let removed = 0;
-    for (const [token, entry] of this.tokens.entries()) {
-      if (token === req.token) continue;
+    for (const [key, entry] of this.tokens.entries()) {
+      if (entry.token === req.token) continue;
       if (entry.groupId !== req.groupId) continue;
       if (entry.clientId !== req.clientId) continue;
 
-      this.tokens.delete(token);
+      this.tokens.delete(key);
       removed += 1;
     }
     return removed;
   }
+}
+
+function entryKey(groupId: string, clientId: string | undefined, token: string): string {
+  return [
+    groupId,
+    clientId ?? '',
+    token,
+  ].join('|');
 }
 
 function shortToken(token: string): string {

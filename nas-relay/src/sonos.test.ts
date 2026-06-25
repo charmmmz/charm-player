@@ -622,6 +622,40 @@ test('bridge keeps previous live radio song when Sonos temporarily reports only 
   assert.equal(snapshot?.album, 'Single');
 });
 
+test('bridge keeps previous live radio song when Apple Music reports the station title as a track', async () => {
+  const bridge = testBridge();
+  const positions = [
+    liveRadioPositionInfo('TYPE=SNG|TITLE Secret Language|ARTIST Ryan Beatty|ALBUM Sweet Fortune'),
+    liveRadioPositionInfo('TYPE=SNG|TITLE Apple Music 1|ARTIST Hanuman Welch|ALBUM'),
+  ];
+  const device = {
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    CurrentTrack: {
+      Title: 'Apple Music 1',
+      Artist: 'Hanuman Welch',
+      Album: '',
+    },
+    AVTransportService: {
+      GetTransportInfo: () => Promise.resolve({ CurrentTransportState: 'PLAYING' }),
+      GetPositionInfo: () => Promise.resolve(positions.shift() ?? positions[0]),
+    },
+  };
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.trackTitle, 'Secret Language');
+  assert.equal(snapshot?.artist, 'Ryan Beatty');
+  assert.equal(snapshot?.album, 'Sweet Fortune');
+});
+
 test('bridge synthesizes getaa artwork for live radio when Sonos omits album art metadata', async () => {
   const bridge = testBridge();
   const device = playbackDevice({
@@ -753,6 +787,10 @@ test('bridge logs iTunes artwork shadow probe without replacing getaa artwork', 
   assert.equal(
     bridge.current('192.168.50.25')?.albumArtUri,
     'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a1839352407.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
+  );
+  assert.equal(
+    bridge.current('192.168.50.25')?.albumArtFallbackUri,
+    'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg',
   );
   assert.deepEqual(calls, ['lookup:1839352407']);
   assert.equal(lines.some(line =>
@@ -898,6 +936,48 @@ test('bridge prefers local Control API current track artwork for Apple Music rad
   assert.equal(
     snapshot?.albumArtUri,
     'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3asong%253a123456.mp4%3fsid%3d204%26flags%3d8232%26sn%3d2',
+  );
+});
+
+test('bridge prefers local Control API public current track artwork for Apple Music radio streams', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackQuality: async () => null,
+      playbackMetadata: async () => ({
+        container: {
+          name: 'Apple Music 1',
+          imageUrl: 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3Astation',
+        },
+        currentItem: {
+          track: {
+            name: 'Secret Language',
+            artist: { name: 'Ryan Beatty' },
+            album: { name: 'Sweet Fortune' },
+            imageUrl: 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/b4/a1/ef/secret/600x600bb.jpg',
+            service: { name: 'Apple Music' },
+          },
+        },
+      }),
+    },
+    artworkResolver: null,
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, appleMusicRadioPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.trackTitle, 'Secret Language');
+  assert.equal(snapshot?.artist, 'Ryan Beatty');
+  assert.equal(snapshot?.album, 'Sweet Fortune');
+  assert.equal(
+    snapshot?.albumArtUri,
+    'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/b4/a1/ef/secret/600x600bb.jpg',
   );
 });
 

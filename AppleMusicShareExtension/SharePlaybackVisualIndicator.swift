@@ -2,7 +2,8 @@ import Foundation
 
 enum SharePlaybackVisualIndicator: Equatable, Sendable {
     case none
-    case play
+    case restingWaveform
+    case playingWaveform
     case loading
     case success
 
@@ -10,12 +11,23 @@ enum SharePlaybackVisualIndicator: Equatable, Sendable {
         self == .loading
     }
 
+    var showsWaveform: Bool {
+        switch self {
+        case .restingWaveform, .playingWaveform:
+            return true
+        case .none, .loading, .success:
+            return false
+        }
+    }
+
+    var animatesWaveform: Bool {
+        self == .playingWaveform
+    }
+
     var systemImageName: String? {
         switch self {
-        case .none, .loading:
+        case .none, .restingWaveform, .playingWaveform, .loading:
             return nil
-        case .play:
-            return "play.fill"
         case .success:
             return "checkmark.circle.fill"
         }

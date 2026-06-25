@@ -112,7 +112,10 @@ final class ShareViewController: UIViewController {
         headerStack.addArrangedSubview(artworkContainer)
         headerStack.addArrangedSubview(textStack)
 
-        let statusRow = UIStackView(arrangedSubviews: [spinner, statusIconView, statusLabel])
+        let statusSpacer = UIView()
+        statusSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let statusRow = UIStackView(arrangedSubviews: [spinner, statusIconView, statusLabel, statusSpacer])
         statusRow.axis = .horizontal
         statusRow.alignment = .center
         statusRow.spacing = 8
@@ -129,6 +132,8 @@ final class ShareViewController: UIViewController {
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.65)
         statusLabel.numberOfLines = 2
         statusLabel.text = "Reading Apple Music share..."
+        statusLabel.setContentHuggingPriority(.required, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         let scrollView = UIScrollView()
         scrollView.showsVerticalScrollIndicator = false
@@ -176,6 +181,9 @@ final class ShareViewController: UIViewController {
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(mainStack)
 
+        let scrollFitsContentConstraint = scrollView.heightAnchor.constraint(equalTo: speakerStack.heightAnchor)
+        scrollFitsContentConstraint.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             contentView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             contentView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -185,7 +193,7 @@ final class ShareViewController: UIViewController {
             mainStack.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor, constant: 4),
             mainStack.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor, constant: -4),
             mainStack.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor, constant: 8),
-            mainStack.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor, constant: -8),
+            mainStack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.layoutMarginsGuide.bottomAnchor, constant: -8),
 
             artworkContainer.widthAnchor.constraint(equalToConstant: 64),
             artworkContainer.heightAnchor.constraint(equalToConstant: 64),
@@ -203,7 +211,8 @@ final class ShareViewController: UIViewController {
             speakerStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
             speakerStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
             speakerStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
-            scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180)
+            scrollFitsContentConstraint,
+            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: 310)
         ])
     }
 
@@ -716,7 +725,7 @@ private final class SpeakerGroupCard: UIControl {
     private let iconView = UIImageView(image: UIImage(systemName: "hifispeaker.2.fill"))
     private let titleLabel = UILabel()
     private let detailLabel = UILabel()
-    private let playView = UIImageView(image: UIImage(systemName: "play.fill"))
+    private let waveformView = PlaybackWaveformView()
     private let spinner = UIActivityIndicatorView(style: .medium)
 
     override init(frame: CGRect) {
@@ -766,16 +775,20 @@ private final class SpeakerGroupCard: UIControl {
             ? UIColor(red: 0.22, green: 0.06, blue: 0.12, alpha: 0.86)
             : UIColor.white.withAlphaComponent(0.08)
 
-        let indicator: SharePlaybackVisualIndicator = isLoading ? .loading : (isSuccessful ? .success : .play)
-        if let systemImageName = indicator.systemImageName {
-            playView.image = UIImage(systemName: systemImageName)
-        }
-        playView.tintColor = isSuccessful
+        let isActivelyPlaying = isSuccessful || status == .playing
+        let indicator: SharePlaybackVisualIndicator = isLoading
+            ? .loading
+            : (isActivelyPlaying ? .playingWaveform : .restingWaveform)
+        let waveformColor = isSuccessful
             ? UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
-            : .white
-        playView.isHidden = indicator.showsSpinner
+            : UIColor.white.withAlphaComponent(isActivelyPlaying ? 0.92 : 0.48)
+        waveformView.configure(indicator: indicator, color: waveformColor)
+        waveformView.isHidden = indicator.showsSpinner
         spinner.isHidden = !indicator.showsSpinner
         indicator.showsSpinner ? spinner.startAnimating() : spinner.stopAnimating()
+
+        accessibilityTraits = .button
+        accessibilityLabel = "\(group.displayName), \(detailLabel.text ?? "Tap to play")"
     }
 
     private func configure() {
@@ -800,14 +813,10 @@ private final class SpeakerGroupCard: UIControl {
         detailLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         detailLabel.numberOfLines = 1
 
-        playView.tintColor = .white
-        playView.contentMode = .scaleAspectFit
-        playView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
-        playView.translatesAutoresizingMaskIntoConstraints = false
-
         spinner.color = .white
         spinner.translatesAutoresizingMaskIntoConstraints = false
         spinner.isHidden = true
+        waveformView.translatesAutoresizingMaskIntoConstraints = false
 
         let iconContainer = UIView()
         iconContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -819,22 +828,19 @@ private final class SpeakerGroupCard: UIControl {
         let textStack = UIStackView(arrangedSubviews: [titleLabel, detailLabel])
         textStack.axis = .vertical
         textStack.spacing = 3
+        textStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let playContainer = UIView()
-        playContainer.translatesAutoresizingMaskIntoConstraints = false
-        playContainer.layer.cornerRadius = 20
-        playContainer.layer.borderWidth = 1
-        playContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
-        playContainer.backgroundColor = UIColor.black.withAlphaComponent(0.26)
-        playContainer.addSubview(playView)
-        playContainer.addSubview(spinner)
+        let indicatorContainer = UIView()
+        indicatorContainer.translatesAutoresizingMaskIntoConstraints = false
+        indicatorContainer.addSubview(waveformView)
+        indicatorContainer.addSubview(spinner)
 
-        let stack = UIStackView(arrangedSubviews: [iconContainer, textStack, playContainer])
+        let stack = UIStackView(arrangedSubviews: [iconContainer, textStack, indicatorContainer])
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        [stack, iconContainer, textStack, playContainer].forEach {
+        [stack, iconContainer, textStack, indicatorContainer].forEach {
             $0.isUserInteractionEnabled = false
         }
         addSubview(stack)
@@ -853,14 +859,116 @@ private final class SpeakerGroupCard: UIControl {
             iconView.topAnchor.constraint(equalTo: iconContainer.topAnchor),
             iconView.bottomAnchor.constraint(equalTo: iconContainer.bottomAnchor),
 
-            playContainer.widthAnchor.constraint(equalToConstant: 42),
-            playContainer.heightAnchor.constraint(equalToConstant: 42),
-            playView.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor),
-            playView.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor),
-            playView.widthAnchor.constraint(equalToConstant: 22),
-            playView.heightAnchor.constraint(equalToConstant: 22),
-            spinner.centerXAnchor.constraint(equalTo: playContainer.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: playContainer.centerYAnchor)
+            indicatorContainer.widthAnchor.constraint(equalToConstant: 34),
+            indicatorContainer.heightAnchor.constraint(equalToConstant: 42),
+            waveformView.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
+            waveformView.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor),
+            waveformView.widthAnchor.constraint(equalToConstant: 32),
+            waveformView.heightAnchor.constraint(equalToConstant: 30),
+            spinner.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor)
         ])
+    }
+}
+
+private final class PlaybackWaveformView: UIView {
+    private static let animationKey = "share.waveform.levels"
+
+    private let bars: [UIView] = (0..<5).map { _ in UIView() }
+    private var heightConstraints: [NSLayoutConstraint] = []
+    private var isAnimatingWaveform = false
+
+    private let restingHeights: [CGFloat] = [7, 11, 8, 12, 7]
+    private let activeHeights: [CGFloat] = [14, 25, 18, 28, 12]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(indicator: SharePlaybackVisualIndicator, color: UIColor) {
+        isHidden = !indicator.showsWaveform
+        bars.forEach { $0.backgroundColor = color }
+
+        guard indicator.showsWaveform else {
+            stopAnimating()
+            return
+        }
+
+        if indicator.animatesWaveform {
+            applyHeights(activeHeights)
+            startAnimating()
+        } else {
+            stopAnimating()
+            applyHeights(restingHeights)
+        }
+    }
+
+    private func configureView() {
+        translatesAutoresizingMaskIntoConstraints = false
+        isUserInteractionEnabled = false
+
+        let stack = UIStackView(arrangedSubviews: bars)
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.distribution = .equalCentering
+        stack.spacing = 3
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.isUserInteractionEnabled = false
+        addSubview(stack)
+
+        for (index, bar) in bars.enumerated() {
+            bar.layer.cornerRadius = 1.5
+            bar.clipsToBounds = true
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            let height = bar.heightAnchor.constraint(equalToConstant: restingHeights[index])
+            heightConstraints.append(height)
+            NSLayoutConstraint.activate([
+                bar.widthAnchor.constraint(equalToConstant: 3),
+                height
+            ])
+        }
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    private func applyHeights(_ heights: [CGFloat]) {
+        for (index, constraint) in heightConstraints.enumerated() {
+            constraint.constant = heights[index]
+        }
+        setNeedsLayout()
+    }
+
+    private func startAnimating() {
+        guard !isAnimatingWaveform else { return }
+        isAnimatingWaveform = true
+
+        for (index, bar) in bars.enumerated() {
+            let animation = CAKeyframeAnimation(keyPath: "transform.scale.y")
+            animation.values = [0.42, 1.0, 0.58, 0.9, 0.46]
+            animation.keyTimes = [0, 0.24, 0.52, 0.78, 1]
+            animation.duration = 0.82 + (Double(index) * 0.05)
+            animation.beginTime = CACurrentMediaTime() + (Double(index) * 0.06)
+            animation.repeatCount = .infinity
+            animation.isRemovedOnCompletion = false
+            bar.layer.add(animation, forKey: Self.animationKey)
+        }
+    }
+
+    private func stopAnimating() {
+        guard isAnimatingWaveform else { return }
+        isAnimatingWaveform = false
+        for bar in bars {
+            bar.layer.removeAnimation(forKey: Self.animationKey)
+            bar.transform = .identity
+        }
     }
 }

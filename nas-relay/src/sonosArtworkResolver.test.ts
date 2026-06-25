@@ -94,12 +94,59 @@ test('Sonos artwork resolver logs an iTunes shadow lookup without replacing geta
 
   assert.equal(resolution.source, 'getaa');
   assert.equal(resolution.url, 'http://192.168.50.25:1400/getaa?s=1&u=x-sonos-http%3atrack');
+  assert.equal(resolution.fallbackSource, 'itunes-lookup');
+  assert.equal(resolution.fallbackUrl, 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg');
   assert.deepEqual(calls, ['lookup:1440857781:US']);
   assert.equal(logs[0]?.message, 'iTunes artwork shadow probe');
   assert.equal(logs[0]?.status, 'hit');
   assert.equal(logs[0]?.method, 'lookup');
   assert.equal(logs[0]?.catalogID, '1440857781');
   assert.equal(logs[0]?.resolvedAlbumArtUri, 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg');
+});
+
+test('Sonos artwork resolver uses iTunes artwork for Apple Music live radio station getaa artwork', async () => {
+  const calls: string[] = [];
+  const logs: Array<Record<string, unknown>> = [];
+  const resolver = createSonosArtworkResolver({
+    logger: {
+      info: (fields: Record<string, unknown>, message: string) => {
+        logs.push({ ...fields, message });
+      },
+      warn: (fields: Record<string, unknown>, message: string) => {
+        logs.push({ ...fields, message });
+      },
+    },
+    itunes: {
+      lookupArtworkURLString: async () => {
+        calls.push('lookup');
+        return null;
+      },
+      searchArtworkURLString: async input => {
+        calls.push(`search:${input.title}:${input.artist}:${input.album}:${input.countryCode}`);
+        return 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/secret/600x600bb.jpg';
+      },
+    },
+    countryCode: 'US',
+  });
+
+  const resolution = await resolver.resolve({
+    groupId: '192.168.50.249',
+    trigger: 'sonos-change',
+    title: 'Secret Language',
+    artist: 'Ryan Beatty',
+    album: 'Sweet Fortune',
+    trackUri: 'x-sonosapi-hls:hls:ra.978194965?sid=204&flags=8232&sn=2',
+    albumArtUri: 'http://192.168.50.249:1400/getaa?s=1&u=x-sonosapi-hls%3ahls%3ara.978194965%3fsid%3d204%26flags%3d8232%26sn%3d2',
+    playbackSourceRaw: 'appleMusic',
+  });
+
+  assert.equal(resolution.source, 'itunes-search');
+  assert.equal(resolution.url, 'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/secret/600x600bb.jpg');
+  assert.equal(resolution.catalogID, null);
+  assert.deepEqual(calls, ['search:Secret Language:Ryan Beatty:Sweet Fortune:US']);
+  assert.equal(logs[0]?.message, 'iTunes artwork probe');
+  assert.equal(logs[0]?.status, 'hit');
+  assert.equal(logs[0]?.method, 'search');
 });
 
 test('iTunes shadow probe falls through to search after catalog lookup miss', async () => {

@@ -67,7 +67,7 @@ test('Live Activity preferences preserve style when updates omit it', () => {
   assert.equal(enriched.liveActivityStyleRaw, 'widget');
 });
 
-test('Live Activity preferences use recent app now playing hints for live snapshots except artwork', () => {
+test('Live Activity preferences ignore app now playing hints for relay-owned snapshots', () => {
   const store = new LiveActivityPreferenceStore(() => 1_000);
   store.update({
     groupId: '192.168.50.25',
@@ -86,9 +86,9 @@ test('Live Activity preferences use recent app now playing hints for live snapsh
   });
 
   const enriched = store.apply(snapshot({
-    trackTitle: 'Apple Music 1',
-    artist: 'Apple Music',
-    album: 'Live Radio',
+    trackTitle: 'Relay Radio Song',
+    artist: 'Relay Artist',
+    album: 'Relay Album',
     albumArtUri: 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3astation',
     playbackSourceRaw: 'appleMusic',
     audioQualityLabel: null,
@@ -97,90 +97,15 @@ test('Live Activity preferences use recent app now playing hints for live snapsh
     liveActivityStyleRaw: null,
   }));
 
-  assert.equal(enriched.trackTitle, 'Correct Radio Song');
-  assert.equal(enriched.artist, 'Correct Artist');
-  assert.equal(enriched.album, 'Correct Album');
-  assert.equal(enriched.albumArtUri, 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3astation');
-  assert.equal(enriched.positionSeconds, 0);
-  assert.equal(enriched.durationSeconds, 0);
-  assert.equal(enriched.playbackSourceRaw, 'appleMusic');
-  assert.equal(enriched.audioQualityLabel, 'Lossless');
-  assert.equal(enriched.liveActivityStyleRaw, 'widget');
-});
-
-test('Live Activity preferences ignore expired app now playing hints', () => {
-  let now = 1_000;
-  const store = new LiveActivityPreferenceStore(() => now);
-  store.update({
-    groupId: '192.168.50.25',
-    liveActivityStyleRaw: null,
-    nowPlaying: {
-      trackTitle: 'Correct Radio Song',
-      artist: 'Correct Artist',
-      durationSeconds: 0,
-    },
-  });
-
-  now += 31_000;
-  const enriched = store.apply(snapshot({
-    trackTitle: 'Relay Radio Song',
-    artist: 'Relay Artist',
-    durationSeconds: 0,
-  }));
-
   assert.equal(enriched.trackTitle, 'Relay Radio Song');
   assert.equal(enriched.artist, 'Relay Artist');
-});
-
-test('Live Activity preferences preserve app now playing hints when style updates omit them', () => {
-  const store = new LiveActivityPreferenceStore(() => 1_000);
-  store.update({
-    groupId: '192.168.50.25',
-    liveActivityStyleRaw: null,
-    nowPlaying: {
-      trackTitle: 'Correct Radio Song',
-      artist: 'Correct Artist',
-      durationSeconds: 0,
-    },
-  });
-
-  store.update({
-    groupId: '192.168.50.25',
-    liveActivityStyleRaw: 'widget',
-    nowPlaying: undefined,
-  });
-
-  const enriched = store.apply(snapshot({
-    trackTitle: 'Relay Radio Song',
-    artist: 'Relay Artist',
-    durationSeconds: 0,
-  }));
-
-  assert.equal(enriched.trackTitle, 'Correct Radio Song');
-  assert.equal(enriched.artist, 'Correct Artist');
+  assert.equal(enriched.album, 'Relay Album');
+  assert.equal(enriched.albumArtUri, 'http://192.168.50.25:1400/getaa?s=1&u=x-sonosapi-hls%3astation');
+  assert.equal(enriched.positionSeconds, 14);
+  assert.equal(enriched.durationSeconds, 0);
+  assert.equal(enriched.playbackSourceRaw, 'appleMusic');
+  assert.equal(enriched.audioQualityLabel, null);
   assert.equal(enriched.liveActivityStyleRaw, 'widget');
-});
-
-test('Live Activity preferences keep fixed-duration relay metadata over app hints', () => {
-  const store = new LiveActivityPreferenceStore(() => 1_000);
-  store.update({
-    groupId: '192.168.50.25',
-    liveActivityStyleRaw: null,
-    nowPlaying: {
-      trackTitle: 'Stale Radio Song',
-      artist: 'Stale Artist',
-      durationSeconds: 0,
-    },
-  });
-
-  const enriched = store.apply(snapshot({
-    trackTitle: 'Blue Train',
-    artist: 'John Coltrane',
-    durationSeconds: 300,
-  }));
-
-  assert.equal(enriched.trackTitle, 'Blue Train');
-  assert.equal(enriched.artist, 'John Coltrane');
 });
 
 function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapshot {

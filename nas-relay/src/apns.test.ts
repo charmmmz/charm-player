@@ -59,6 +59,7 @@ const contentState: LiveActivityContentState = {
   startedAt: 123,
   endsAt: 456,
   albumArtThumbnail: 'AQID',
+  artworkTraceId: 'art_trace123456',
   groupMemberCount: 2,
   playbackSourceRaw: 'lineIn',
   liveActivityStyleRaw: 'compact',
@@ -89,6 +90,10 @@ test('makeLiveActivityStartNotification creates ActivityKit start payload', () =
     attributes: startAttributes,
     'content-state': contentState,
     'input-push-token': 1,
+    alert: {
+      title: 'Blue Monday',
+      body: 'New Order on Playroom',
+    },
   });
 });
 
@@ -105,6 +110,115 @@ test('liveActivityNotificationPayloadBytes measures the serialized APNs payload'
     Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8'),
   );
 });
+
+test('pushUpdate dry-run logs payload bytes with the artwork trace id', async () => {
+  const { logger, lines } = captureLogger();
+  const client = await ApnsClient.create({
+    ...baseConfig,
+    keyId: '',
+    teamId: '',
+  }, logger);
+
+  assert.deepEqual(
+    await client.pushUpdate(['update-token-1'], contentState),
+    { sent: 1, failed: 0, unregistered: [] },
+  );
+
+  const payloadLog = lines.map(parseLogLine).find(entry =>
+    entry?.action === 'apns-dry-run' && entry?.event === 'update');
+  assert.equal(payloadLog?.tokens, 1);
+  assert.equal(typeof payloadLog?.payloadBytes, 'number');
+  assert.equal(payloadLog?.state?.artworkTraceId, 'art_trace123456');
+  assert.equal(payloadLog?.state?.artBytes, 3);
+});
+
+test('pushUpdate retries APNs write timeouts before reporting failure', async () => {
+  const { logger } = captureLogger();
+  let attempts = 0;
+  const client = apnsClientWithProvider(logger, {
+    send: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return {
+          sent: [],
+          failed: [{
+            device: 'update-token-1',
+            error: new Error('apn write timeout'),
+          }],
+        };
+      }
+      return {
+        sent: [{ device: 'update-token-1' }],
+        failed: [],
+      };
+    },
+  });
+
+  (client as any).retryDelaysMs = [0, 0];
+
+  assert.deepEqual(
+    await client.pushUpdate(['update-token-1'], contentState),
+    { sent: 1, failed: 0, unregistered: [] },
+  );
+  assert.equal(attempts, 2);
+});
+
+test('pushUpdate does not retry APNs unregistered token failures', async () => {
+  const { logger } = captureLogger();
+  let attempts = 0;
+  const client = apnsClientWithProvider(logger, {
+    send: async () => {
+      attempts += 1;
+      return {
+        sent: [],
+        failed: [{
+          device: 'update-token-1',
+          status: 410,
+          response: { reason: 'Unregistered' },
+        }],
+      };
+    },
+  });
+
+  (client as any).retryDelaysMs = [0, 0];
+
+  assert.deepEqual(
+    await client.pushUpdate(['update-token-1'], contentState),
+    { sent: 0, failed: 1, unregistered: ['update-token-1'] },
+  );
+  assert.equal(attempts, 1);
+});
+
+function captureLogger(): { logger: pino.Logger; lines: string[] } {
+  const lines: string[] = [];
+  const destination = {
+    write: (line: string) => {
+      lines.push(line);
+    },
+  };
+  return { logger: pino({ level: 'info' }, destination), lines };
+}
+
+function parseLogLine(line: string): Record<string, any> | null {
+  try {
+    return JSON.parse(line) as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
+function apnsClientWithProvider(
+  logger: pino.Logger,
+  provider: { send: (note: unknown, tokens: string[]) => Promise<{ sent: any[]; failed: any[] }> },
+): ApnsClient {
+  const client = Object.create(ApnsClient.prototype) as any;
+  client.config = baseConfig;
+  client.apnsStatus = apnsStatusFromConfig(baseConfig, true);
+  client.dryRun = false;
+  client.log = logger.child({ module: 'apns' });
+  client.provider = provider;
+  return client as ApnsClient;
+}
 
 test('pushStart dry-run returns all tokens as sent without provider', async () => {
   const client = await ApnsClient.create({

@@ -21,6 +21,12 @@ nonisolated struct AppleMusicSonosServiceCredential: Codable, Equatable, Sendabl
     let displayName: String
 }
 
+nonisolated struct LiveActivityPushToStartRegistrationRecord: Codable, Equatable, Sendable {
+    let token: String
+    let relayURLString: String
+    let registeredAt: Date
+}
+
 enum SharedStorage {
 
     nonisolated static let appGroupID = "group.com.charm.SonosWidget"
@@ -35,6 +41,9 @@ enum SharedStorage {
 
     private nonisolated static let pendingAppleMusicShareKey = "pendingAppleMusicShare"
     private nonisolated static let appleMusicSonosServiceCredentialKey = "appleMusicSonosServiceCredential"
+    private nonisolated static let liveActivityRelayPushTokensByGroupIDKey = "liveActivityRelayPushTokensByGroupID"
+    private nonisolated static let liveActivityPushToStartRegistrationsByGroupIDKey =
+        "liveActivityPushToStartRegistrationsByGroupID"
 
     // MARK: - Apple Music Share Intake
 
@@ -304,6 +313,11 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "relayURL") }
     }
 
+    nonisolated static var discoveredRelayURLString: String? {
+        get { defaults.string(forKey: "discoveredRelayURL") }
+        set { defaults.set(newValue, forKey: "discoveredRelayURL") }
+    }
+
     nonisolated static var liveActivityRelayClientID: String {
         if let existing = defaults.string(forKey: "liveActivityRelayClientID"), !existing.isEmpty {
             return existing
@@ -316,6 +330,47 @@ enum SharedStorage {
     nonisolated static var liveActivityRelayPushToken: String? {
         get { defaults.string(forKey: "liveActivityRelayPushToken") }
         set { defaults.set(newValue, forKey: "liveActivityRelayPushToken") }
+    }
+
+    nonisolated static var liveActivityRelayPushTokensByGroupID: [String: String] {
+        get {
+            guard let data = defaults.data(forKey: liveActivityRelayPushTokensByGroupIDKey),
+                  let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
+                return [:]
+            }
+            return decoded
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: liveActivityRelayPushTokensByGroupIDKey)
+            } else if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: liveActivityRelayPushTokensByGroupIDKey)
+            }
+        }
+    }
+
+    nonisolated static func liveActivityRelayPushToken(for groupId: String?) -> String? {
+        let cleanGroupId = groupId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !cleanGroupId.isEmpty,
+           let token = liveActivityRelayPushTokensByGroupID[cleanGroupId],
+           !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return token
+        }
+        return liveActivityRelayPushToken
+    }
+
+    nonisolated static func setLiveActivityRelayPushToken(_ token: String?, for groupId: String) {
+        let cleanGroupId = groupId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanGroupId.isEmpty else { return }
+        var tokens = liveActivityRelayPushTokensByGroupID
+        if let token = token?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            tokens[cleanGroupId] = token
+        } else {
+            tokens.removeValue(forKey: cleanGroupId)
+        }
+        liveActivityRelayPushTokensByGroupID = tokens
     }
 
     nonisolated static var liveActivityPushToStartToken: String? {
@@ -344,6 +399,43 @@ enum SharedStorage {
     nonisolated static var liveActivityPushToStartRegisteredRelayURLString: String? {
         get { defaults.string(forKey: "liveActivityPushToStartRegisteredRelayURLString") }
         set { defaults.set(newValue, forKey: "liveActivityPushToStartRegisteredRelayURLString") }
+    }
+
+    nonisolated static var liveActivityPushToStartRegistrationsByGroupID:
+        [String: LiveActivityPushToStartRegistrationRecord] {
+        get {
+            guard let data = defaults.data(forKey: liveActivityPushToStartRegistrationsByGroupIDKey),
+                  let decoded = try? JSONDecoder().decode(
+                    [String: LiveActivityPushToStartRegistrationRecord].self,
+                    from: data) else {
+                return [:]
+            }
+            return decoded
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: liveActivityPushToStartRegistrationsByGroupIDKey)
+            } else if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: liveActivityPushToStartRegistrationsByGroupIDKey)
+            }
+        }
+    }
+
+    nonisolated static func liveActivityPushToStartRegistration(
+        for groupId: String
+    ) -> LiveActivityPushToStartRegistrationRecord? {
+        liveActivityPushToStartRegistrationsByGroupID[groupId]
+    }
+
+    nonisolated static func setLiveActivityPushToStartRegistration(
+        _ record: LiveActivityPushToStartRegistrationRecord?,
+        for groupId: String
+    ) {
+        let cleanGroupId = groupId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanGroupId.isEmpty else { return }
+        var records = liveActivityPushToStartRegistrationsByGroupID
+        records[cleanGroupId] = record
+        liveActivityPushToStartRegistrationsByGroupID = records
     }
 
     // MARK: - NAS LLM Agent

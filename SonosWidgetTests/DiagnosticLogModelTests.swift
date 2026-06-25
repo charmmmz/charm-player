@@ -2,6 +2,24 @@ import XCTest
 @testable import SonosWidget
 
 final class DiagnosticLogModelTests: XCTestCase {
+    func testRemoteDiagnosticRedactorMasksSonosServiceTokens() {
+        let raw = "Username for 52231: X_#Svc52231-408f19a7-Token"
+
+        XCTAssertEqual(
+            DiagnosticRemoteLogRedactor.redact(raw),
+            "Username for 52231: X_#Svc52231-<redacted>-Token"
+        )
+    }
+
+    func testRemoteDiagnosticRedactorMasksBearerAndQueryTokens() {
+        let raw = "Authorization: Bearer abc.def_123 access_token=secret&refresh_token=alsoSecret"
+
+        XCTAssertEqual(
+            DiagnosticRemoteLogRedactor.redact(raw),
+            "Authorization: Bearer <redacted> access_token=<redacted>&refresh_token=<redacted>"
+        )
+    }
+
     func testParsesInfoLine() {
         let entry = DiagnosticLogEntry.parse(
             line: "2026-06-21T01:02:03Z [Playback] Artwork cache hit source=musicKit",

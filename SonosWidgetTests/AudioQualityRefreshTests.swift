@@ -107,6 +107,44 @@ final class AudioQualityRefreshTests: XCTestCase {
         XCTAssertEqual(enriched.audioQuality?.badgeAssetImageName, "BadgeAppleLossless")
     }
 
+    func testPlaybackMetadataWithIncompleteQualityKeepsExistingAudioQuality() throws {
+        let existing = AudioQuality(codec: "ALAC", sampleRate: 44_100, bitDepth: 16, channels: nil)
+        let incoming = TrackInfo(
+            title: "A Face to Call Home",
+            artist: "John Mayer",
+            album: "Born and Raised",
+            albumArtURL: "https://example.com/born-and-raised.jpg",
+            source: .appleMusic,
+            audioQuality: existing
+        )
+        let json = """
+        {
+          "_objectType": "metadataStatus",
+          "currentItem": {
+            "track": {
+              "name": "A Face to Call Home",
+              "artist": { "name": "John Mayer" },
+              "album": { "name": "Born and Raised" },
+              "service": { "name": "Apple Music" },
+              "quality": {
+                "_objectType": "trackQuality",
+                "bitDepth": 16,
+                "sampleRate": 44100,
+                "immersive": false
+              }
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let metadata = try SonosLocalControlAPI.decodePlaybackMetadata(json)
+
+        XCTAssertTrue(SonosManager.playbackMetadataQualityNeedsRetry(metadata))
+
+        let enriched = SonosManager.trackInfo(incoming, applyingPlaybackMetadata: metadata)
+
+        XCTAssertEqual(enriched.audioQuality, existing)
+    }
+
     func testPlaybackMetadataContainerFallbackEnrichesAppleMusicLiveStation() throws {
         let incoming = TrackInfo(
             title: "Unknown",

@@ -451,6 +451,63 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertNil(urlString)
     }
 
+    func testExternalLinkResolverSearchesCatalogForLiveRadioSongURLWithoutCatalogID() async throws {
+        var searchedTerms: [String] = []
+        let resolver = AppleMusicExternalLinkFallbackResolver(
+            catalogURLLookup: { _, _ in nil },
+            catalogSearch: { term, _ in
+                searchedTerms.append(term)
+                return [
+                    AppleMusicCatalogSearchItem(
+                        id: "16704742",
+                        type: .song,
+                        title: "Free",
+                        artist: "Ryan Ellis",
+                        album: "Real Love",
+                        artworkURLString: nil,
+                        duration: 221,
+                        urlString: "https://music.apple.com/us/song/free/16704742")
+                ]
+            })
+
+        let url = try await resolver.songURL(
+            directResource: nil,
+            title: "Free",
+            artist: "Ryan Ellis",
+            album: "Real Love")
+
+        XCTAssertEqual(searchedTerms, ["Free Ryan Ellis Real Love"])
+        XCTAssertEqual(url?.absoluteString, "https://music.apple.com/us/song/free/16704742")
+    }
+
+    func testExternalLinkResolverSearchesCatalogForLiveRadioAlbumURLWithoutCatalogID() async throws {
+        var searchedTerms: [String] = []
+        let resolver = AppleMusicExternalLinkFallbackResolver(
+            catalogURLLookup: { _, _ in nil },
+            catalogSearch: { term, _ in
+                searchedTerms.append(term)
+                return [
+                    AppleMusicCatalogSearchItem(
+                        id: "1440864059",
+                        type: .album,
+                        title: "Real Love",
+                        artist: "Ryan Ellis",
+                        album: "Real Love",
+                        artworkURLString: nil,
+                        duration: nil,
+                        urlString: "https://music.apple.com/us/album/real-love/1440864059")
+                ]
+            })
+
+        let url = try await resolver.albumURL(
+            directResource: nil,
+            title: "Real Love",
+            artist: "Ryan Ellis")
+
+        XCTAssertEqual(searchedTerms, ["Real Love Ryan Ellis"])
+        XCTAssertEqual(url?.absoluteString, "https://music.apple.com/us/album/real-love/1440864059")
+    }
+
     func testPlaylistCatalogIDExtractorPrefersAppleMusicURL() {
         let catalogID = LocalMusicCatalogIDExtractor.playlistCatalogID(
             rawID: "p.library-only",

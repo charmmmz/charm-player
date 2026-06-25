@@ -87,3 +87,31 @@ final class MiniPlayerLayoutMetricsTests: XCTestCase {
         )
     }
 }
+
+final class PlaybackControlPresentationTests: XCTestCase {
+    func testLiveStreamPresentationUsesStopAndHidesTrackControls() {
+        XCTAssertEqual(
+            PlaybackControlPresentation.primarySystemImage(isPlaying: true, isLiveStream: true),
+            "stop.fill"
+        )
+        XCTAssertEqual(
+            PlaybackControlPresentation.primarySystemImage(isPlaying: false, isLiveStream: true),
+            "play.fill"
+        )
+        XCTAssertFalse(PlaybackControlPresentation.showsNextButton(isLiveStream: true))
+        XCTAssertFalse(PlaybackControlPresentation.showsProgressRing(isLiveStream: true))
+    }
+
+    func testStandardPresentationKeepsPauseNextAndProgressRing() {
+        XCTAssertEqual(
+            PlaybackControlPresentation.primarySystemImage(isPlaying: true, isLiveStream: false),
+            "pause.fill"
+        )
+        XCTAssertEqual(
+            PlaybackControlPresentation.primarySystemImage(isPlaying: false, isLiveStream: false),
+            "play.fill"
+        )
+        XCTAssertTrue(PlaybackControlPresentation.showsNextButton(isLiveStream: false))
+        XCTAssertTrue(PlaybackControlPresentation.showsProgressRing(isLiveStream: false))
+    }
+}

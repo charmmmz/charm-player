@@ -9,8 +9,19 @@ struct PlayPauseIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Toggle Playback"
     static var description: IntentDescription = "Play or pause the current Sonos speaker."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
 
         let state = try? await SonosAPI.getTransportInfo(ip: ip)
         let shouldPause = state == .playing || (state == nil && SharedStorage.isPlaying)
@@ -25,7 +36,8 @@ struct PlayPauseIntent: LiveActivityIntent {
         } catch {
             if let relayState = await IntentHelper.sendRelayPlaybackCommand(
                 shouldPause ? "pause" : "play",
-                fallbackGroupId: ip
+                fallbackGroupId: ip,
+                groupId: groupId
             ) {
                 await IntentHelper.applyRelayPlaybackState(relayState)
             } else {
@@ -36,7 +48,7 @@ struct PlayPauseIntent: LiveActivityIntent {
         // Lock play state for 5s so fetchLiveEntry won't overwrite our optimistic update
         // with a potentially stale device response.
         SharedStorage.playStateLockUntil = Date().addingTimeInterval(5)
-        await IntentHelper.updateLiveActivityPlayState(isPlaying: SharedStorage.isPlaying)
+        await IntentHelper.updateLiveActivityPlayState(isPlaying: SharedStorage.isPlaying, groupId: groupId)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         return .result()
     }
@@ -46,11 +58,26 @@ struct NextTrackIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Next Track"
     static var description: IntentDescription = "Skip to the next track."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let previousTrack = IntentHelper.cachedTrackIdentity()
 
-        if let relayState = await IntentHelper.sendRelayPlaybackCommand("next", fallbackGroupId: ip) {
+        if let relayState = await IntentHelper.sendRelayPlaybackCommand(
+            "next",
+            fallbackGroupId: ip,
+            groupId: groupId
+        ) {
             SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
             await IntentHelper.applyRelayPlaybackState(relayState)
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
@@ -69,7 +96,7 @@ struct NextTrackIntent: LiveActivityIntent {
         let info = await IntentHelper.refreshCacheAfterTrackCommand(
             playbackIP: ip,
             previousTrack: previousTrack)
-        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
+        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true, groupId: groupId)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         return .result()
     }
@@ -79,11 +106,26 @@ struct PreviousTrackIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Previous Track"
     static var description: IntentDescription = "Go back to the previous track."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let previousTrack = IntentHelper.cachedTrackIdentity()
 
-        if let relayState = await IntentHelper.sendRelayPlaybackCommand("previous", fallbackGroupId: ip) {
+        if let relayState = await IntentHelper.sendRelayPlaybackCommand(
+            "previous",
+            fallbackGroupId: ip,
+            groupId: groupId
+        ) {
             SharedStorage.playStateLockUntil = Date().addingTimeInterval(8)
             await IntentHelper.applyRelayPlaybackState(relayState)
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
@@ -100,7 +142,7 @@ struct PreviousTrackIntent: LiveActivityIntent {
         let info = await IntentHelper.refreshCacheAfterTrackCommand(
             playbackIP: ip,
             previousTrack: previousTrack)
-        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true)
+        await IntentHelper.updateLiveActivityPlaybackState(trackInfo: info, isPlaying: true, groupId: groupId)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         return .result()
     }
@@ -112,23 +154,35 @@ struct ToggleNightModeIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Toggle Night Sound"
     static var description: IntentDescription = "Turn Sonos Night Sound on or off for TV audio."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let previousValue = SharedStorage.cachedSoundbarNightMode
         let nextValue = !SharedStorage.cachedSoundbarNightMode
         SharedStorage.cachedSoundbarNightMode = nextValue
-        await IntentHelper.updateLiveActivitySoundbarState(nightMode: nextValue)
+        await IntentHelper.updateLiveActivitySoundbarState(nightMode: nextValue, groupId: groupId)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
 
-        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip) {
+        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip, groupId: groupId) {
             if let relayState = await IntentHelper.sendRelaySoundbarNightModeCommand(
                 nextValue,
-                fallbackGroupId: ip
+                fallbackGroupId: ip,
+                groupId: groupId
             ) {
                 await IntentHelper.applyRelayPlaybackState(relayState)
             } else {
                 SharedStorage.cachedSoundbarNightMode = previousValue
-                await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue)
+                await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue, groupId: groupId)
                 WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
             }
             return .result()
@@ -138,7 +192,7 @@ struct ToggleNightModeIntent: LiveActivityIntent {
             try await SonosAPI.setEQ(ip: ip, eqType: "NightMode", enabled: nextValue)
         } catch {
             SharedStorage.cachedSoundbarNightMode = previousValue
-            await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue)
+            await IntentHelper.updateLiveActivitySoundbarState(nightMode: previousValue, groupId: groupId)
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
 
@@ -150,24 +204,36 @@ struct ToggleSpeechEnhancementIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Toggle Speech Enhancement"
     static var description: IntentDescription = "Turn Sonos Speech Enhancement on or off for TV audio."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let currentLevel = SpeechEnhancementLevel.from(
             rawLevel: SharedStorage.cachedSoundbarSpeechEnhancementRawLevel)
         let nextLevel = currentLevel.nextCyclicLevel
         SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = nextLevel.rawValue
-        await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: nextLevel)
+        await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: nextLevel, groupId: groupId)
         WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
 
-        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip) {
+        if IntentHelper.hasRelayCommandRoute(fallbackGroupId: ip, groupId: groupId) {
             if let relayState = await IntentHelper.sendRelaySoundbarSpeechEnhancementCommand(
                 nextLevel,
-                fallbackGroupId: ip
+                fallbackGroupId: ip,
+                groupId: groupId
             ) {
                 await IntentHelper.applyRelayPlaybackState(relayState)
             } else {
                 SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = currentLevel.rawValue
-                await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel)
+                await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel, groupId: groupId)
                 WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
             }
             return .result()
@@ -193,7 +259,7 @@ struct ToggleSpeechEnhancementIntent: LiveActivityIntent {
             }
         } catch {
             SharedStorage.cachedSoundbarSpeechEnhancementRawLevel = currentLevel.rawValue
-            await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel)
+            await IntentHelper.updateLiveActivitySoundbarState(speechEnhancement: currentLevel, groupId: groupId)
             WidgetCenter.shared.reloadTimelines(ofKind: "SonosWidget")
         }
 
@@ -207,8 +273,19 @@ struct VolumeUpIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Volume Up"
     static var description: IntentDescription = "Increase volume by 2."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let current: Int
         if let groupVolume = try? await SonosAPI.getGroupVolume(ip: ip) {
             current = groupVolume
@@ -233,8 +310,19 @@ struct VolumeDownIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Volume Down"
     static var description: IntentDescription = "Decrease volume by 2."
 
+    @Parameter(title: "Group ID")
+    var groupId: String?
+
+    init() {
+        self.groupId = nil
+    }
+
+    init(groupId: String?) {
+        self.groupId = groupId
+    }
+
     func perform() async throws -> some IntentResult {
-        guard let ip = SharedStorage.coordinatorIP ?? SharedStorage.speakerIP else { return .result() }
+        guard let ip = IntentHelper.targetPlaybackIP(groupId: groupId) else { return .result() }
         let current: Int
         if let groupVolume = try? await SonosAPI.getGroupVolume(ip: ip) {
             current = groupVolume
@@ -289,6 +377,15 @@ enum IntentHelper {
             title: SharedStorage.cachedTrackTitle,
             artist: SharedStorage.cachedArtist,
             album: SharedStorage.cachedAlbum)
+    }
+
+    static func targetPlaybackIP(groupId: String?) -> String? {
+        let cleanGroupId = groupId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !cleanGroupId.isEmpty {
+            return cleanGroupId
+        }
+        return SharedStorage.coordinatorIP ?? SharedStorage.speakerIP
     }
 
     @discardableResult
@@ -391,11 +488,12 @@ enum IntentHelper {
     static func sendRelayPlaybackCommand(
         _ command: String,
         fallbackGroupId: String,
+        groupId: String? = nil,
         volume: Int? = nil,
         nightMode: Bool? = nil,
         speechEnhancementRawLevel: Int? = nil
     ) async -> RelayClient.RelayPlaybackState? {
-        guard let route = relayCommandRoute(fallbackGroupId: fallbackGroupId) else {
+        guard let route = relayCommandRoute(fallbackGroupId: fallbackGroupId, groupId: groupId) else {
             return nil
         }
         return try? await RelayClient.sendLiveActivityCommand(
@@ -409,36 +507,50 @@ enum IntentHelper {
         )
     }
 
-    static func hasRelayCommandRoute(fallbackGroupId: String) -> Bool {
-        relayCommandRoute(fallbackGroupId: fallbackGroupId) != nil
+    static func hasRelayCommandRoute(fallbackGroupId: String, groupId: String? = nil) -> Bool {
+        relayCommandRoute(fallbackGroupId: fallbackGroupId, groupId: groupId) != nil
     }
 
-    private static func relayCommandRoute(fallbackGroupId: String) -> RelayClient.LiveActivityCommandRoute? {
-        RelayClient.liveActivityCommandRoute(
+    private static func relayCommandRoute(
+        fallbackGroupId: String,
+        groupId explicitGroupId: String? = nil
+    ) -> RelayClient.LiveActivityCommandRoute? {
+        let fallback = fallbackGroupId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicit = explicitGroupId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let routeGroupId = explicit.isEmpty ? fallback : explicit
+        let token = explicit.isEmpty
+            ? SharedStorage.liveActivityRelayPushToken(for: routeGroupId)
+            : SharedStorage.liveActivityRelayPushTokensByGroupID[routeGroupId]
+        return RelayClient.liveActivityCommandRoute(
             relayURLString: SharedStorage.relayURLString,
-            relayPushToken: SharedStorage.liveActivityRelayPushToken,
-            coordinatorIP: SharedStorage.coordinatorIP,
-            fallbackGroupId: fallbackGroupId
+            relayPushToken: token,
+            coordinatorIP: routeGroupId,
+            fallbackGroupId: routeGroupId
         )
     }
 
     static func sendRelaySoundbarNightModeCommand(
         _ enabled: Bool,
-        fallbackGroupId: String
+        fallbackGroupId: String,
+        groupId: String? = nil
     ) async -> RelayClient.RelayPlaybackState? {
         await sendRelayPlaybackCommand(
             "setSoundbarNightMode",
             fallbackGroupId: fallbackGroupId,
+            groupId: groupId,
             nightMode: enabled)
     }
 
     static func sendRelaySoundbarSpeechEnhancementCommand(
         _ level: SpeechEnhancementLevel,
-        fallbackGroupId: String
+        fallbackGroupId: String,
+        groupId: String? = nil
     ) async -> RelayClient.RelayPlaybackState? {
         await sendRelayPlaybackCommand(
             "setSoundbarSpeechEnhancement",
             fallbackGroupId: fallbackGroupId,
+            groupId: groupId,
             speechEnhancementRawLevel: level.rawValue)
     }
 
@@ -462,6 +574,7 @@ enum IntentHelper {
         await updateLiveActivityPlaybackState(
             trackInfo: info,
             isPlaying: state.isPlaying,
+            groupId: state.groupId,
             audioQualityLabel: state.audioQualityLabel,
             groupMemberCount: state.groupMemberCount,
             soundbarNightMode: state.soundbarNightMode,
@@ -471,6 +584,7 @@ enum IntentHelper {
     static func updateLiveActivityPlaybackState(
         trackInfo: TrackInfo?,
         isPlaying: Bool,
+        groupId: String? = nil,
         audioQualityLabel: String? = nil,
         groupMemberCount: Int? = nil,
         soundbarNightMode: Bool? = nil,
@@ -479,6 +593,7 @@ enum IntentHelper {
         guard let trackInfo else { return }
 
         for activity in Activity<SonosActivityAttributes>.activities {
+            guard liveActivity(activity, matches: groupId) else { continue }
             var state = LiveActivityPlaybackStateBuilder.replacing(
                 activity.content.state,
                 with: trackInfo,
@@ -509,10 +624,11 @@ enum IntentHelper {
         }
     }
 
-    static func updateLiveActivityPlayState(isPlaying: Bool) async {
+    static func updateLiveActivityPlayState(isPlaying: Bool, groupId: String? = nil) async {
         let now = Date()
 
         for activity in Activity<SonosActivityAttributes>.activities {
+            guard liveActivity(activity, matches: groupId) else { continue }
             var state = activity.content.state
             let currentPosition: Double
             if let startedAt = state.startedAt, state.durationSeconds > 0 {
@@ -541,9 +657,11 @@ enum IntentHelper {
 
     static func updateLiveActivitySoundbarState(
         nightMode: Bool? = nil,
-        speechEnhancement: SpeechEnhancementLevel? = nil
+        speechEnhancement: SpeechEnhancementLevel? = nil,
+        groupId: String? = nil
     ) async {
         for activity in Activity<SonosActivityAttributes>.activities {
+            guard liveActivity(activity, matches: groupId) else { continue }
             let oldState = activity.content.state
             let state = oldState.applyingSoundbarLiveActivityUpdate(
                 nightMode: nightMode,
@@ -555,5 +673,15 @@ enum IntentHelper {
                     state: state,
                     staleDate: Date().addingTimeInterval(60 * 60)))
         }
+    }
+
+    private static func liveActivity(
+        _ activity: Activity<SonosActivityAttributes>,
+        matches groupId: String?
+    ) -> Bool {
+        let cleanGroupId = groupId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !cleanGroupId.isEmpty else { return true }
+        return activity.attributes.groupId == cleanGroupId
     }
 }

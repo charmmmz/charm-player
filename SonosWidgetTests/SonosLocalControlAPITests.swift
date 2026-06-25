@@ -68,6 +68,17 @@ final class SonosLocalControlAPITests: XCTestCase {
         XCTAssertEqual(AudioQuality.from(cloudQuality: atmos)?.badgeAssetImageName, "BadgeDolbyAtmos")
     }
 
+    func testLocalPlaybackMetadataDoesNotGuessLosslessWhenFlagIsMissing() throws {
+        let incomplete = SonosCloudAPI.CloudTrackQuality(
+            codec: nil,
+            lossless: nil,
+            bitDepth: 16,
+            sampleRate: 44_100,
+            immersive: false)
+
+        XCTAssertNil(AudioQuality.from(cloudQuality: incomplete))
+    }
+
     func testLocalPlaybackMetadataKeepsLossySampleRateAsTextOnlyQuality() throws {
         let lossy = SonosCloudAPI.CloudTrackQuality(
             codec: nil,

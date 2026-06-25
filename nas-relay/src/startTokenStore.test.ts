@@ -37,6 +37,38 @@ test('registering a rotated push-to-start token replaces the previous token for 
   }
 });
 
+test('same push-to-start token can be registered for multiple client groups', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));
+  try {
+    const store = new StartTokenStore(dir, pino({ enabled: false }));
+
+    store.register({
+      groupId: '192.168.50.25',
+      token: 'shared-start-token',
+      clientId: 'phone-a',
+      speakerName: 'Playroom',
+    });
+    store.register({
+      groupId: '192.168.50.26',
+      token: 'shared-start-token',
+      clientId: 'phone-a',
+      speakerName: 'Move',
+    });
+
+    assert.deepEqual(
+      store.forGroup('192.168.50.25').map(entry => entry.speakerName),
+      ['Playroom'],
+    );
+    assert.deepEqual(
+      store.forGroup('192.168.50.26').map(entry => entry.speakerName),
+      ['Move'],
+    );
+    assert.equal(store.count(), 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('registering and pruning persists only the current token for the same client group', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));
   try {
@@ -104,6 +136,31 @@ test('recordStart stores an ISO timestamp for an existing token', async () => {
 
     assert.equal(store.forGroup('192.168.50.25')[0]?.lastStartAt, startedAt.toISOString());
     assert.equal(store.forGroup('192.168.50.25')[0]?.startAttemptCount, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordStart can update one group when the same token is registered for multiple groups', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));
+  try {
+    const store = new StartTokenStore(dir, pino({ enabled: false }));
+    store.register({
+      groupId: '192.168.50.25',
+      token: 'shared-start-token',
+      clientId: 'phone-a',
+    });
+    store.register({
+      groupId: '192.168.50.26',
+      token: 'shared-start-token',
+      clientId: 'phone-a',
+    });
+
+    const startedAt = new Date('2026-06-24T12:34:56.789Z');
+    store.recordStart('shared-start-token', startedAt, '192.168.50.25');
+
+    assert.equal(store.forGroup('192.168.50.25')[0]?.lastStartAt, startedAt.toISOString());
+    assert.equal(store.forGroup('192.168.50.26')[0]?.lastStartAt, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

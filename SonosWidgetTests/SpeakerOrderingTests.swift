@@ -307,6 +307,18 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(manager.groupStatuses[1].transportState, .playing)
     }
 
+    func testSpeakerSelectionMatchRejectsStaleRefreshTarget() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let move = makePlayer(id: "move", name: "Move", groupId: "move-group")
+
+        XCTAssertFalse(
+            SonosManager.speakerSelectionMatches(move, expectedSpeakerID: playroom.id)
+        )
+        XCTAssertTrue(
+            SonosManager.speakerSelectionMatches(playroom, expectedSpeakerID: playroom.id)
+        )
+    }
+
     func testSpeakerSelectionArtworkRestoreUsesMatchingGroupImage() {
         let image = makeImage(color: .systemYellow)
         let track = TrackInfo(

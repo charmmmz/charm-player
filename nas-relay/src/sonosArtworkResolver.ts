@@ -4,12 +4,17 @@ import { ITunesArtworkClient, type ITunesArtworkSearchInput } from './itunesArtw
 
 export type SonosArtworkResolutionSource =
   | 'getaa'
+  | 'itunes-lookup'
+  | 'itunes-search'
   | 'none';
 
 export interface SonosArtworkResolution {
   source: SonosArtworkResolutionSource;
   url: string | null;
   catalogID?: string | null;
+  fallbackSource?: SonosArtworkResolutionSource | null;
+  fallbackUrl?: string | null;
+  fallbackCatalogID?: string | null;
 }
 
 export interface SonosArtworkResolveInput {
@@ -78,9 +83,32 @@ export function createSonosArtworkResolver(options: SonosArtworkResolverOptions 
           countryCode: input.countryCode ?? countryCode,
           itunes,
         };
-        void probeITunesArtwork(probeInput)
-          .then(result => logITunesArtworkProbe(logger, probeInput, result))
-          .catch(error => logITunesArtworkProbe(logger, probeInput, {
+        if (shouldUseITunesArtworkForLiveRadio(input)) {
+          const result = await probeITunesArtwork(probeInput);
+          logITunesArtworkProbe(logger, probeInput, result, 'iTunes artwork probe');
+          if (result.status === 'hit' && result.url) {
+            return {
+              source: result.method === 'lookup' ? 'itunes-lookup' : 'itunes-search',
+              url: result.url,
+              catalogID: result.catalogID,
+            };
+          }
+          return resolution;
+        }
+
+        try {
+          const result = await probeITunesArtwork(probeInput);
+          logITunesArtworkProbe(logger, probeInput, result, 'iTunes artwork shadow probe');
+          if (result.status === 'hit' && result.url && result.url !== resolution.url) {
+            return {
+              ...resolution,
+              fallbackSource: result.method === 'lookup' ? 'itunes-lookup' : 'itunes-search',
+              fallbackUrl: result.url,
+              fallbackCatalogID: result.catalogID,
+            };
+          }
+        } catch (error) {
+          logITunesArtworkProbe(logger, probeInput, {
             status: 'error',
             method: null,
             lookupStatus: 'skipped',
@@ -89,7 +117,8 @@ export function createSonosArtworkResolver(options: SonosArtworkResolverOptions 
             catalogID: null,
             ms: 0,
             error,
-          }));
+          }, 'iTunes artwork shadow probe');
+        }
       }
       return resolution;
     },
@@ -204,6 +233,7 @@ function logITunesArtworkProbe(
   logger: Pick<Logger, 'info' | 'warn'> | null,
   input: SonosArtworkResolveInput,
   result: ITunesArtworkProbeResult,
+  message: string,
 ): void {
   if (!logger || result.status === 'skipped') return;
 
@@ -227,7 +257,21 @@ function logITunesArtworkProbe(
     resolvedAlbumArtUri: summarizeArtworkLogValue(result.url),
     ms: result.ms,
     ...(result.error ? { err: result.error } : {}),
-  }, 'iTunes artwork shadow probe');
+  }, message);
+}
+
+function shouldUseITunesArtworkForLiveRadio(input: SonosArtworkResolveInput): boolean {
+  if ((input.playbackSourceRaw ?? '').trim().toLowerCase() !== 'applemusic') return false;
+  return isAppleMusicLiveRadioUri(input.trackUri) || isAppleMusicLiveRadioUri(input.albumArtUri);
+}
+
+function isAppleMusicLiveRadioUri(value: string | null | undefined): boolean {
+  return sonosObjectCandidates(value)
+    .map(candidate => decodeRepeated(candidate).toLowerCase())
+    .some(candidate =>
+      candidate.startsWith('x-sonosapi-hls:hls:ra.')
+      || candidate.includes('u=x-sonosapi-hls:hls:ra.')
+    );
 }
 
 function sonosObjectCandidates(value: string | null | undefined): string[] {

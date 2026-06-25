@@ -20,7 +20,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
     attributes: LiveActivityStartAttributes,
     state: LiveActivityContentState
   ) => Promise<ApnsResult>;
-  recordStart: (token: string, date: Date) => void;
+  recordStart: (token: string, date: Date, groupId: string) => void;
   unregisterStartToken: (token: string) => void;
   now: Date;
 }): Promise<{ reason: string; sent: number; failed: number }> {
@@ -45,7 +45,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
   const result = await input.pushStart(targetTokens, attributes, state);
 
   for (const token of targetTokens) {
-    input.recordStart(token, input.now);
+    input.recordStart(token, input.now, input.snap.groupId);
   }
   for (const token of result.unregistered) {
     input.unregisterStartToken(token);

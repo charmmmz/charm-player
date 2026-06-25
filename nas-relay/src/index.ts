@@ -17,6 +17,8 @@ import { Cs2GameStateService } from './cs2GameState.js';
 import { createCs2GameStateRouter } from './cs2Routes.js';
 import { Cs2LightingService } from './cs2Lighting.js';
 import { createPlaybackStateRouter } from './playbackStateRoutes.js';
+import { DeviceLogService } from './deviceLogs.js';
+import { createDeviceLogRouter } from './deviceLogRoutes.js';
 import { shouldIgnoreHttpAutoLog } from './httpLogging.js';
 import {
   buildLiveActivityContentState,
@@ -82,6 +84,7 @@ async function main(): Promise<void> {
   );
   await hueAmbience.load();
   const cs2GameState = new Cs2GameStateService();
+  const deviceLogs = new DeviceLogService();
   const cs2Lighting = new Cs2LightingService(hueConfigStore, undefined, {
     beforeRender: () => hueAmbience.pauseForExternalRenderer(),
     logger: log.child({ module: 'cs2-lighting' }),
@@ -231,7 +234,7 @@ async function main(): Promise<void> {
         pushStart: (targetTokens, attributes, state) => (
           apns.pushStart(targetTokens, attributes, state)
         ),
-        recordStart: (token, date) => startTokens.recordStart(token, date),
+        recordStart: (token, date, groupId) => startTokens.recordStart(token, date, groupId),
         unregisterStartToken: token => startTokens.unregister(token),
         now,
       });
@@ -311,6 +314,7 @@ async function main(): Promise<void> {
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createCs2GameStateRouter(cs2GameState, log.child({ module: 'cs2' })));
+  app.use('/api', createDeviceLogRouter(deviceLogs, log.child({ module: 'device-logs' })));
 
   cs2GameState.on('state', snapshot => {
     void cs2Lighting.receive(snapshot);
@@ -360,6 +364,12 @@ async function main(): Promise<void> {
       return;
     }
 
+    const activeActivityIds = Array.isArray(body.activeActivityIds)
+      ? body.activeActivityIds
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        .map(id => id.trim())
+      : undefined;
+
     log.info(
       {
         source: 'relay',
@@ -369,6 +379,8 @@ async function main(): Promise<void> {
         clientId: body.clientId ?? null,
         speakerName: body.speakerName ?? null,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
+        activeActivityCount: activeActivityIds?.length ?? null,
+        clearDismissalSuppression: body.clearDismissalSuppression === true,
       },
       'live_activity',
     );
@@ -379,10 +391,42 @@ async function main(): Promise<void> {
       speakerName: body.speakerName,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
     });
+    if (body.clearDismissalSuppression === true) {
+      const removed = liveActivityDismissals.clearForActivity(body.groupId, body.clientId);
+      log.info(
+        {
+          source: 'relay',
+          action: 'dismissal-suppression-clear',
+          trigger: 'register-push-to-start',
+          groupId: body.groupId,
+          clientId: body.clientId ?? null,
+          removed,
+        },
+        'live_activity',
+      );
+    }
     liveActivityPreferences.update({
       groupId: body.groupId,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
     });
+    if (activeActivityIds !== undefined) {
+      const removed = tokens.pruneStaleClientActivities(
+        body.groupId,
+        body.clientId,
+        activeActivityIds,
+      );
+      log.info(
+        {
+          source: 'relay',
+          action: 'activity-token-prune',
+          groupId: body.groupId,
+          clientId: body.clientId ?? null,
+          activeActivityCount: activeActivityIds.length,
+          removed,
+        },
+        'live_activity',
+      );
+    }
 
     const snap = sonos.current(body.groupId);
     if (snap?.isPlaying) {
@@ -530,7 +574,6 @@ async function main(): Promise<void> {
     liveActivityPreferences.update({
       groupId: body.groupId,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
-      nowPlaying: body.nowPlaying,
     });
 
     log.info(
@@ -539,8 +582,6 @@ async function main(): Promise<void> {
         action: 'preferences-update',
         groupId: body.groupId,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
-        hasNowPlayingHint: Boolean(body.nowPlaying),
-        nowPlayingTrackTitle: body.nowPlaying?.trackTitle ?? null,
       },
       'live_activity',
     );
@@ -750,6 +791,7 @@ function summarizeLiveActivityState(state: LiveActivityContentState): Record<str
     durationSeconds: Math.round(state.durationSeconds),
     color: state.dominantColorHex ?? null,
     artBytes: base64ByteLength(state.albumArtThumbnail),
+    artworkTraceId: state.artworkTraceId ?? null,
     groupMemberCount: state.groupMemberCount,
     playbackSourceRaw: state.playbackSourceRaw ?? null,
     liveActivityStyleRaw: state.liveActivityStyleRaw ?? null,

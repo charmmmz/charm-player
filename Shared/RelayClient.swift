@@ -378,6 +378,39 @@ enum RelayClient {
         try validate(response)
     }
 
+    // MARK: - Device diagnostics
+
+    struct DeviceLogEntryBody: Encodable, Sendable {
+        let timestamp: String
+        let category: String
+        let level: String
+        let message: String
+        let line: String
+    }
+
+    struct DeviceLogBody: Encodable, Sendable {
+        let clientId: String
+        let bundleId: String?
+        let processName: String?
+        let entries: [DeviceLogEntryBody]
+    }
+
+    static func deviceLogsURL(baseURL: URL) -> URL {
+        baseURL.appendingPathComponent("/api/device-logs")
+    }
+
+    static func postDeviceLogs(baseURL: URL, body: DeviceLogBody) async throws {
+        guard !body.entries.isEmpty else { return }
+
+        let url = deviceLogsURL(baseURL: baseURL)
+        var request = URLRequest(url: url, timeoutInterval: 2)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await noProxySession.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - Activity registration
 
     /// Sent in the JSON body of `POST /api/register-activity`.
@@ -407,6 +440,11 @@ enum RelayClient {
         }
     }
 
+    struct ActivityRegistrationResponse: Decodable, Sendable {
+        let ok: Bool
+        let initialState: SonosActivityAttributes.ContentState?
+    }
+
     static func registerActivity(
         baseURL: URL,
         groupId: String,
@@ -415,7 +453,7 @@ enum RelayClient {
         activityId: String,
         speakerName: String,
         liveActivityStyleRaw: String?
-    ) async throws {
+    ) async throws -> ActivityRegistrationResponse {
         let url = baseURL.appendingPathComponent("/api/register-activity")
         var request = URLRequest(url: url, timeoutInterval: 5)
         request.httpMethod = "POST"
@@ -429,8 +467,9 @@ enum RelayClient {
             liveActivityStyleRaw: liveActivityStyleRaw
         )
         request.httpBody = try JSONEncoder().encode(body)
-        let (_, response) = try await noProxySession.data(for: request)
+        let (data, response) = try await noProxySession.data(for: request)
         try validate(response)
+        return try JSONDecoder().decode(ActivityRegistrationResponse.self, from: data)
     }
 
     /// Sent in the JSON body of `POST /api/register-push-to-start`.
@@ -440,6 +479,8 @@ enum RelayClient {
         let clientId: String
         let speakerName: String?
         let liveActivityStyleRaw: String?
+        let activeActivityIds: [String]
+        let clearDismissalSuppression: Bool
     }
 
     static func registerPushToStart(
@@ -448,7 +489,9 @@ enum RelayClient {
         token: String,
         clientId: String,
         speakerName: String?,
-        liveActivityStyleRaw: String?
+        liveActivityStyleRaw: String?,
+        activeActivityIds: [String],
+        clearDismissalSuppression: Bool = false
     ) async throws {
         let url = baseURL.appendingPathComponent("/api/register-push-to-start")
         var request = URLRequest(url: url, timeoutInterval: 5)
@@ -460,7 +503,9 @@ enum RelayClient {
                 token: token,
                 clientId: clientId,
                 speakerName: speakerName,
-                liveActivityStyleRaw: liveActivityStyleRaw
+                liveActivityStyleRaw: liveActivityStyleRaw,
+                activeActivityIds: activeActivityIds,
+                clearDismissalSuppression: clearDismissalSuppression
             )
         )
         let (_, response) = try await noProxySession.data(for: request)
@@ -608,24 +653,9 @@ enum RelayClient {
 
     // MARK: - Live Activity preferences
 
-    /// App-owned presentation preferences plus a short-lived live-stream
-    /// metadata hint matching the Now Playing UI when the app is alive.
-    struct LiveActivityNowPlayingHint: Encodable, Sendable {
-        let trackTitle: String
-        let artist: String?
-        let album: String?
-        let albumArtUri: String?
-        let isPlaying: Bool?
-        let positionSeconds: Double?
-        let durationSeconds: Double?
-        let playbackSourceRaw: String?
-        let audioQualityLabel: String?
-    }
-
     struct LiveActivityPreferencesBody: Encodable, Sendable {
         let groupId: String
         let liveActivityStyleRaw: String?
-        let nowPlaying: LiveActivityNowPlayingHint?
     }
 
     static func postLiveActivityPreferences(

@@ -195,6 +195,7 @@ final class SonosManager {
     /// `refreshState` ticks (e.g. user scrubbing) doesn't fan out to a
     /// burst of `nowplaying` requests.
     private static let cloudQualityRefreshCooldown: TimeInterval = 15
+    private static let localPlaybackMetadataQualityRetryDelayNanoseconds: UInt64 = 350_000_000
     private static let albumArtColorTransitionDuration: TimeInterval = 0.45
     private static let fastRefreshIntervalSeconds = 3
     private static let lanEventWatchdogRefreshIntervalSeconds = 30
@@ -224,6 +225,10 @@ final class SonosManager {
     private var pushToStartTokenTask: Task<Void, Never>?
     private var activityUpdatesTask: Task<Void, Never>?
     private var activityStateTask: Task<Void, Never>?
+    private var remoteLiveActivitiesByGroupID: [String: Activity<SonosActivityAttributes>] = [:]
+    private var pushTokenTasksByActivityID: [String: Task<Void, Never>] = [:]
+    private var activityStateTasksByActivityID: [String: Task<Void, Never>] = [:]
+    private var registeredPushTokensByActivityID: [String: String] = [:]
     private var inFlightPushToStartRegistrationKey: String?
     /// Most recent Live Activity push token we successfully POSTed to the
     /// relay. We keep this around so `stopLiveActivity` can fire a DELETE
@@ -273,7 +278,7 @@ final class SonosManager {
     private(set) var transportBackend: TransportBackend = .unknown
     /// Serializes probes so concurrent callers (app foreground + manual
     /// refresh + selectSpeaker) coalesce into a single TCP check.
-    private var probeTask: Task<TransportBackend, Never>?
+    private var probeTask: (speakerID: String, task: Task<TransportBackend, Never>)?
 
     private nonisolated static let albumArtSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -359,6 +364,17 @@ final class SonosManager {
     private var playbackIP: String? { selectedSpeaker?.playbackIP }
     /// IP for volume commands (individual speaker)
     private var volumeIP: String? { selectedSpeaker?.ipAddress }
+
+    nonisolated static func speakerSelectionMatches(
+        _ selectedSpeaker: SonosPlayer?,
+        expectedSpeakerID: String
+    ) -> Bool {
+        selectedSpeaker?.id == expectedSpeakerID
+    }
+
+    private func speakerSelectionMatches(expectedSpeakerID: String) -> Bool {
+        Self.speakerSelectionMatches(selectedSpeaker, expectedSpeakerID: expectedSpeakerID)
+    }
 
     private func currentGroupStatusIndex() -> Int? {
         guard let selected = selectedSpeaker else { return nil }
@@ -679,10 +695,14 @@ final class SonosManager {
         isLoading = false
     }
 
-    func selectSpeaker(_ speaker: SonosPlayer) async {
+    func selectSpeaker(
+        _ speaker: SonosPlayer,
+        userInitiatedLiveActivityResume: Bool = false
+    ) async {
         let previousLiveActivityGroupId = liveActivityGroupId()
         let previousSpeakerName = selectedSpeaker?.name
         let previousPlaybackIP = selectedSpeaker?.playbackIP
+        let expectedSpeakerID = speaker.id
         let targetGroup = groupStatuses.first(where: {
             $0.coordinator.id == speaker.id || $0.coordinator.groupId == speaker.groupId
         })
@@ -709,6 +729,7 @@ final class SonosManager {
 
         if Self.shouldRecreateLiveActivityForSpeakerChange(
             currentActivityExists: currentActivity != nil,
+            usesRelay: currentActivityUsesRelay,
             previousGroupId: previousLiveActivityGroupId,
             nextGroupId: nextLiveActivityGroupId
         ) {
@@ -723,6 +744,42 @@ final class SonosManager {
                                 "newSpeaker=\(Self.liveActivityLogValue(speaker.name))"
                             ])
             stopLiveActivity()
+        } else if currentActivity != nil,
+                  previousLiveActivityGroupId != nil,
+                  nextLiveActivityGroupId != nil,
+                  previousLiveActivityGroupId != nextLiveActivityGroupId {
+            logLiveActivity(action: "recreate-deferred",
+                            activityID: currentActivity?.id,
+                            mode: currentActivityUsesRelay ? "relay-token" : "local",
+                            reason: "selected-speaker-changed",
+                            groupId: nextLiveActivityGroupId,
+                            extra: [
+                                "oldGroupId=\(Self.liveActivityLogValue(previousLiveActivityGroupId ?? "nil"))",
+                                "oldSpeaker=\(Self.liveActivityLogValue(previousSpeakerName ?? "nil"))",
+                                "newSpeaker=\(Self.liveActivityLogValue(speaker.name))"
+                            ])
+        }
+
+        if userInitiatedLiveActivityResume,
+           let token = SharedStorage.liveActivityPushToStartToken,
+           let nextLiveActivityGroupId {
+            registerPushToStartTokenIfPossible(
+                token,
+                reason: "selected-speaker-user",
+                clearDismissalSuppressionForGroupId: nextLiveActivityGroupId
+            )
+        }
+
+        if let nextLiveActivityGroupId,
+           !remoteLiveActivitiesByGroupID.isEmpty {
+            currentActivity = remoteLiveActivitiesByGroupID[nextLiveActivityGroupId]
+            currentActivityUsesRelay = currentActivity != nil
+            lastRegisteredPushToken = currentActivity.flatMap {
+                registeredPushTokensByActivityID[$0.id]
+            }
+            SharedStorage.liveActivityRelayPushToken =
+                SharedStorage.liveActivityRelayPushTokensByGroupID[nextLiveActivityGroupId]
+            liveActivityRelayWriterReady = SharedStorage.liveActivityRelayPushToken != nil
         }
 
         albumArtTask?.cancel()
@@ -778,8 +835,10 @@ final class SonosManager {
         // the Home tab's first paint happens, so ordering it explicitly keeps
         // the initial "Loading speakers…" window minimal.
         await resolveCloudGroupId()
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         _ = await probeBackend()
-        await refreshState()
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+        await refreshState(expectedSpeakerID: expectedSpeakerID)
     }
 
     static func cachedArtworkForSpeakerSelection(
@@ -1753,6 +1812,11 @@ final class SonosManager {
             // state for a genuinely unreachable speaker.
             return
         }
+
+        if let token = SharedStorage.liveActivityPushToStartToken,
+           RelayManager.shared.isAvailable {
+            registerPushToStartTokenIfPossible(token, reason: "group-status-refresh")
+        }
     }
 
     private func refreshAllGroupStatusesLAN() async {
@@ -2115,16 +2179,24 @@ final class SonosManager {
     /// API polling (slower, lighter) via `transportBackend`. `.unknown`
     /// triggers a probe first, then fills in whichever pipe succeeded.
     func refreshState() async {
+        guard let expectedSpeakerID = selectedSpeaker?.id else { return }
+        await refreshState(expectedSpeakerID: expectedSpeakerID)
+    }
+
+    private func refreshState(expectedSpeakerID: String) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+
         switch transportBackend {
         case .lan:
-            await refreshStateLAN()
+            await refreshStateLAN(expectedSpeakerID: expectedSpeakerID)
         case .cloud:
-            await refreshStateCloud()
+            await refreshStateCloud(expectedSpeakerID: expectedSpeakerID)
         case .unknown:
             _ = await probeBackend()
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             // After probe, route accordingly (one level of recursion max).
-            if transportBackend == .lan { await refreshStateLAN() }
-            else if transportBackend == .cloud { await refreshStateCloud() }
+            if transportBackend == .lan { await refreshStateLAN(expectedSpeakerID: expectedSpeakerID) }
+            else if transportBackend == .cloud { await refreshStateCloud(expectedSpeakerID: expectedSpeakerID) }
             else {
                 // Still nothing — keep existing state, surface friendly error.
                 connectionState = .disconnected
@@ -2316,12 +2388,18 @@ final class SonosManager {
     }
 
     private func refreshStateLAN() async {
+        guard let expectedSpeakerID = selectedSpeaker?.id else { return }
+        await refreshStateLAN(expectedSpeakerID: expectedSpeakerID)
+    }
+
+    private func refreshStateLAN(expectedSpeakerID: String) async {
         await lanRefreshGate.run { [weak self] in
-            await self?.performRefreshStateLAN()
+            await self?.performRefreshStateLAN(expectedSpeakerID: expectedSpeakerID)
         }
     }
 
-    private func performRefreshStateLAN() async {
+    private func performRefreshStateLAN(expectedSpeakerID: String) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         guard let pIP = playbackIP else { return }
         do {
             async let t = SonosAPI.getTransportInfo(ip: pIP)
@@ -2329,13 +2407,20 @@ final class SonosManager {
             async let v = SonosAPI.getGroupVolume(ip: pIP)
             async let m = SonosAPI.getPlayMode(ip: pIP)
             async let mediaURI = SonosAPI.getMediaInfo(ip: pIP)
-            applyIncomingTransportState(try await t)
+
+            let incomingTransport = try await t
             // `getPositionInfo` already ran `PlaybackSource.from(trackURI:)`
             // which consults SharedStorage's sid → name map for services
             // whose local sid varies per install (NetEase etc.), so we no
             // longer need a manual second pass here.
             let positionInfo = try await p
             let groupVolume = try await v
+            let mode = try await m
+            let mediaURIValue = try? await mediaURI
+
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+
+            applyIncomingTransportState(incomingTransport)
             volume = groupVolume
             if let idx = currentGroupStatusIndex() {
                 groupStatuses[idx].volume = groupVolume
@@ -2345,15 +2430,16 @@ final class SonosManager {
             // be wasted SOAP calls (and most non-soundbars 402 on it).
             if positionInfo.source == .tv {
                 await refreshSoundbarEQ()
+                guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             }
-            let mode = try await m
-            isPlayingFromQueue = (try? await mediaURI)?.hasPrefix("x-rincon-queue:") ?? true
+            isPlayingFromQueue = mediaURIValue?.hasPrefix("x-rincon-queue:") ?? true
             if Date() > playModeLockUntil {
                 isShuffling = mode.shuffle
                 repeatMode = mode.repeat
             }
 
             let localMetadata = await fetchLocalControlPlaybackMetadata(ip: pIP)
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             let incomingTrackInfo = Self.lanTrackInfo(
                 positionInfo,
                 localMetadata: localMetadata,
@@ -2375,15 +2461,18 @@ final class SonosManager {
             errorMessage = nil
             ensureEventSubscriptionsIfNeeded()
 
-            await enrichAudioQualityFromCloud()
+            await enrichAudioQualityFromCloud(expectedSpeakerID: expectedSpeakerID)
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             syncCurrentGroupStatusFromPlaybackState()
             updateSharedCache()
             await loadAlbumArt()
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             MusicAmbienceManager.shared.receive(snapshot: musicAmbienceSnapshot())
             if queueLoaded { await loadQueue() }
             managePositionTimer()
             manageLiveActivity()
         } catch {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             consecutiveFailures += 1
             if consecutiveFailures >= Self.maxConsecutiveRefreshFailures {
                 connectionState = .disconnected
@@ -2402,8 +2491,15 @@ final class SonosManager {
     /// than the LAN path — no queue, no raw transport URI, no per-speaker
     /// volume — but enough to populate the mini-player and now-playing UI.
     private func refreshStateCloud() async {
+        guard let expectedSpeakerID = selectedSpeaker?.id else { return }
+        await refreshStateCloud(expectedSpeakerID: expectedSpeakerID)
+    }
+
+    private func refreshStateCloud(expectedSpeakerID: String) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         guard let gid = cloudGroupId,
               let token = await SonosAuth.shared.validAccessToken() else {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             connectionState = .disconnected
             return
         }
@@ -2417,6 +2513,8 @@ final class SonosManager {
             let status = try await statusCall
             let meta = try await metaCall
             let groupVolume = try? await volumeCall
+
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
 
             applyIncomingTransportState(
                 Self.transportState(fromCloudPlaybackState: status.playbackState))
@@ -2468,6 +2566,7 @@ final class SonosManager {
             }
             trackInfo = info
             await resolveCurrentAppleMusicArtworkIfNeeded()
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
 
             positionSeconds = positionSec
             durationSeconds = durationSec
@@ -2486,12 +2585,15 @@ final class SonosManager {
 
             updateSharedCache()
             await loadAlbumArt()
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             MusicAmbienceManager.shared.receive(snapshot: musicAmbienceSnapshot())
             managePositionTimer()
             manageLiveActivity()
         } catch SonosCloudError.unauthorized {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             _ = await SonosAuth.shared.refreshAccessToken()
         } catch {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             consecutiveFailures += 1
             if consecutiveFailures >= Self.maxConsecutiveRefreshFailures {
                 connectionState = .disconnected
@@ -2532,12 +2634,21 @@ final class SonosManager {
     /// probe.
     @discardableResult
     func probeBackend() async -> TransportBackend {
-        if let task = probeTask { return await task.value }
+        guard let speaker = selectedSpeaker else { return .unknown }
+        let expectedSpeakerID = speaker.id
+        let expectedPlaybackIP = speaker.playbackIP
 
-        let task = Task<TransportBackend, Never> { [weak self] in
+        if let probeTask, probeTask.speakerID == expectedSpeakerID {
+            return await probeTask.task.value
+        }
+
+        let task = Task<TransportBackend, Never> { [weak self, expectedSpeakerID, expectedPlaybackIP] in
             guard let self else { return .unknown }
-            let result = await self.runBackendProbe()
+            let result = await self.runBackendProbe(playbackIP: expectedPlaybackIP)
             await MainActor.run {
+                guard self.speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else {
+                    return
+                }
                 self.transportBackend = result
                 if result != .lan {
                     self.stopEventSubscriptions()
@@ -2546,8 +2657,12 @@ final class SonosManager {
             }
             return result
         }
-        probeTask = task
-        defer { probeTask = nil }
+        probeTask = (speakerID: expectedSpeakerID, task: task)
+        defer {
+            if probeTask?.speakerID == expectedSpeakerID {
+                probeTask = nil
+            }
+        }
         return await task.value
     }
 
@@ -2561,9 +2676,7 @@ final class SonosManager {
     }
 
     /// Pure probe logic; always returns the decision without touching state.
-    private func runBackendProbe() async -> TransportBackend {
-        guard let ip = playbackIP else { return .unknown }
-
+    private func runBackendProbe(playbackIP ip: String) async -> TransportBackend {
         // Try a 1s TCP connect to the speaker's control port. Anything that
         // answers the TCP handshake is "LAN reachable" for our purposes —
         // we don't need to verify UPnP semantics here, the next real SOAP
@@ -2678,6 +2791,7 @@ final class SonosManager {
               let token = await SonosAuth.shared.validAccessToken() else {
             return
         }
+        let expectedSpeakerID = speaker.id
 
         do {
             if SonosAuth.shared.householdId == nil {
@@ -2690,6 +2804,7 @@ final class SonosManager {
             }
 
             let response = try await SonosCloudAPI.getGroups(token: token, householdId: householdId)
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             let rincon = speaker.id
 
             cloudGroupId = response.groups.first(where: { group in
@@ -2882,9 +2997,11 @@ final class SonosManager {
 
         if let groupId = localControlGroupIdsByPlayerId[playerId] {
             do {
-                let metadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
-                logLocalControlMetadata(metadata, groupId: groupId, playerId: playerId)
-                return metadata
+                return try await fetchLocalControlPlaybackMetadata(
+                    ip: ip,
+                    groupId: groupId,
+                    playerId: playerId
+                )
             } catch {
                 localControlGroupIdsByPlayerId[playerId] = nil
                 logAudioQualityDiagnostic(action: "local-control-refresh-group", extra: [
@@ -2904,9 +3021,11 @@ final class SonosManager {
                 return nil
             }
             localControlGroupIdsByPlayerId[playerId] = groupId
-            let metadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
-            logLocalControlMetadata(metadata, groupId: groupId, playerId: playerId)
-            return metadata
+            return try await fetchLocalControlPlaybackMetadata(
+                ip: ip,
+                groupId: groupId,
+                playerId: playerId
+            )
         } catch {
             logAudioQualityDiagnostic(action: "local-control-failed", extra: [
                 "playerId=\(Self.liveActivityLogValue(playerId))",
@@ -2914,6 +3033,59 @@ final class SonosManager {
             ])
             return nil
         }
+    }
+
+    private func fetchLocalControlPlaybackMetadata(
+        ip: String,
+        groupId: String,
+        playerId: String
+    ) async throws -> SonosCloudAPI.CloudPlaybackMetadata {
+        let metadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
+        logLocalControlMetadata(metadata, groupId: groupId, playerId: playerId)
+
+        guard Self.playbackMetadataQualityNeedsRetry(metadata) else {
+            return metadata
+        }
+
+        logAudioQualityDiagnostic(action: "local-control-quality-retry", extra: [
+            "groupId=\(Self.liveActivityLogValue(groupId))",
+            "playerId=\(Self.liveActivityLogValue(playerId))",
+            "reason=incomplete-quality"
+        ])
+
+        do {
+            try await Task.sleep(nanoseconds: Self.localPlaybackMetadataQualityRetryDelayNanoseconds)
+            let retryMetadata = try await SonosLocalControlAPI.getPlaybackMetadata(ip: ip, groupId: groupId)
+            logLocalControlMetadata(retryMetadata, groupId: groupId, playerId: playerId)
+            return retryMetadata
+        } catch {
+            if error is CancellationError { throw error }
+            logAudioQualityDiagnostic(action: "local-control-quality-retry-failed", extra: [
+                "groupId=\(Self.liveActivityLogValue(groupId))",
+                "playerId=\(Self.liveActivityLogValue(playerId))",
+                "reason=\(Self.liveActivityLogValue(error.localizedDescription))"
+            ])
+            return metadata
+        }
+    }
+
+    nonisolated static func playbackMetadataQualityNeedsRetry(
+        _ metadata: SonosCloudAPI.CloudPlaybackMetadata
+    ) -> Bool {
+        guard let quality = metadata.currentItem?.track?.quality else { return false }
+        return playbackMetadataQualityNeedsRetry(quality)
+    }
+
+    private nonisolated static func playbackMetadataQualityNeedsRetry(
+        _ quality: SonosCloudAPI.CloudTrackQuality
+    ) -> Bool {
+        let codec = quality.codec?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let hasGenericCodec = codec.isEmpty || codec == "audio"
+        let hasAudioParameters = quality.bitDepth != nil || quality.sampleRate != nil
+        return quality.lossless == nil
+            && quality.immersive != true
+            && hasGenericCodec
+            && hasAudioParameters
     }
 
     private func localControlPlayerId(forPlaybackIP ip: String) -> String? {
@@ -2974,7 +3146,8 @@ final class SonosManager {
     /// first-party streaming services, this is effectively the *only* path
     /// that sets `audioQuality` for Apple Music / Spotify / etc. — making
     /// Cloud the single source of truth as long as the user is logged in.
-    private func enrichAudioQualityFromCloud() async {
+    private func enrichAudioQualityFromCloud(expectedSpeakerID: String) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         let trackKey = Self.cloudQualityTrackKey(for: trackInfo)
         let loggedIn = SonosAuth.shared.isLoggedIn
 
@@ -3040,17 +3213,20 @@ final class SonosManager {
         if cloudGroupId == nil {
             await resolveCloudGroupId()
         }
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         guard let groupId = cloudGroupId else {
             logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=missing-cloud-group"])
             return
         }
         guard let token = await SonosAuth.shared.validAccessToken() else {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: ["reason=missing-token"])
             return
         }
 
         do {
             let metadata = try await fetchPlaybackMetadata(token: token, groupId: groupId)
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             if let quality = metadata.currentItem?.track?.quality,
                let mapped = AudioQuality.from(cloudQuality: quality) {
                 trackInfo?.audioQuality = mapped
@@ -3079,9 +3255,11 @@ final class SonosManager {
             }
             lastEnrichedTrackKey = trackKey
         } catch SonosCloudError.unauthorized {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             logAudioQualityDiagnostic(action: "cloud-enrich-failed", extra: ["reason=unauthorized"])
             _ = await SonosAuth.shared.refreshAccessToken()
         } catch {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             lastEnrichedTrackKey = trackKey
             SonosLog.error(.sonosCloud, "playbackMetadata error: \(error)")
             logAudioQualityDiagnostic(action: "cloud-enrich-failed", extra: [
@@ -3406,6 +3584,11 @@ final class SonosManager {
 
     // MARK: - Live Activity
 
+    private struct LiveActivityStartRegistrationTarget: Hashable {
+        let groupId: String
+        let speakerName: String?
+    }
+
     private func manageLiveActivity() {
         guard let speaker = selectedSpeaker else {
             logLiveActivity(action: "skip", reason: "no-selected-speaker")
@@ -3416,22 +3599,39 @@ final class SonosManager {
         // after a process relaunch. We keep it alive and continue local
         // updates regardless of whether it was originally local or push-token.
         if currentActivity == nil {
-            currentActivity = Activity<SonosActivityAttributes>.activities.first
-            if let currentActivity {
-                currentActivityUsesRelay = RelayManager.shared.isAvailable
-                logLiveActivity(action: "reattach", activityID: currentActivity.id,
-                                mode: currentActivityUsesRelay ? "relay-token" : "local")
+            let activities = Activity<SonosActivityAttributes>.activities
+            let usesRelay = RelayManager.shared.isAvailable
+            for activity in activities {
+                let groupId = activity.attributes.groupId ?? liveActivityGroupId() ?? activity.attributes.speakerName
+                remoteLiveActivitiesByGroupID[groupId] = activity
+                logLiveActivity(action: "reattach", activityID: activity.id,
+                                mode: usesRelay ? "relay-token" : "local",
+                                groupId: groupId)
                 spawnActivityStateObserver(
-                    activity: currentActivity,
-                    groupId: currentActivity.attributes.groupId ?? liveActivityGroupId(),
-                    usesRelay: currentActivityUsesRelay
+                    activity: activity,
+                    groupId: groupId,
+                    usesRelay: usesRelay
                 )
-                if currentActivityUsesRelay {
+                if usesRelay {
                     spawnPushTokenObserver(
-                        activity: currentActivity,
-                        speakerName: currentActivity.attributes.speakerName
+                        activity: activity,
+                        speakerName: activity.attributes.speakerName
                     )
                 }
+            }
+            if let selectedGroupId = liveActivityGroupId() {
+                currentActivity = remoteLiveActivitiesByGroupID[selectedGroupId]
+            } else {
+                currentActivity = activities.first
+            }
+            currentActivityUsesRelay = currentActivity.map { _ in usesRelay } ?? false
+            if currentActivityUsesRelay, let selectedGroupId = liveActivityGroupId() {
+                SharedStorage.liveActivityRelayPushToken =
+                    SharedStorage.liveActivityRelayPushTokensByGroupID[selectedGroupId]
+                lastRegisteredPushToken = currentActivity.flatMap {
+                    registeredPushTokensByActivityID[$0.id]
+                } ?? SharedStorage.liveActivityRelayPushToken
+                liveActivityRelayWriterReady = SharedStorage.liveActivityRelayPushToken != nil
             }
         }
 
@@ -3453,17 +3653,24 @@ final class SonosManager {
 
         let pushToStartGroupId = liveActivityGroupId()
         let pushToStartRelayURLString = RelayManager.shared.url?.absoluteString
+        let pushToStartRegistration = pushToStartGroupId.flatMap {
+            SharedStorage.liveActivityPushToStartRegistration(for: $0)
+        }
         let hasCurrentPushToStartRegistration = Self.hasCurrentPushToStartRegistration(
             token: SharedStorage.liveActivityPushToStartToken,
-            registeredToken: SharedStorage.liveActivityPushToStartRegisteredToken,
+            registeredToken: pushToStartRegistration?.token
+                ?? SharedStorage.liveActivityPushToStartRegisteredToken,
             currentGroupId: pushToStartGroupId,
-            registeredGroupId: SharedStorage.liveActivityPushToStartRegisteredGroupID,
+            registeredGroupId: pushToStartRegistration == nil
+                ? SharedStorage.liveActivityPushToStartRegisteredGroupID
+                : pushToStartGroupId,
             currentRelayURLString: pushToStartRelayURLString,
-            registeredRelayURLString: SharedStorage.liveActivityPushToStartRegisteredRelayURLString,
-            registeredAt: SharedStorage.liveActivityPushToStartRegisteredAt
+            registeredRelayURLString: pushToStartRegistration?.relayURLString
+                ?? SharedStorage.liveActivityPushToStartRegisteredRelayURLString,
+            registeredAt: pushToStartRegistration?.registeredAt
+                ?? SharedStorage.liveActivityPushToStartRegisteredAt
         )
-        if !hasCurrentPushToStartRegistration,
-           let token = SharedStorage.liveActivityPushToStartToken,
+        if let token = SharedStorage.liveActivityPushToStartToken,
            RelayManager.shared.isAvailable {
             registerPushToStartTokenIfPossible(token, reason: "manage-live-activity-refresh")
         }
@@ -3625,7 +3832,7 @@ final class SonosManager {
         usesRelay: Bool,
         relayWriterReady: Bool
     ) -> Bool {
-        !usesRelay || !relayWriterReady
+        !usesRelay
     }
 
     nonisolated static func shouldCreateLocalLiveActivity(
@@ -3673,6 +3880,7 @@ final class SonosManager {
         SharedStorage.liveActivityPushToStartRegisteredGroupID = nil
         SharedStorage.liveActivityPushToStartRegisteredRelayURLString = nil
         SharedStorage.liveActivityPushToStartRegisteredAt = .distantPast
+        SharedStorage.liveActivityPushToStartRegistrationsByGroupID = [:]
     }
 
     nonisolated static func shouldSendSoundbarCommandThroughRelay(
@@ -3706,10 +3914,12 @@ final class SonosManager {
 
     nonisolated static func shouldRecreateLiveActivityForSpeakerChange(
         currentActivityExists: Bool,
+        usesRelay: Bool,
         previousGroupId: String?,
         nextGroupId: String?
     ) -> Bool {
         guard currentActivityExists,
+              !usesRelay,
               let previousGroupId,
               let nextGroupId else {
             return false
@@ -3795,7 +4005,12 @@ final class SonosManager {
     private static func liveActivityStateLogParts(
         _ state: SonosActivityAttributes.ContentState
     ) -> [String] {
-        [
+        let preferredArtwork = state.preferredAlbumArtData
+        let compactArtwork = state.compactAlbumArtData
+        let preferredArtworkDecodable = preferredArtwork.flatMap { UIImage(data: $0) } != nil
+        let compactArtworkDecodable = compactArtwork.flatMap { UIImage(data: $0) } != nil
+
+        return [
             "track=\(liveActivityLogValue(state.trackTitle))",
             "artist=\(liveActivityLogValue(state.artist))",
             "playing=\(state.isPlaying)",
@@ -3803,6 +4018,11 @@ final class SonosManager {
             "duration=\(Int(state.durationSeconds.rounded()))",
             "color=\(state.dominantColorHex ?? "nil")",
             "artBytes=\(state.albumArtThumbnail?.count ?? 0)",
+            "artTrace=\(state.artworkTraceId ?? "nil")",
+            "preferredArtBytes=\(preferredArtwork?.count ?? 0)",
+            "preferredArtDecodable=\(preferredArtworkDecodable)",
+            "compactArtBytes=\(compactArtwork?.count ?? 0)",
+            "compactArtDecodable=\(compactArtworkDecodable)",
             "members=\(state.groupMemberCount)",
             "sourceRaw=\(state.playbackSourceRaw ?? "nil")",
             "activityStyle=\(state.liveActivityStyleRaw ?? "nil")",
@@ -3857,6 +4077,10 @@ final class SonosManager {
         activityUpdatesTask = nil
         activityStateTask?.cancel()
         activityStateTask = nil
+        for task in pushTokenTasksByActivityID.values { task.cancel() }
+        pushTokenTasksByActivityID = [:]
+        for task in activityStateTasksByActivityID.values { task.cancel() }
+        activityStateTasksByActivityID = [:]
     }
 
     private func handlePushToStartToken(_ tokenData: Data, reason: String) {
@@ -3869,10 +4093,13 @@ final class SonosManager {
         registerPushToStartTokenIfPossible(hex, reason: reason)
     }
 
-    private func registerPushToStartTokenIfPossible(_ token: String, reason: String) {
+    private func registerPushToStartTokenIfPossible(
+        _ token: String,
+        reason: String,
+        clearDismissalSuppressionForGroupId: String? = nil
+    ) {
         guard RelayManager.shared.isAvailable,
-              let url = RelayManager.shared.url,
-              let groupId = liveActivityGroupId() else {
+              let url = RelayManager.shared.url else {
             logLiveActivity(action: "register-push-to-start-skip",
                             mode: "relay-token",
                             reason: "missing-relay-or-group",
@@ -3880,10 +4107,80 @@ final class SonosManager {
             return
         }
 
-        let speakerName = selectedSpeaker?.name
-        let liveActivityStyleRaw = SharedStorage.liveActivityStyle.rawValue
+        let targets = liveActivityStartRegistrationTargets(
+            limitedToGroupId: clearDismissalSuppressionForGroupId
+        )
+        guard !targets.isEmpty else {
+            logLiveActivity(action: "register-push-to-start-skip",
+                            mode: "relay-token",
+                            reason: "missing-registration-target",
+                            token: token,
+                            relayURL: url)
+            return
+        }
+
+        for target in targets {
+            registerPushToStartToken(
+                token,
+                target: target,
+                relayURL: url,
+                reason: reason,
+                clearDismissalSuppression: clearDismissalSuppressionForGroupId == target.groupId
+            )
+        }
+    }
+
+    private func liveActivityStartRegistrationTargets(
+        limitedToGroupId: String? = nil
+    ) -> [LiveActivityStartRegistrationTarget] {
+        var targets: [LiveActivityStartRegistrationTarget] = []
+        var seenGroupIds = Set<String>()
+
+        func append(groupId: String?, speakerName: String?) {
+            let cleanGroupId = groupId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !cleanGroupId.isEmpty else { return }
+            guard limitedToGroupId == nil || limitedToGroupId == cleanGroupId else { return }
+            guard seenGroupIds.insert(cleanGroupId).inserted else { return }
+            targets.append(.init(groupId: cleanGroupId, speakerName: speakerName))
+        }
+
+        append(groupId: liveActivityGroupId(), speakerName: selectedSpeaker?.name)
+        for status in groupStatuses where status.transportState == .playing {
+            append(groupId: status.coordinator.playbackIP, speakerName: status.coordinator.name)
+        }
+        return targets
+    }
+
+    private func registerPushToStartToken(
+        _ token: String,
+        target: LiveActivityStartRegistrationTarget,
+        relayURL url: URL,
+        reason: String,
+        clearDismissalSuppression: Bool
+    ) {
+        let groupId = target.groupId
         let relayURLString = url.absoluteString
-        let registrationKey = "\(token)|\(groupId)|\(relayURLString)"
+        let liveActivityStyleRaw = SharedStorage.liveActivityStyle.rawValue
+        let activeActivityIds = Activity<SonosActivityAttributes>.activities.compactMap { activity -> String? in
+            if let activityGroupId = activity.attributes.groupId,
+               activityGroupId != groupId {
+                return nil
+            }
+            return activity.id
+        }
+        let groupRegistration = SharedStorage.liveActivityPushToStartRegistration(for: groupId)
+        let hasGroupRegistration = Self.hasCurrentPushToStartRegistration(
+            token: token,
+            registeredToken: groupRegistration?.token,
+            currentGroupId: groupId,
+            registeredGroupId: groupRegistration == nil ? nil : groupId,
+            currentRelayURLString: relayURLString,
+            registeredRelayURLString: groupRegistration?.relayURLString,
+            registeredAt: groupRegistration?.registeredAt ?? .distantPast
+        )
+        if !clearDismissalSuppression && hasGroupRegistration { return }
+
+        let registrationKey = "\(token)|\(groupId)|\(relayURLString)|clear=\(clearDismissalSuppression)"
         guard inFlightPushToStartRegistrationKey != registrationKey else {
             logLiveActivity(action: "register-push-to-start-skip",
                             mode: "relay-token",
@@ -3895,18 +4192,6 @@ final class SonosManager {
         }
         inFlightPushToStartRegistrationKey = registrationKey
 
-        if !Self.hasCurrentPushToStartRegistration(
-            token: token,
-            registeredToken: SharedStorage.liveActivityPushToStartRegisteredToken,
-            currentGroupId: groupId,
-            registeredGroupId: SharedStorage.liveActivityPushToStartRegisteredGroupID,
-            currentRelayURLString: relayURLString,
-            registeredRelayURLString: SharedStorage.liveActivityPushToStartRegisteredRelayURLString,
-            registeredAt: SharedStorage.liveActivityPushToStartRegisteredAt
-        ) {
-            Self.clearPushToStartRegistration()
-        }
-
         Task { [weak self] in
             do {
                 try await RelayClient.registerPushToStart(
@@ -3914,15 +4199,16 @@ final class SonosManager {
                     groupId: groupId,
                     token: token,
                     clientId: SharedStorage.liveActivityRelayClientID,
-                    speakerName: speakerName,
-                    liveActivityStyleRaw: liveActivityStyleRaw
+                    speakerName: target.speakerName,
+                    liveActivityStyleRaw: liveActivityStyleRaw,
+                    activeActivityIds: activeActivityIds,
+                    clearDismissalSuppression: clearDismissalSuppression
                 )
                 await MainActor.run {
                     if self?.inFlightPushToStartRegistrationKey == registrationKey {
                         self?.inFlightPushToStartRegistrationKey = nil
                     }
                     guard SharedStorage.liveActivityPushToStartToken == token,
-                          self?.liveActivityGroupId() == groupId,
                           RelayManager.shared.url?.absoluteString == relayURLString else {
                         self?.logLiveActivity(action: "register-push-to-start-stale-success",
                                               mode: "relay-token",
@@ -3932,16 +4218,31 @@ final class SonosManager {
                                               relayURL: url)
                         return
                     }
-                    SharedStorage.liveActivityPushToStartRegisteredToken = token
-                    SharedStorage.liveActivityPushToStartRegisteredGroupID = groupId
-                    SharedStorage.liveActivityPushToStartRegisteredRelayURLString = relayURLString
-                    SharedStorage.liveActivityPushToStartRegisteredAt = Date()
+                    let registeredAt = Date()
+                    SharedStorage.setLiveActivityPushToStartRegistration(
+                        .init(
+                            token: token,
+                            relayURLString: relayURLString,
+                            registeredAt: registeredAt
+                        ),
+                        for: groupId
+                    )
+                    if self?.liveActivityGroupId() == groupId {
+                        SharedStorage.liveActivityPushToStartRegisteredToken = token
+                        SharedStorage.liveActivityPushToStartRegisteredGroupID = groupId
+                        SharedStorage.liveActivityPushToStartRegisteredRelayURLString = relayURLString
+                        SharedStorage.liveActivityPushToStartRegisteredAt = registeredAt
+                    }
                     self?.logLiveActivity(action: "register-push-to-start-success",
                                           mode: "relay-token",
                                           token: token,
                                           groupId: groupId,
                                           relayURL: url,
-                                          extra: ["reason=\(Self.liveActivityLogValue(reason))"])
+                                          extra: [
+                                            "reason=\(Self.liveActivityLogValue(reason))",
+                                            "activeActivityCount=\(activeActivityIds.count)",
+                                            "clearDismissalSuppression=\(clearDismissalSuppression)"
+                                          ])
                 }
             } catch {
                 await MainActor.run {
@@ -3963,28 +4264,24 @@ final class SonosManager {
         _ activity: Activity<SonosActivityAttributes>,
         reason: String
     ) {
-        guard currentActivity?.id != activity.id else { return }
-
-        let expectedGroupId = liveActivityGroupId()
-        if let activityGroupId = activity.attributes.groupId,
-           let expectedGroupId,
-           activityGroupId != expectedGroupId {
-            logLiveActivity(action: "remote-activity-ignore",
-                            activityID: activity.id,
-                            mode: "relay-token",
-                            reason: "group-mismatch",
-                            groupId: activityGroupId)
+        let groupId = activity.attributes.groupId ?? liveActivityGroupId() ?? activity.attributes.speakerName
+        if remoteLiveActivitiesByGroupID[groupId]?.id == activity.id {
             return
         }
 
-        replaceCurrentActivityBeforeRemoteAttach(newActivity: activity)
-        currentActivity = activity
-        currentActivityUsesRelay = true
+        replaceRemoteLiveActivityForGroup(groupId, with: activity)
+        remoteLiveActivitiesByGroupID[groupId] = activity
+        let selectedGroupId = liveActivityGroupId()
+        if selectedGroupId == groupId || (selectedGroupId == nil && currentActivity == nil) {
+            currentActivity = activity
+            currentActivityUsesRelay = true
+        }
         liveActivityRelayWriterReady = false
         logLiveActivity(action: "remote-activity-attach",
                         activityID: activity.id,
                         mode: "relay-token",
-                        groupId: activity.attributes.groupId,
+                        state: activity.content.state,
+                        groupId: groupId,
                         extra: ["reason=\(Self.liveActivityLogValue(reason))"])
         spawnPushTokenObserver(
             activity: activity,
@@ -3992,27 +4289,36 @@ final class SonosManager {
         )
         spawnActivityStateObserver(
             activity: activity,
-            groupId: activity.attributes.groupId ?? expectedGroupId,
+            groupId: groupId,
             usesRelay: true
         )
     }
 
-    private func replaceCurrentActivityBeforeRemoteAttach(
-        newActivity: Activity<SonosActivityAttributes>
+    private func replaceRemoteLiveActivityForGroup(
+        _ groupId: String,
+        with newActivity: Activity<SonosActivityAttributes>
     ) {
-        guard let previousActivity = currentActivity else { return }
+        guard let previousActivity = remoteLiveActivitiesByGroupID[groupId],
+              previousActivity.id != newActivity.id else { return }
 
-        pushTokenTask?.cancel()
-        pushTokenTask = nil
-        activityStateTask?.cancel()
-        activityStateTask = nil
-        let tokenToUnregister = lastRegisteredPushToken
-        lastRegisteredPushToken = nil
-        SharedStorage.liveActivityRelayPushToken = nil
+        pushTokenTasksByActivityID[previousActivity.id]?.cancel()
+        pushTokenTasksByActivityID[previousActivity.id] = nil
+        activityStateTasksByActivityID[previousActivity.id]?.cancel()
+        activityStateTasksByActivityID[previousActivity.id] = nil
+        let tokenToUnregister = registeredPushTokensByActivityID[previousActivity.id]
+        registeredPushTokensByActivityID[previousActivity.id] = nil
+        SharedStorage.setLiveActivityRelayPushToken(nil, for: groupId)
+        if currentActivity?.id == previousActivity.id {
+            currentActivity = nil
+            currentActivityUsesRelay = false
+            lastRegisteredPushToken = nil
+            SharedStorage.liveActivityRelayPushToken = nil
+        }
         logLiveActivity(action: "remote-activity-replace",
                         activityID: previousActivity.id,
                         mode: currentActivityUsesRelay ? "relay-token" : "local",
                         token: tokenToUnregister,
+                        groupId: groupId,
                         extra: ["newActivity=\(Self.shortLiveActivityIdentifier(newActivity.id))"])
         Task { await previousActivity.end(nil, dismissalPolicy: .immediate) }
         if let token = tokenToUnregister, let url = RelayManager.shared.url {
@@ -4030,17 +4336,19 @@ final class SonosManager {
     /// every time the sequence yields rather than caching aggressively.
     private func spawnPushTokenObserver(activity: Activity<SonosActivityAttributes>,
                                         speakerName: String) {
-        pushTokenTask?.cancel()
+        pushTokenTasksByActivityID[activity.id]?.cancel()
         let groupId = activity.attributes.groupId ?? liveActivityGroupId() ?? speakerName
         logLiveActivity(action: "push-token-observer-start", activityID: activity.id,
                         mode: "relay-token", groupId: groupId)
-        pushTokenTask = Task { [weak self] in
+        let task = Task { [weak self] in
             for await tokenData in activity.pushTokenUpdates {
                 guard !Task.isCancelled else { return }
                 let hex = tokenData.map { String(format: "%02x", $0) }.joined()
                 guard let url = await RelayManager.shared.url else {
                     await MainActor.run {
-                        self?.liveActivityRelayWriterReady = false
+                        if self?.currentActivity?.id == activity.id {
+                            self?.liveActivityRelayWriterReady = false
+                        }
                         self?.logLiveActivity(action: "register-token-skip", activityID: activity.id,
                                               mode: "relay-token", reason: "missing-relay-url",
                                               token: hex, groupId: groupId)
@@ -4048,13 +4356,15 @@ final class SonosManager {
                     continue
                 }
                 await MainActor.run {
-                    self?.liveActivityRelayWriterReady = false
+                    if self?.currentActivity?.id == activity.id {
+                        self?.liveActivityRelayWriterReady = false
+                    }
                     self?.logLiveActivity(action: "push-token-yield", activityID: activity.id,
                                           mode: "relay-token", token: hex,
                                           groupId: groupId, relayURL: url)
                 }
                 do {
-                    try await RelayClient.registerActivity(
+                    let registration = try await RelayClient.registerActivity(
                         baseURL: url,
                         groupId: groupId,
                         token: hex,
@@ -4063,11 +4373,29 @@ final class SonosManager {
                         speakerName: speakerName,
                         liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
                     )
+                    if let initialState = registration.initialState {
+                        await activity.update(
+                            .init(state: initialState, staleDate: Self.liveActivityStaleDate())
+                        )
+                        await MainActor.run {
+                            self?.logLiveActivity(action: "register-token-initial-state-applied",
+                                                  activityID: activity.id,
+                                                  mode: "relay-token",
+                                                  state: initialState,
+                                                  token: hex,
+                                                  groupId: groupId,
+                                                  relayURL: url)
+                        }
+                    }
                     await MainActor.run {
-                        self?.lastRegisteredPushToken = hex
-                        SharedStorage.liveActivityRelayPushToken = hex
-                        self?.liveActivityRelayWriterReady = true
-                        self?.pushLiveActivityRelayPreferencesIfNeeded(force: true)
+                        self?.registeredPushTokensByActivityID[activity.id] = hex
+                        if self?.currentActivity?.id == activity.id {
+                            self?.lastRegisteredPushToken = hex
+                            SharedStorage.liveActivityRelayPushToken = hex
+                            self?.liveActivityRelayWriterReady = true
+                            self?.pushLiveActivityRelayPreferencesIfNeeded(force: true)
+                        }
+                        SharedStorage.setLiveActivityRelayPushToken(hex, for: groupId)
                         self?.logLiveActivity(action: "register-token-success",
                                               activityID: activity.id,
                                               mode: "relay-token", token: hex,
@@ -4075,7 +4403,9 @@ final class SonosManager {
                     }
                 } catch {
                     await MainActor.run {
-                        self?.liveActivityRelayWriterReady = false
+                        if self?.currentActivity?.id == activity.id {
+                            self?.liveActivityRelayWriterReady = false
+                        }
                         self?.logLiveActivity(action: "register-token-failed",
                                               activityID: activity.id,
                                               mode: "relay-token",
@@ -4087,6 +4417,7 @@ final class SonosManager {
                 }
             }
         }
+        pushTokenTasksByActivityID[activity.id] = task
     }
 
     private func spawnActivityStateObserver(
@@ -4094,12 +4425,13 @@ final class SonosManager {
         groupId: String?,
         usesRelay: Bool
     ) {
-        activityStateTask?.cancel()
+        activityStateTasksByActivityID[activity.id]?.cancel()
         logLiveActivity(action: "state-observer-start",
                         activityID: activity.id,
                         mode: usesRelay ? "relay-token" : "local",
+                        state: activity.content.state,
                         groupId: groupId)
-        activityStateTask = Task { [weak self] in
+        let task = Task { [weak self] in
             for await state in activity.activityStateUpdates {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -4115,6 +4447,7 @@ final class SonosManager {
                 }
             }
         }
+        activityStateTasksByActivityID[activity.id] = task
     }
 
     private func handleLiveActivityStateUpdate(
@@ -4126,13 +4459,16 @@ final class SonosManager {
         logLiveActivity(action: "state-update",
                         activityID: activity.id,
                         mode: usesRelay ? "relay-token" : "local",
+                        state: activity.content.state,
                         groupId: groupId,
                         extra: ["state=\(Self.liveActivityLogValue(String(describing: state)))"])
 
         switch state {
         case .dismissed:
-            let token = lastRegisteredPushToken ?? SharedStorage.liveActivityRelayPushToken
-            cleanupTerminalLiveActivity(activityID: activity.id)
+            let token = registeredPushTokensByActivityID[activity.id]
+                ?? groupId.flatMap { SharedStorage.liveActivityRelayPushTokensByGroupID[$0] }
+                ?? (currentActivity?.id == activity.id ? lastRegisteredPushToken : nil)
+            cleanupTerminalLiveActivity(activityID: activity.id, groupId: groupId)
             guard usesRelay,
                   let relayURL = RelayManager.shared.url,
                   let groupId else {
@@ -4145,8 +4481,10 @@ final class SonosManager {
                 token: token
             )
         case .ended:
-            let token = lastRegisteredPushToken ?? SharedStorage.liveActivityRelayPushToken
-            cleanupTerminalLiveActivity(activityID: activity.id)
+            let token = registeredPushTokensByActivityID[activity.id]
+                ?? groupId.flatMap { SharedStorage.liveActivityRelayPushTokensByGroupID[$0] }
+                ?? (currentActivity?.id == activity.id ? lastRegisteredPushToken : nil)
+            cleanupTerminalLiveActivity(activityID: activity.id, groupId: groupId)
             guard usesRelay,
                   let token,
                   let relayURL = RelayManager.shared.url else {
@@ -4162,17 +4500,32 @@ final class SonosManager {
         }
     }
 
-    private func cleanupTerminalLiveActivity(activityID: String) {
+    private func cleanupTerminalLiveActivity(activityID: String, groupId: String?) {
+        if let groupId {
+            remoteLiveActivitiesByGroupID[groupId] = nil
+            SharedStorage.setLiveActivityRelayPushToken(nil, for: groupId)
+        } else if let matching = remoteLiveActivitiesByGroupID.first(where: { $0.value.id == activityID }) {
+            remoteLiveActivitiesByGroupID[matching.key] = nil
+            SharedStorage.setLiveActivityRelayPushToken(nil, for: matching.key)
+        }
+        pushTokenTasksByActivityID[activityID]?.cancel()
+        pushTokenTasksByActivityID[activityID] = nil
+        activityStateTasksByActivityID[activityID]?.cancel()
+        activityStateTasksByActivityID[activityID] = nil
+        registeredPushTokensByActivityID[activityID] = nil
+
         guard currentActivity?.id == activityID else { return }
-        currentActivity = nil
-        currentActivityUsesRelay = false
+        currentActivity = liveActivityGroupId().flatMap { remoteLiveActivitiesByGroupID[$0] }
+        currentActivityUsesRelay = currentActivity != nil
         liveActivityRelayWriterReady = false
         lastLiveActivityRelayPreferencesSignature = nil
-        pushTokenTask?.cancel()
-        pushTokenTask = nil
-        activityStateTask = nil
-        lastRegisteredPushToken = nil
-        SharedStorage.liveActivityRelayPushToken = nil
+        lastRegisteredPushToken = currentActivity.flatMap {
+            registeredPushTokensByActivityID[$0.id]
+        }
+        SharedStorage.liveActivityRelayPushToken = liveActivityGroupId().flatMap {
+            SharedStorage.liveActivityRelayPushTokensByGroupID[$0]
+        }
+        liveActivityRelayWriterReady = SharedStorage.liveActivityRelayPushToken != nil
     }
 
     private func postLiveActivityDismissal(
@@ -4248,7 +4601,7 @@ final class SonosManager {
     ) async -> RelayClient.RelayPlaybackState? {
         guard let route = RelayClient.liveActivityCommandRoute(
             relayURLString: SharedStorage.relayURLString,
-            relayPushToken: SharedStorage.liveActivityRelayPushToken,
+            relayPushToken: SharedStorage.liveActivityRelayPushToken(for: liveActivityGroupId()),
             coordinatorIP: liveActivityGroupId(),
             fallbackGroupId: fallbackGroupId
         ) else {
@@ -4279,25 +4632,6 @@ final class SonosManager {
             SharedStorage.cachedAudioQualityLabel = label
         }
         soundbarEQLockUntil = .distantPast
-    }
-
-    private func makeLiveActivityNowPlayingHint() -> RelayClient.LiveActivityNowPlayingHint? {
-        guard let info = trackInfo, info.isLiveStream else { return nil }
-        guard let title = Self.cleanLiveActivityHintString(info.title) else { return nil }
-
-        return RelayClient.LiveActivityNowPlayingHint(
-            trackTitle: title,
-            artist: Self.cleanLiveActivityHintString(info.artist),
-            album: Self.cleanLiveActivityHintString(info.album),
-            albumArtUri: Self.cleanLiveActivityHintString(info.albumArtURL),
-            isPlaying: isPlaying,
-            positionSeconds: max(0, positionSeconds),
-            durationSeconds: max(0, durationSeconds),
-            playbackSourceRaw: info.source.rawValue,
-            audioQualityLabel: Self.cleanLiveActivityHintString(
-                info.audioQuality?.label ?? SharedStorage.cachedAudioQualityLabel
-            )
-        )
     }
 
     private func pushLiveActivityRelayPreferencesIfNeeded(force: Bool = false) {
@@ -4332,20 +4666,11 @@ final class SonosManager {
 
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: groupId,
-            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue,
-            nowPlaying: makeLiveActivityNowPlayingHint()
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
         )
         let signature = [
             body.groupId,
-            body.liveActivityStyleRaw ?? "",
-            body.nowPlaying?.trackTitle ?? "",
-            body.nowPlaying?.artist ?? "",
-            body.nowPlaying?.album ?? "",
-            body.nowPlaying?.albumArtUri ?? "",
-            body.nowPlaying?.isPlaying.map(String.init) ?? "",
-            body.nowPlaying?.durationSeconds.map { String(Int($0.rounded())) } ?? "",
-            body.nowPlaying?.playbackSourceRaw ?? "",
-            body.nowPlaying?.audioQualityLabel ?? ""
+            body.liveActivityStyleRaw ?? ""
         ].joined(separator: "\u{1F}")
 
         guard force || signature != lastLiveActivityRelayPreferencesSignature else {
@@ -4355,8 +4680,7 @@ final class SonosManager {
                             groupId: groupId,
                             relayURL: url,
                             extra: [
-                                "style=\(body.liveActivityStyleRaw ?? "nil")",
-                                "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
+                                "style=\(body.liveActivityStyleRaw ?? "nil")"
                             ])
             return
         }
@@ -4368,8 +4692,7 @@ final class SonosManager {
                         relayURL: url,
                         extra: [
                             "force=\(force)",
-                            "style=\(body.liveActivityStyleRaw ?? "nil")",
-                            "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
+                            "style=\(body.liveActivityStyleRaw ?? "nil")"
                         ])
 
         Task { [weak self] in
@@ -4381,8 +4704,7 @@ final class SonosManager {
                                           groupId: groupId,
                                           relayURL: url,
                                           extra: [
-                                            "style=\(body.liveActivityStyleRaw ?? "nil")",
-                                            "hint=\(Self.liveActivityLogValue(body.nowPlaying?.trackTitle ?? "nil"))"
+                                            "style=\(body.liveActivityStyleRaw ?? "nil")"
                                           ])
                 }
             } catch {
@@ -4409,20 +4731,17 @@ final class SonosManager {
         // Only explicit user teardown or confirmed playback stop should call
         // this. Mode changes and relay availability changes must keep the
         // existing Activity alive and update it in place.
-        guard let activity = currentActivity else { return }
-        currentActivity = nil
-        currentActivityUsesRelay = false
-        liveActivityRelayWriterReady = false
-        lastLiveActivityRelayPreferencesSignature = nil
-        pushTokenTask?.cancel()
-        pushTokenTask = nil
-        activityStateTask?.cancel()
-        activityStateTask = nil
-        let tokenToUnregister = lastRegisteredPushToken
-        lastRegisteredPushToken = nil
-        SharedStorage.liveActivityRelayPushToken = nil
+        let groupId = liveActivityGroupId()
+        guard let activity = groupId.flatMap({ remoteLiveActivitiesByGroupID[$0] }) ?? currentActivity else {
+            return
+        }
+        let tokenToUnregister = registeredPushTokensByActivityID[activity.id]
+            ?? SharedStorage.liveActivityRelayPushToken(for: groupId)
+            ?? lastRegisteredPushToken
+        cleanupTerminalLiveActivity(activityID: activity.id, groupId: groupId)
         logLiveActivity(action: "end", activityID: activity.id,
-                        mode: "local-or-relay", token: tokenToUnregister)
+                        mode: "local-or-relay", token: tokenToUnregister,
+                        groupId: groupId)
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
         if let token = tokenToUnregister, let url = RelayManager.shared.url {
             logLiveActivity(action: "unregister-token-request", activityID: activity.id,
@@ -4442,10 +4761,14 @@ final class SonosManager {
         let endsAt = isPlaying && durationSeconds > 0
             ? anchor.addingTimeInterval(durationSeconds - positionSeconds) : nil
         let thumbnail = LiveActivityArtworkThumbnail.make(from: albumArtImage)
+        let title = trackInfo?.title ?? "Not Playing"
+        let artist = trackInfo?.artist ?? "—"
+        let album = trackInfo?.album ?? ""
+        let sourceRaw = source?.rawValue
         return .init(
-            trackTitle: trackInfo?.title ?? "Not Playing",
-            artist: trackInfo?.artist ?? "—",
-            album: trackInfo?.album ?? "",
+            trackTitle: title,
+            artist: artist,
+            album: album,
             isPlaying: isPlaying,
             positionSeconds: positionSeconds,
             durationSeconds: durationSeconds,
@@ -4453,13 +4776,42 @@ final class SonosManager {
             startedAt: startedAt,
             endsAt: endsAt,
             albumArtThumbnail: thumbnail,
+            artworkTraceId: Self.localArtworkTraceId(
+                trackTitle: title,
+                artist: artist,
+                album: album,
+                sourceRaw: sourceRaw,
+                thumbnailBytes: thumbnail?.count ?? 0
+            ),
             groupMemberCount: currentGroupMembers.filter { !$0.isInvisible }.count,
-            playbackSourceRaw: source?.rawValue,
+            playbackSourceRaw: sourceRaw,
             soundbarNightMode: isTVSource ? nightMode : nil,
             soundbarSpeechEnhancementRawLevel: isTVSource ? speechEnhancement.rawValue : nil,
             liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue,
             audioQualityLabel: SharedStorage.cachedAudioQualityLabel
         )
+    }
+
+    private static func localArtworkTraceId(
+        trackTitle: String,
+        artist: String,
+        album: String,
+        sourceRaw: String?,
+        thumbnailBytes: Int
+    ) -> String {
+        let raw = [
+            trackTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            sourceRaw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "",
+            String(thumbnailBytes)
+        ].joined(separator: "|")
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in raw.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "local_%016llx", hash)
     }
 
     // MARK: - Private Helpers

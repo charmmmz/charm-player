@@ -37,7 +37,7 @@ enum AppleMusicExternalLinkResolver {
     }
 
     @MainActor
-    private static func isAppleMusicItem(
+    static func isAppleMusicItem(
         _ item: BrowseItem,
         searchManager: SearchManager
     ) -> Bool {
@@ -91,5 +91,107 @@ enum AppleMusicExternalLinkResolver {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
         return normalized.contains("apple music") || normalized.contains("applemusic")
+    }
+}
+
+struct AppleMusicExternalLinkFallbackResolver: Sendable {
+    typealias CatalogURLLookup = @Sendable (
+        _ kind: AppleMusicExternalResourceKind,
+        _ catalogID: String
+    ) async throws -> String?
+    typealias CatalogSearch = @Sendable (_ term: String, _ limit: Int) async throws -> [AppleMusicCatalogSearchItem]
+
+    private let catalogURLLookup: CatalogURLLookup
+    private let catalogSearch: CatalogSearch
+    private let searchLimit: Int
+
+    init(
+        catalogURLLookup: @escaping CatalogURLLookup = { kind, catalogID in
+            try await AppleMusicCatalogSearchClient.shared.appleMusicURLString(
+                kind: kind,
+                catalogID: catalogID
+            )
+        },
+        catalogSearch: @escaping CatalogSearch = { term, limit in
+            try await AppleMusicCatalogSearchClient.shared.search(term: term, limit: limit)
+        },
+        searchLimit: Int = 8
+    ) {
+        self.catalogURLLookup = catalogURLLookup
+        self.catalogSearch = catalogSearch
+        self.searchLimit = AppleMusicCatalogSearchClient.effectiveSearchLimit(requested: searchLimit)
+    }
+
+    func songURL(
+        directResource: AppleMusicFavoriteResource?,
+        title: String,
+        artist: String?,
+        album: String?
+    ) async throws -> URL? {
+        try await url(
+            externalKind: .song,
+            catalogKind: .song,
+            directResource: directResource,
+            title: title,
+            artist: artist,
+            album: album
+        )
+    }
+
+    func albumURL(
+        directResource: AppleMusicFavoriteResource?,
+        title: String,
+        artist: String?
+    ) async throws -> URL? {
+        try await url(
+            externalKind: .album,
+            catalogKind: .album,
+            directResource: directResource,
+            title: title,
+            artist: artist,
+            album: title
+        )
+    }
+
+    private func url(
+        externalKind: AppleMusicExternalResourceKind,
+        catalogKind: LocalServiceAppleMusicPlayable.Kind,
+        directResource: AppleMusicFavoriteResource?,
+        title: String,
+        artist: String?,
+        album: String?
+    ) async throws -> URL? {
+        if let directResource,
+           AppleMusicExternalResourceKind(directResource.type) == externalKind {
+            do {
+                if let directURLString = try await catalogURLLookup(externalKind, directResource.id),
+                   let directURL = URL(string: directURLString) {
+                    return directURL
+                }
+            } catch {
+                SonosLog.debug(
+                    .nowPlaying,
+                    "Apple Music external direct URL lookup failed id='\(directResource.id)' kind='\(externalKind)' error=\(error)"
+                )
+            }
+        }
+
+        let term = LocalMusicCatalogMatcher.searchTerm(
+            kind: catalogKind,
+            title: title,
+            artist: artist,
+            album: album
+        )
+        guard !term.isEmpty else { return nil }
+
+        let items = try await catalogSearch(term, searchLimit)
+        let urlString = LocalMusicCatalogWebURLFallback.urlString(
+            in: items,
+            kind: catalogKind,
+            title: title,
+            artist: artist,
+            album: album
+        )
+        return urlString.flatMap(URL.init(string:))
     }
 }

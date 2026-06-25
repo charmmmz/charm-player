@@ -72,6 +72,36 @@ export class TokenStore {
     return entry?.groupId === groupId;
   }
 
+  pruneStaleClientActivities(
+    groupId: string,
+    clientId: string | undefined,
+    activeActivityIds: string[],
+  ): number {
+    if (!clientId) return 0;
+
+    const activeIds = new Set(activeActivityIds);
+    let removed = 0;
+    for (const [token, entry] of this.tokens.entries()) {
+      if (entry.groupId !== groupId) continue;
+      if (entry.clientId !== clientId) continue;
+      if (entry.activityId && activeIds.has(entry.activityId)) continue;
+
+      this.tokens.delete(token);
+      removed += 1;
+    }
+
+    if (removed > 0) {
+      void this.flush();
+      this.log.info({
+        groupId,
+        clientId,
+        activeActivityCount: activeIds.size,
+        removed,
+      }, 'pruned stale client activity tokens');
+    }
+    return removed;
+  }
+
   count(): number {
     return this.tokens.size;
   }

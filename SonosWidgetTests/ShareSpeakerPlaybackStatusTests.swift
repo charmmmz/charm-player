@@ -5,6 +5,18 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
     func testPlaybackVisualIndicatorReplacesLoadingWithSuccessSymbol() {
         XCTAssertTrue(SharePlaybackVisualIndicator.loading.showsSpinner)
         XCTAssertNil(SharePlaybackVisualIndicator.loading.systemImageName)
+        XCTAssertFalse(SharePlaybackVisualIndicator.loading.showsWaveform)
+
+        XCTAssertFalse(SharePlaybackVisualIndicator.playingWaveform.showsSpinner)
+        XCTAssertTrue(SharePlaybackVisualIndicator.playingWaveform.showsWaveform)
+        XCTAssertTrue(SharePlaybackVisualIndicator.playingWaveform.animatesWaveform)
+        XCTAssertNil(SharePlaybackVisualIndicator.playingWaveform.systemImageName)
+
+        XCTAssertFalse(SharePlaybackVisualIndicator.restingWaveform.showsSpinner)
+        XCTAssertTrue(SharePlaybackVisualIndicator.restingWaveform.showsWaveform)
+        XCTAssertFalse(SharePlaybackVisualIndicator.restingWaveform.animatesWaveform)
+        XCTAssertNil(SharePlaybackVisualIndicator.restingWaveform.systemImageName)
+
         XCTAssertFalse(SharePlaybackVisualIndicator.success.showsSpinner)
         XCTAssertEqual(SharePlaybackVisualIndicator.success.systemImageName, "checkmark.circle.fill")
     }

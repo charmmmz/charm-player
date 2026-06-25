@@ -43,13 +43,23 @@ enum SonosLog {
     /// Always logged. Use sparingly for unexpected failures worth reporting.
     @inline(__always)
     nonisolated static func error(_ category: Category, _ message: @autoclosure () -> String) {
-        emit(category, suffix: " ERROR:", message())
+        emit(category, level: .error, suffix: " ERROR:", message())
     }
 
     /// Always logged. Use for operational signal (success, counts, state).
     @inline(__always)
-    nonisolated static func info(_ category: Category, _ message: @autoclosure () -> String) {
-        emit(category, suffix: nil, message())
+    nonisolated static func info(
+        _ category: Category,
+        _ message: @autoclosure () -> String,
+        flushRemoteImmediately: Bool = false
+    ) {
+        emit(
+            category,
+            level: .info,
+            suffix: nil,
+            message(),
+            flushRemoteImmediately: flushRemoteImmediately
+        )
     }
 
     /// Compiled out of Release builds. Use for high-volume traces and
@@ -57,7 +67,7 @@ enum SonosLog {
     @inline(__always)
     nonisolated static func debug(_ category: Category, _ message: @autoclosure () -> String) {
         #if DEBUG
-        emit(category, suffix: nil, message())
+        emit(category, level: .debug, suffix: nil, message())
         #endif
     }
 
@@ -81,16 +91,47 @@ enum SonosLog {
             "desc=\(playbackLinkValue(desc, maxLength: 240)) hasArt=\(hasArt)"
     }
 
-    private nonisolated static func emit(_ category: Category, suffix: String?, _ message: String) {
+    private nonisolated static func emit(
+        _ category: Category,
+        level: RemoteDiagnosticLogLevel,
+        suffix: String?,
+        _ message: String,
+        flushRemoteImmediately: Bool = false
+    ) {
         let line = "[\(category.rawValue)]\(suffix ?? "") \(message)"
         print(line)
-        writeDiagnosticLine(line, category: category)
+        writeDiagnosticLine(
+            line,
+            category: category,
+            level: level,
+            message: message,
+            flushRemoteImmediately: flushRemoteImmediately
+        )
     }
 
-    private nonisolated static func writeDiagnosticLine(_ line: String, category: Category) {
-        guard diagnosticCategories.contains(category),
-              let fileURL = diagnosticFileURL(),
-              let data = "\(diagnosticTimestamp()) \(line)\n".data(using: .utf8) else {
+    private nonisolated static func writeDiagnosticLine(
+        _ line: String,
+        category: Category,
+        level: RemoteDiagnosticLogLevel,
+        message: String,
+        flushRemoteImmediately: Bool = false
+    ) {
+        guard diagnosticCategories.contains(category) else {
+            return
+        }
+
+        let timestamp = diagnosticTimestamp()
+        RemoteDiagnosticLogSink.enqueue(
+            timestamp: timestamp,
+            category: category.rawValue,
+            level: level.rawValue,
+            message: message,
+            line: line,
+            flushImmediately: flushRemoteImmediately
+        )
+
+        guard let fileURL = diagnosticFileURL(),
+              let data = "\(timestamp) \(line)\n".data(using: .utf8) else {
             return
         }
 
@@ -214,5 +255,203 @@ enum SonosLog {
             return nil
         }
         return String(xml[valueRange])
+    }
+}
+
+private enum RemoteDiagnosticLogLevel: String {
+    case debug
+    case info
+    case error
+}
+
+private enum RemoteDiagnosticLogSink {
+    nonisolated static func enqueue(
+        timestamp: String,
+        category: String,
+        level: String,
+        message: String,
+        line: String,
+        flushImmediately: Bool = false
+    ) {
+        let redactedMessage = DiagnosticRemoteLogRedactor.redact(message)
+        let redactedLine = DiagnosticRemoteLogRedactor.redact(line)
+        Task.detached(priority: flushImmediately ? .userInitiated : .background) {
+            await RemoteDiagnosticLogBatcher.shared.enqueue(
+                timestamp: timestamp,
+                category: category,
+                level: level,
+                message: redactedMessage,
+                line: redactedLine,
+                flushImmediately: flushImmediately
+            )
+        }
+    }
+}
+
+private actor RemoteDiagnosticLogBatcher {
+    static let shared = RemoteDiagnosticLogBatcher()
+
+    private var pending: [RemoteDeviceLogEntryBody] = []
+    private var flushTask: Task<Void, Never>?
+    private let maxBatchSize = 20
+    private let maxBufferedEntries = 200
+
+    func enqueue(
+        timestamp: String,
+        category: String,
+        level: String,
+        message: String,
+        line: String,
+        flushImmediately: Bool = false
+    ) async {
+        guard Self.relayBaseURL() != nil else { return }
+
+        pending.append(
+            RemoteDeviceLogEntryBody(
+                timestamp: timestamp,
+                category: category,
+                level: level,
+                message: message,
+                line: line
+            )
+        )
+
+        if pending.count > maxBufferedEntries {
+            pending.removeFirst(pending.count - maxBufferedEntries)
+        }
+
+        if flushImmediately || pending.count >= maxBatchSize {
+            flushTask?.cancel()
+            flushTask = nil
+            await flush()
+            return
+        }
+
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            await self.flush()
+        }
+    }
+
+    private func flush() async {
+        flushTask?.cancel()
+        flushTask = nil
+
+        guard let baseURL = Self.relayBaseURL(),
+              !pending.isEmpty else {
+            return
+        }
+
+        let entries = pending
+        pending.removeAll(keepingCapacity: true)
+
+        let body = RemoteDeviceLogBody(
+            clientId: Self.clientID(),
+            bundleId: Bundle.main.bundleIdentifier,
+            processName: ProcessInfo.processInfo.processName,
+            entries: entries
+        )
+        try? await Self.postDeviceLogs(baseURL: baseURL, body: body)
+    }
+
+    private static func relayBaseURL() -> URL? {
+        let manualURLString = defaults.string(forKey: "relayURL")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let discoveredURLString = defaults.string(forKey: "discoveredRelayURL")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let urlString = manualURLString.isEmpty ? discoveredURLString : manualURLString
+        guard !urlString.isEmpty else { return nil }
+        return URL(string: urlString)
+    }
+
+    private static func clientID() -> String {
+        if let existing = defaults.string(forKey: "liveActivityRelayClientID"), !existing.isEmpty {
+            return existing
+        }
+        let value = UUID().uuidString
+        defaults.set(value, forKey: "liveActivityRelayClientID")
+        return value
+    }
+
+    private static func postDeviceLogs(baseURL: URL, body: RemoteDeviceLogBody) async throws {
+        guard !body.entries.isEmpty else { return }
+
+        let url = baseURL.appendingPathComponent("/api/device-logs")
+        var request = URLRequest(url: url, timeoutInterval: 2)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await remoteSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    private static let remoteSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.connectionProxyDictionary = [:]
+        return URLSession(configuration: config)
+    }()
+
+    private static var defaults: UserDefaults {
+        UserDefaults(suiteName: "group.com.charm.SonosWidget") ?? .standard
+    }
+}
+
+private nonisolated struct RemoteDeviceLogEntryBody: Encodable, Sendable {
+    let timestamp: String
+    let category: String
+    let level: String
+    let message: String
+    let line: String
+}
+
+private nonisolated struct RemoteDeviceLogBody: Encodable, Sendable {
+    let clientId: String
+    let bundleId: String?
+    let processName: String?
+    let entries: [RemoteDeviceLogEntryBody]
+}
+
+enum DiagnosticRemoteLogRedactor {
+    nonisolated static func redact(_ value: String) -> String {
+        var redacted = value
+        redacted = replace(
+            #"X_#Svc(\d+)-[A-Za-z0-9_-]+-Token"#,
+            in: redacted,
+            with: #"X_#Svc$1-<redacted>-Token"#
+        )
+        redacted = replace(
+            #"(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+"#,
+            in: redacted,
+            with: #"$1<redacted>"#
+        )
+        redacted = replace(
+            #"(?i)((?:access|refresh)_token=)[^\s&]+"#,
+            in: redacted,
+            with: #"$1<redacted>"#
+        )
+        return redacted
+    }
+
+    private nonisolated static func replace(
+        _ pattern: String,
+        in value: String,
+        with template: String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return value
+        }
+        return regex.stringByReplacingMatches(
+            in: value,
+            range: NSRange(value.startIndex..., in: value),
+            withTemplate: template
+        )
     }
 }
