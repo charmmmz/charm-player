@@ -21,6 +21,20 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
         XCTAssertEqual(SharePlaybackVisualIndicator.success.systemImageName, "checkmark.circle.fill")
     }
 
+    func testStatusIndicatorLayoutUsesStableSlotForSpinnerCheckAndEmptyStates() {
+        XCTAssertEqual(ShareStatusIndicatorLayout.indicatorSlotSize.width, 24)
+        XCTAssertEqual(ShareStatusIndicatorLayout.indicatorSlotSize.height, 24)
+        XCTAssertEqual(ShareStatusIndicatorLayout.rowMinimumHeight, 28)
+    }
+
+    func testPlaybackWaveformLayoutUsesSubtleCompactMetrics() {
+        XCTAssertEqual(SharePlaybackWaveformLayout.size.width, 24)
+        XCTAssertEqual(SharePlaybackWaveformLayout.size.height, 24)
+        XCTAssertEqual(SharePlaybackWaveformLayout.barWidth, 2)
+        XCTAssertEqual(SharePlaybackWaveformLayout.barSpacing, 2)
+        XCTAssertLessThanOrEqual(SharePlaybackWaveformLayout.activeHeights.max() ?? 0, 20)
+    }
+
     func testArtworkLoadPolicyAllowsSlowerSonosArtworkWithRetry() {
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.requestTimeoutMilliseconds, 2_500)
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.maxAttempts, 2)
@@ -115,7 +129,15 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
                 nowPlaying: nowPlaying,
                 visibleMemberCount: 1
             ),
-            "Paused - Assassin - John Mayer"
+            "Assassin - John Mayer"
+        )
+        XCTAssertEqual(
+            ShareSpeakerPlaybackStatus.detailText(
+                status: .paused,
+                nowPlaying: nil,
+                visibleMemberCount: 1
+            ),
+            "Paused"
         )
         XCTAssertEqual(
             ShareSpeakerPlaybackStatus.detailText(

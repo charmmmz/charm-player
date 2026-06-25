@@ -1,4 +1,18 @@
 import Foundation
+import CoreGraphics
+
+enum ShareStatusIndicatorLayout {
+    static let indicatorSlotSize = CGSize(width: 24, height: 24)
+    static let rowMinimumHeight: CGFloat = 28
+}
+
+enum SharePlaybackWaveformLayout {
+    static let size = CGSize(width: 24, height: 24)
+    static let barWidth: CGFloat = 2
+    static let barSpacing: CGFloat = 2
+    static let restingHeights: [CGFloat] = [5, 8, 6, 9, 5]
+    static let activeHeights: [CGFloat] = [10, 18, 13, 20, 9]
+}
 
 enum SharePlaybackVisualIndicator: Equatable, Sendable {
     case none

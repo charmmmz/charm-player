@@ -42,10 +42,7 @@ enum ShareSpeakerPlaybackStatus: Equatable, Sendable {
         case .playing:
             return nowPlaying?.displayText ?? ShareSpeakerPlaybackStatus.playing.displayText
         case .paused:
-            if let nowPlaying {
-                return "Paused - \(nowPlaying.displayText)"
-            }
-            return ShareSpeakerPlaybackStatus.paused.displayText
+            return nowPlaying?.displayText ?? ShareSpeakerPlaybackStatus.paused.displayText
         case .idle:
             return ShareSpeakerPlaybackStatus.idle.displayText
         case nil:

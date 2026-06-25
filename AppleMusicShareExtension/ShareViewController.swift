@@ -37,7 +37,6 @@ final class ShareViewController: UIViewController {
     private let speakerStack = UIStackView()
     private let emptyStateLabel = UILabel()
     private let notifyButton = UIButton(type: .system)
-    private let doneButton = UIButton(type: .system)
     private var speakerCards: [String: SpeakerGroupCard] = [:]
 
     override func viewDidLoad() {
@@ -112,28 +111,33 @@ final class ShareViewController: UIViewController {
         headerStack.addArrangedSubview(artworkContainer)
         headerStack.addArrangedSubview(textStack)
 
-        let statusSpacer = UIView()
-        statusSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let statusIndicatorContainer = UIView()
+        statusIndicatorContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        let statusRow = UIStackView(arrangedSubviews: [spinner, statusIconView, statusLabel, statusSpacer])
+        let statusRow = UIStackView(arrangedSubviews: [statusIndicatorContainer, statusLabel])
         statusRow.axis = .horizontal
         statusRow.alignment = .center
         statusRow.spacing = 8
+        statusRow.translatesAutoresizingMaskIntoConstraints = false
+        statusIndicatorContainer.addSubview(spinner)
+        statusIndicatorContainer.addSubview(statusIconView)
 
         spinner.color = UIColor.white.withAlphaComponent(0.75)
+        spinner.translatesAutoresizingMaskIntoConstraints = false
         spinner.startAnimating()
 
         statusIconView.tintColor = UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
         statusIconView.contentMode = .scaleAspectFit
         statusIconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        statusIconView.translatesAutoresizingMaskIntoConstraints = false
         statusIconView.isHidden = true
 
         statusLabel.font = .preferredFont(forTextStyle: .footnote)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.65)
         statusLabel.numberOfLines = 2
         statusLabel.text = "Reading Apple Music share..."
-        statusLabel.setContentHuggingPriority(.required, for: .horizontal)
-        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let scrollView = UIScrollView()
         scrollView.showsVerticalScrollIndicator = false
@@ -159,22 +163,12 @@ final class ShareViewController: UIViewController {
         notifyButton.addTarget(self, action: #selector(notifyButtonTapped), for: .touchUpInside)
         notifyButton.isHidden = true
 
-        doneButton.setTitle("Done", for: .normal)
-        doneButton.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
-        doneButton.tintColor = UIColor.white.withAlphaComponent(0.75)
-        doneButton.addTarget(self, action: #selector(doneButtonTapped), for: .touchUpInside)
-
-        let buttonRow = UIStackView(arrangedSubviews: [notifyButton, doneButton])
-        buttonRow.axis = .horizontal
-        buttonRow.alignment = .center
-        buttonRow.distribution = .equalSpacing
-
         let mainStack = UIStackView(arrangedSubviews: [
             headerStack,
             statusRow,
             scrollView,
             emptyStateLabel,
-            buttonRow
+            notifyButton
         ])
         mainStack.axis = .vertical
         mainStack.spacing = 16
@@ -205,6 +199,15 @@ final class ShareViewController: UIViewController {
             artworkFallbackView.centerYAnchor.constraint(equalTo: artworkContainer.centerYAnchor),
             artworkFallbackView.widthAnchor.constraint(equalToConstant: 26),
             artworkFallbackView.heightAnchor.constraint(equalToConstant: 26),
+            statusRow.heightAnchor.constraint(greaterThanOrEqualToConstant: ShareStatusIndicatorLayout.rowMinimumHeight),
+            statusIndicatorContainer.widthAnchor.constraint(equalToConstant: ShareStatusIndicatorLayout.indicatorSlotSize.width),
+            statusIndicatorContainer.heightAnchor.constraint(equalToConstant: ShareStatusIndicatorLayout.indicatorSlotSize.height),
+            spinner.centerXAnchor.constraint(equalTo: statusIndicatorContainer.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: statusIndicatorContainer.centerYAnchor),
+            statusIconView.centerXAnchor.constraint(equalTo: statusIndicatorContainer.centerXAnchor),
+            statusIconView.centerYAnchor.constraint(equalTo: statusIndicatorContainer.centerYAnchor),
+            statusIconView.widthAnchor.constraint(equalToConstant: 18),
+            statusIconView.heightAnchor.constraint(equalToConstant: 18),
 
             speakerStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
             speakerStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
@@ -611,10 +614,6 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    @objc private func doneButtonTapped() {
-        extensionContext?.completeRequest(returningItems: nil)
-    }
-
     private func scheduleOpenNotification(
         requestAuthorizationIfNeeded: Bool,
         completion: @escaping (Bool) -> Void
@@ -863,8 +862,8 @@ private final class SpeakerGroupCard: UIControl {
             indicatorContainer.heightAnchor.constraint(equalToConstant: 42),
             waveformView.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
             waveformView.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor),
-            waveformView.widthAnchor.constraint(equalToConstant: 32),
-            waveformView.heightAnchor.constraint(equalToConstant: 30),
+            waveformView.widthAnchor.constraint(equalToConstant: SharePlaybackWaveformLayout.size.width),
+            waveformView.heightAnchor.constraint(equalToConstant: SharePlaybackWaveformLayout.size.height),
             spinner.centerXAnchor.constraint(equalTo: indicatorContainer.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: indicatorContainer.centerYAnchor)
         ])
@@ -878,8 +877,8 @@ private final class PlaybackWaveformView: UIView {
     private var heightConstraints: [NSLayoutConstraint] = []
     private var isAnimatingWaveform = false
 
-    private let restingHeights: [CGFloat] = [7, 11, 8, 12, 7]
-    private let activeHeights: [CGFloat] = [14, 25, 18, 28, 12]
+    private let restingHeights = SharePlaybackWaveformLayout.restingHeights
+    private let activeHeights = SharePlaybackWaveformLayout.activeHeights
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -916,19 +915,19 @@ private final class PlaybackWaveformView: UIView {
         stack.axis = .horizontal
         stack.alignment = .center
         stack.distribution = .equalCentering
-        stack.spacing = 3
+        stack.spacing = SharePlaybackWaveformLayout.barSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.isUserInteractionEnabled = false
         addSubview(stack)
 
         for (index, bar) in bars.enumerated() {
-            bar.layer.cornerRadius = 1.5
+            bar.layer.cornerRadius = SharePlaybackWaveformLayout.barWidth / 2
             bar.clipsToBounds = true
             bar.translatesAutoresizingMaskIntoConstraints = false
             let height = bar.heightAnchor.constraint(equalToConstant: restingHeights[index])
             heightConstraints.append(height)
             NSLayoutConstraint.activate([
-                bar.widthAnchor.constraint(equalToConstant: 3),
+                bar.widthAnchor.constraint(equalToConstant: SharePlaybackWaveformLayout.barWidth),
                 height
             ])
         }
@@ -953,7 +952,7 @@ private final class PlaybackWaveformView: UIView {
 
         for (index, bar) in bars.enumerated() {
             let animation = CAKeyframeAnimation(keyPath: "transform.scale.y")
-            animation.values = [0.42, 1.0, 0.58, 0.9, 0.46]
+            animation.values = [0.55, 1.0, 0.68, 0.92, 0.58]
             animation.keyTimes = [0, 0.24, 0.52, 0.78, 1]
             animation.duration = 0.82 + (Double(index) * 0.05)
             animation.beginTime = CACurrentMediaTime() + (Double(index) * 0.06)
