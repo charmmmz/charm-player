@@ -139,6 +139,7 @@ async function main(): Promise<void> {
     }
 
     const enrichedSnap = liveActivityPreferences.apply(snap);
+    const relevanceScore = liveActivityPreferences.relevanceScoreForGroup(enrichedSnap.groupId);
     const state = await buildLiveActivityContentState(enrichedSnap, {
       logger: liveActivityArtworkLog,
       logContext: { trigger, force },
@@ -152,6 +153,7 @@ async function main(): Promise<void> {
         force,
         groupId: snap.groupId,
         registeredTokens: matching.length,
+        relevanceScore,
         hash,
         state: summarizeLiveActivityState(state),
       },
@@ -171,6 +173,7 @@ async function main(): Promise<void> {
           reason: 'last-sent-hash-match-or-in-flight',
           groupId: snap.groupId,
           registeredTokens: matching.length,
+          relevanceScore,
           hash,
           state: summarizeLiveActivityState(state),
         },
@@ -183,6 +186,7 @@ async function main(): Promise<void> {
       const result = await apns.pushUpdate(
         targets.map(t => t.token),
         state,
+        relevanceScore,
       );
       for (const t of targets) {
         tokens.recordSent(t.token, hash);
@@ -201,6 +205,7 @@ async function main(): Promise<void> {
           force,
           groupId: snap.groupId,
           tokenCount: targets.length,
+          relevanceScore,
           sent: result.sent,
           failed: result.failed,
           unregistered: result.unregistered.map(shortToken),
@@ -221,6 +226,7 @@ async function main(): Promise<void> {
     activityTokenEntries: TokenEntry[],
   ): Promise<void> {
     const now = new Date();
+    const relevanceScore = liveActivityPreferences.relevanceScoreForGroup(snap.groupId);
     try {
       const result = await maybeStartLiveActivityForSnapshot({
         snap,
@@ -232,7 +238,7 @@ async function main(): Promise<void> {
           logContext: { trigger },
         }),
         pushStart: (targetTokens, attributes, state) => (
-          apns.pushStart(targetTokens, attributes, state)
+          apns.pushStart(targetTokens, attributes, state, relevanceScore)
         ),
         recordStart: (token, date, groupId) => startTokens.recordStart(token, date, groupId),
         unregisterStartToken: token => startTokens.unregister(token),
@@ -249,6 +255,7 @@ async function main(): Promise<void> {
           startTokenCount: startTokenEntries.length,
           activityTokenCount: activityTokenEntries.length,
           suppressionCount: liveActivityDismissals.activeForGroup(snap.groupId, now).length,
+          relevanceScore,
           sent: result.sent,
           failed: result.failed,
           snapshot: summarizeSnapshot(snap),
@@ -512,6 +519,7 @@ async function main(): Promise<void> {
     const snap = sonos.current(body.groupId);
     if (snap) {
       const enrichedSnap = liveActivityPreferences.apply(snap);
+      const relevanceScore = liveActivityPreferences.relevanceScoreForGroup(enrichedSnap.groupId);
       const state = await buildLiveActivityContentState(enrichedSnap, {
         logger: liveActivityArtworkLog,
         logContext: { trigger: 'register-initial' },
@@ -524,12 +532,13 @@ async function main(): Promise<void> {
           trigger: 'register-initial',
           groupId: body.groupId,
           token: shortToken(body.token),
+          relevanceScore,
           hash,
           state: summarizeLiveActivityState(state),
         },
         'live_activity',
       );
-      const result = await apns.pushUpdate([body.token], state);
+      const result = await apns.pushUpdate([body.token], state, relevanceScore);
       for (const dead of result.unregistered) tokens.unregister(dead);
       tokens.recordSent(body.token, hash);
       log.info(
@@ -539,6 +548,7 @@ async function main(): Promise<void> {
           trigger: 'register-initial',
           groupId: body.groupId,
           token: shortToken(body.token),
+          relevanceScore,
           sent: result.sent,
           failed: result.failed,
           unregistered: result.unregistered.map(shortToken),
@@ -574,6 +584,7 @@ async function main(): Promise<void> {
     liveActivityPreferences.update({
       groupId: body.groupId,
       liveActivityStyleRaw: body.liveActivityStyleRaw,
+      selectedGroupId: body.selectedGroupId,
     });
 
     log.info(
@@ -582,24 +593,32 @@ async function main(): Promise<void> {
         action: 'preferences-update',
         groupId: body.groupId,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
+        selectedGroupId: body.selectedGroupId ?? null,
       },
       'live_activity',
     );
 
-    const snap = sonos.current(body.groupId);
-    if (snap) {
-      await pushLiveActivitySnapshot(snap, 'app-preferences', {
-        force: true,
-        logNoTokens: false,
-      });
+    const refreshAllRelevanceScores = body.selectedGroupId !== undefined;
+    const snapshots = refreshAllRelevanceScores
+      ? sonos.allSnapshots()
+      : [sonos.current(body.groupId)].filter((snap): snap is SonosGroupSnapshot => snap !== undefined);
+
+    if (snapshots.length > 0) {
+      for (const snap of snapshots) {
+        await pushLiveActivitySnapshot(snap, 'app-preferences', {
+          force: true,
+          logNoTokens: false,
+        });
+      }
     } else {
       log.info(
         {
           source: 'relay',
           action: 'skip',
           trigger: 'app-preferences',
-          reason: 'no-current-snapshot',
+          reason: refreshAllRelevanceScores ? 'no-current-snapshots' : 'no-current-snapshot',
           groupId: body.groupId,
+          selectedGroupId: body.selectedGroupId ?? null,
         },
         'live_activity',
       );

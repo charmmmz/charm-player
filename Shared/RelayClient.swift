@@ -656,6 +656,7 @@ enum RelayClient {
     struct LiveActivityPreferencesBody: Encodable, Sendable {
         let groupId: String
         let liveActivityStyleRaw: String?
+        let selectedGroupId: String?
     }
 
     static func postLiveActivityPreferences(

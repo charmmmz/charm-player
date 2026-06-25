@@ -76,11 +76,13 @@ export function makeLiveActivityStartNotification(
   attributes: LiveActivityStartAttributes,
   contentState: LiveActivityContentState,
   nowUnixSeconds = Math.floor(Date.now() / 1000),
+  relevanceScore = 50,
 ): apn.Notification {
   const note = new apn.Notification() as LiveActivityNote;
   note.topic = `${bundleId}.push-type.liveactivity`;
   note.pushType = 'liveactivity';
   note.expiry = nowUnixSeconds + 3600;
+  note.relevanceScore = relevanceScore;
   note.timestamp = nowUnixSeconds;
   note.staleDate = nowUnixSeconds + 8 * 3600;
   note.event = 'start';
@@ -180,11 +182,14 @@ export class ApnsClient {
     tokens: string[],
     attributes: LiveActivityStartAttributes,
     contentState: LiveActivityContentState,
+    relevanceScore = 50,
   ): Promise<ApnsResult> {
     const note = makeLiveActivityStartNotification(
       this.config.bundleId,
       attributes,
       contentState,
+      Math.floor(Date.now() / 1000),
+      relevanceScore,
     );
     return this.sendLiveActivityNotification(tokens, note, 'start', contentState);
   }

@@ -15,6 +15,7 @@ export interface LiveActivityNowPlayingHint {
 export interface LiveActivityPreferencesRequest {
   groupId: string;
   liveActivityStyleRaw?: string | null;
+  selectedGroupId?: string | null;
   nowPlaying?: LiveActivityNowPlayingHint | null;
 }
 
@@ -24,23 +25,44 @@ interface StoredLiveActivityPreferences {
   updatedAt: number;
 }
 
+const DEFAULT_LIVE_ACTIVITY_RELEVANCE_SCORE = 50;
+const SELECTED_LIVE_ACTIVITY_RELEVANCE_SCORE = 100;
+const BACKGROUND_LIVE_ACTIVITY_RELEVANCE_SCORE = 1;
+
 export class LiveActivityPreferenceStore {
   private readonly preferences = new Map<string, StoredLiveActivityPreferences>();
+  private selectedGroupId: string | null = null;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
   update(request: LiveActivityPreferencesRequest): void {
-    const existing = this.preferences.get(request.groupId);
+    const groupId = clean(request.groupId);
+    if (!groupId) return;
+    const existing = this.preferences.get(groupId);
     const updatedAt = this.now();
     const liveActivityStyleRaw = request.liveActivityStyleRaw === undefined
       ? existing?.liveActivityStyleRaw ?? null
       : clean(request.liveActivityStyleRaw);
 
-    this.preferences.set(request.groupId, {
-      groupId: request.groupId,
+    if (request.selectedGroupId !== undefined) {
+      this.selectedGroupId = clean(request.selectedGroupId);
+    }
+
+    this.preferences.set(groupId, {
+      groupId,
       liveActivityStyleRaw,
       updatedAt,
     });
+  }
+
+  relevanceScoreForGroup(groupId: string): number {
+    const cleanGroupId = clean(groupId);
+    if (!cleanGroupId || !this.selectedGroupId) {
+      return DEFAULT_LIVE_ACTIVITY_RELEVANCE_SCORE;
+    }
+    return cleanGroupId === this.selectedGroupId
+      ? SELECTED_LIVE_ACTIVITY_RELEVANCE_SCORE
+      : BACKGROUND_LIVE_ACTIVITY_RELEVANCE_SCORE;
   }
 
   apply(snapshot: SonosGroupSnapshot): SonosGroupSnapshot {

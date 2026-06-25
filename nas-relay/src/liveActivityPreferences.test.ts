@@ -67,6 +67,46 @@ test('Live Activity preferences preserve style when updates omit it', () => {
   assert.equal(enriched.liveActivityStyleRaw, 'widget');
 });
 
+test('Live Activity preferences prioritize the app-selected group without changing other snapshots', () => {
+  const store = new LiveActivityPreferenceStore();
+  store.update({
+    groupId: '192.168.50.25',
+    liveActivityStyleRaw: 'widget',
+    selectedGroupId: '192.168.50.25',
+  });
+
+  const selected = store.apply(snapshot({
+    groupId: '192.168.50.25',
+    speakerName: 'Playroom',
+    liveActivityStyleRaw: null,
+  }));
+  const other = store.apply(snapshot({
+    groupId: '192.168.50.30',
+    speakerName: 'Move',
+    liveActivityStyleRaw: null,
+  }));
+
+  assert.equal(selected.liveActivityStyleRaw, 'widget');
+  assert.equal(other.liveActivityStyleRaw, null);
+  assert.equal(store.relevanceScoreForGroup('192.168.50.25'), 100);
+  assert.equal(store.relevanceScoreForGroup('192.168.50.30'), 1);
+});
+
+test('Live Activity preferences keep selected group when later updates omit it', () => {
+  const store = new LiveActivityPreferenceStore();
+  store.update({
+    groupId: '192.168.50.25',
+    selectedGroupId: '192.168.50.25',
+  });
+  store.update({
+    groupId: '192.168.50.30',
+    liveActivityStyleRaw: 'classic',
+  });
+
+  assert.equal(store.relevanceScoreForGroup('192.168.50.25'), 100);
+  assert.equal(store.relevanceScoreForGroup('192.168.50.30'), 1);
+});
+
 test('Live Activity preferences ignore app now playing hints for relay-owned snapshots', () => {
   const store = new LiveActivityPreferenceStore(() => 1_000);
   store.update({

@@ -73,10 +73,11 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(json["suppressForSeconds"] as? Int, 1800)
     }
 
-    func testLiveActivityPreferencesRequestEncodesStyleOnly() throws {
+    func testLiveActivityPreferencesRequestEncodesStyleAndSelectedGroup() throws {
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: "192.168.50.25",
-            liveActivityStyleRaw: "classic"
+            liveActivityStyleRaw: "classic",
+            selectedGroupId: "192.168.50.25"
         )
 
         let data = try JSONEncoder().encode(body)
@@ -86,6 +87,7 @@ final class RelayManagerTests: XCTestCase {
 
         XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
         XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "classic")
+        XCTAssertEqual(json["selectedGroupId"] as? String, "192.168.50.25")
         XCTAssertNil(json["nowPlaying"])
     }
 

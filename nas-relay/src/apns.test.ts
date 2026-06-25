@@ -84,6 +84,7 @@ test('makeLiveActivityStartNotification creates ActivityKit start payload', () =
   assert.equal(note.expiry, 1_800_003_600);
   assert.deepEqual(note.aps, {
     timestamp: 1_800_000_000,
+    'relevance-score': 50,
     'stale-date': 1_800_028_800,
     event: 'start',
     'attributes-type': 'SonosActivityAttributes',
@@ -95,6 +96,18 @@ test('makeLiveActivityStartNotification creates ActivityKit start payload', () =
       body: 'New Order on Playroom',
     },
   });
+});
+
+test('makeLiveActivityStartNotification includes the requested relevance score', () => {
+  const note = makeLiveActivityStartNotification(
+    baseConfig.bundleId,
+    startAttributes,
+    contentState,
+    1_800_000_000,
+    100,
+  );
+
+  assert.equal((note.aps as Record<string, unknown>)['relevance-score'], 100);
 });
 
 test('liveActivityNotificationPayloadBytes measures the serialized APNs payload', () => {

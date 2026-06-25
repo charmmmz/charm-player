@@ -802,6 +802,7 @@ final class SonosManager {
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
         lastLiveActivityRelayPreferencesSignature = nil
+        pushLiveActivityRelayPreferencesIfNeeded(force: true)
         if previousPlaybackIP != speaker.playbackIP {
             stopEventSubscriptions()
         }
@@ -4666,11 +4667,13 @@ final class SonosManager {
 
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: groupId,
-            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue
+            liveActivityStyleRaw: SharedStorage.liveActivityStyle.rawValue,
+            selectedGroupId: groupId
         )
         let signature = [
             body.groupId,
-            body.liveActivityStyleRaw ?? ""
+            body.liveActivityStyleRaw ?? "",
+            body.selectedGroupId ?? ""
         ].joined(separator: "\u{1F}")
 
         guard force || signature != lastLiveActivityRelayPreferencesSignature else {
@@ -4680,7 +4683,8 @@ final class SonosManager {
                             groupId: groupId,
                             relayURL: url,
                             extra: [
-                                "style=\(body.liveActivityStyleRaw ?? "nil")"
+                                "style=\(body.liveActivityStyleRaw ?? "nil")",
+                                "selectedGroupId=\(Self.liveActivityLogValue(body.selectedGroupId ?? "nil"))"
                             ])
             return
         }
@@ -4692,7 +4696,8 @@ final class SonosManager {
                         relayURL: url,
                         extra: [
                             "force=\(force)",
-                            "style=\(body.liveActivityStyleRaw ?? "nil")"
+                            "style=\(body.liveActivityStyleRaw ?? "nil")",
+                            "selectedGroupId=\(Self.liveActivityLogValue(body.selectedGroupId ?? "nil"))"
                         ])
 
         Task { [weak self] in
@@ -4704,7 +4709,8 @@ final class SonosManager {
                                           groupId: groupId,
                                           relayURL: url,
                                           extra: [
-                                            "style=\(body.liveActivityStyleRaw ?? "nil")"
+                                            "style=\(body.liveActivityStyleRaw ?? "nil")",
+                                            "selectedGroupId=\(Self.liveActivityLogValue(body.selectedGroupId ?? "nil"))"
                                           ])
                 }
             } catch {
