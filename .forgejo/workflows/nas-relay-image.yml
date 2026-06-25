@@ -31,6 +31,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}/nas-relay
   REGISTRY_OVERRIDE: ${{ vars.REGISTRY }}
   NPM_REGISTRY_OVERRIDE: ${{ vars.NPM_REGISTRY }}
+  ACR_REGISTRY_OVERRIDE: ${{ vars.ACR_REGISTRY }}
+  ACR_NAMESPACE: ${{ vars.ACR_NAMESPACE }}
+  ACR_REPOSITORY: ${{ vars.ACR_REPOSITORY }}
 
 jobs:
   build:
@@ -103,6 +106,31 @@ jobs:
           echo "build_tag=${build_tag}" >> "$GITHUB_ENV"
           echo "Build tag: ${build_tag}"
 
+      - name: Resolve Aliyun ACR image
+        id: acr
+        run: |
+          acr_registry="${ACR_REGISTRY_OVERRIDE}"
+          acr_registry="${acr_registry%%/}"
+          acr_namespace="${ACR_NAMESPACE}"
+          acr_repository="${ACR_REPOSITORY:-sonos-nas-relay}"
+
+          if [ -z "$acr_registry" ]; then
+            echo "::error::Set repository variable ACR_REGISTRY to your ACR endpoint, for example: crpi-xxxx.cn-hangzhou.personal.cr.aliyuncs.com"
+            exit 1
+          fi
+          if [ -z "$acr_namespace" ]; then
+            echo "::error::Set repository variable ACR_NAMESPACE to your ACR namespace, for example: charm"
+            exit 1
+          fi
+
+          acr_image="${acr_registry}/${acr_namespace}/${acr_repository}"
+          acr_image=$(printf '%s' "$acr_image" | tr '[:upper:]' '[:lower:]')
+          echo "ACR_REGISTRY=${acr_registry}" >> "$GITHUB_ENV"
+          echo "ACR_IMAGE=${acr_image}" >> "$GITHUB_ENV"
+          echo "registry=${acr_registry}" >> "$GITHUB_OUTPUT"
+          echo "image=${acr_image}" >> "$GITHUB_OUTPUT"
+          echo "Aliyun ACR image: ${acr_image}"
+
       - name: Resolve platforms
         env:
           PLATFORM_INPUT: ${{ inputs.platforms }}
@@ -155,6 +183,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.PACKAGE_TOKEN }}
 
+      - name: Login to Aliyun ACR
+        uses: https://github.com/docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ steps.acr.outputs.registry }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
       - name: Build and push image
         uses: https://github.com/docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
@@ -176,3 +211,6 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ env.short_sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.build_tag }}
+            ${{ steps.acr.outputs.image }}:latest
+            ${{ steps.acr.outputs.image }}:sha-${{ env.short_sha }}
+            ${{ steps.acr.outputs.image }}:${{ env.build_tag }}
