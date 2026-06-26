@@ -693,11 +693,46 @@ struct AudioQuality: Codable, Equatable, Sendable {
 
 struct SpeakerGroupStatus: Identifiable, Sendable {
     var id: String
+    var name: String? = nil
     var coordinator: SonosPlayer
     var members: [SonosPlayer]
     var trackInfo: TrackInfo?
     var transportState: TransportState
     var volume: Int = 0
+}
+
+struct SonosArea: Identifiable, Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var isReadOnly: Bool
+    var playerIds: [String]
+
+    init(
+        id: String,
+        name: String,
+        isReadOnly: Bool = false,
+        playerIds: [String]
+    ) {
+        self.id = id
+        self.name = name
+        self.isReadOnly = isReadOnly
+        self.playerIds = playerIds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case isReadOnly
+        case playerIds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        isReadOnly = try container.decodeIfPresent(Bool.self, forKey: .isReadOnly) ?? false
+        playerIds = try container.decodeIfPresent([String].self, forKey: .playerIds) ?? []
+    }
 }
 
 // MARK: - Queue

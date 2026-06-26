@@ -16,6 +16,8 @@ export interface LiveActivityPreferencesRequest {
   groupId: string;
   liveActivityStyleRaw?: string | null;
   selectedGroupId?: string | null;
+  clientId?: string | null;
+  resumeLiveActivity?: boolean | null;
   nowPlaying?: LiveActivityNowPlayingHint | null;
 }
 

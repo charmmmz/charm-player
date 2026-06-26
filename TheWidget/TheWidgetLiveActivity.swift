@@ -16,7 +16,7 @@ struct SonosLiveActivity: Widget {
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     ArtView(
-                        data: context.state.preferredAlbumArtData,
+                        data: context.state.compactAlbumArtData,
                         size: 50,
                         source: islandSource,
                         state: context.state)
@@ -176,7 +176,7 @@ private struct ClassicLockScreenView: View {
             // ── Single row: art | text | controls ──
             HStack(spacing: 12) {
                 ArtView(
-                    data: context.state.preferredAlbumArtData,
+                    data: context.state.compactAlbumArtData,
                     size: 48,
                     source: source,
                     state: context.state)
@@ -247,7 +247,7 @@ private struct ClassicLockScreenView: View {
                 // music session would otherwise tint the lock screen the
                 // wrong color.
                 if source != .tv,
-                   let data = context.state.preferredAlbumArtData,
+                   let data = context.state.compactAlbumArtData,
                    let img = UIImage(data: data) {
                     Image(uiImage: img)
                         .resizable()
@@ -281,7 +281,7 @@ private struct WidgetCardLockScreenView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 ArtView(
-                    data: state.preferredAlbumArtData,
+                    data: state.compactAlbumArtData,
                     size: 58,
                     source: source,
                     state: state)
@@ -350,7 +350,7 @@ private struct WidgetTVRemoteLockScreenView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 ArtView(
-                    data: state.preferredAlbumArtData,
+                    data: state.compactAlbumArtData,
                     size: 50,
                     source: .tv,
                     state: state)
@@ -566,14 +566,6 @@ private struct LiveActivityVolumeControlContent: View {
             .frame(
                 width: LiveActivityLayoutMetrics.volumeControlSize,
                 height: LiveActivityLayoutMetrics.volumeControlSize)
-            .background {
-                Circle()
-                    .fill(.white.opacity(0.08))
-            }
-            .overlay {
-                Circle()
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
             .contentShape(Circle())
     }
 }
@@ -585,7 +577,7 @@ private struct WidgetLiveActivityBackdrop: View {
     var body: some View {
         ZStack {
             if state.playbackSource != .tv,
-               let data = state.preferredAlbumArtData,
+               let data = state.compactAlbumArtData,
                let img = UIImage(data: data) {
                 Image(uiImage: img)
                     .resizable()
@@ -807,12 +799,19 @@ private struct ArtView: View {
             fallback: state.albumArtThumbnail,
             isRenderable: { UIImage(data: $0) != nil }
         )
+        let renderSource = LiveActivityArtworkRenderDiagnostics.renderSource(
+            renderData: renderData,
+            providedData: data,
+            payloadData: state.albumArtThumbnail)
         if source != .tv, let renderData, let img = UIImage(data: renderData) {
             let _ = LiveActivityArtworkRenderDiagnostics.logIfNeeded(
                 reason: "render-success",
                 state: state,
                 source: source,
                 dataBytes: renderData.count,
+                providedBytes: data?.count ?? 0,
+                payloadBytes: state.albumArtThumbnail?.count ?? 0,
+                renderSource: renderSource,
                 size: size)
             Image(uiImage: img)
                 .resizable()
@@ -826,6 +825,9 @@ private struct ArtView: View {
                     state: state,
                     source: source,
                     dataBytes: renderData?.count ?? 0,
+                    providedBytes: data?.count ?? 0,
+                    payloadBytes: state.albumArtThumbnail?.count ?? 0,
+                    renderSource: renderSource,
                     size: size)
                 : ()
             RoundedRectangle(cornerRadius: size * 0.18)
@@ -846,6 +848,9 @@ private enum LiveActivityArtworkRenderDiagnostics {
         state: SonosActivityAttributes.ContentState,
         source: PlaybackSource,
         dataBytes: Int,
+        providedBytes: Int,
+        payloadBytes: Int,
+        renderSource: String,
         size: CGFloat
     ) {
         let key = [
@@ -855,6 +860,7 @@ private enum LiveActivityArtworkRenderDiagnostics {
             state.artist,
             source.rawValue,
             String(dataBytes),
+            renderSource,
             String(Int(size.rounded()))
         ].joined(separator: "|")
         guard LiveActivityArtworkRenderLogRegistry.shared.claim(key) else { return }
@@ -869,10 +875,27 @@ private enum LiveActivityArtworkRenderDiagnostics {
             "artist=\(logValue(state.artist))",
             "sourceRaw=\(state.playbackSourceRaw ?? "nil")",
             "viewSource=\(source.rawValue)",
-            "payloadArtBytes=\(state.albumArtThumbnail?.count ?? 0)",
+            "providedArtBytes=\(providedBytes)",
+            "payloadArtBytes=\(payloadBytes)",
             "renderArtBytes=\(dataBytes)",
+            "renderSource=\(renderSource)",
             "size=\(Int(size.rounded()))"
         ].joined(separator: " "), flushRemoteImmediately: true)
+    }
+
+    static func renderSource(
+        renderData: Data?,
+        providedData: Data?,
+        payloadData: Data?
+    ) -> String {
+        guard let renderData else { return "placeholder" }
+        if let payloadData, !payloadData.isEmpty, renderData == payloadData {
+            return "payload-compact"
+        }
+        if let providedData, !providedData.isEmpty, renderData == providedData {
+            return "provided-cache"
+        }
+        return "unknown"
     }
 
     private static func logValue(_ value: String) -> String {

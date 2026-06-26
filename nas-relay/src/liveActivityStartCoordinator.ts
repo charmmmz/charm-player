@@ -23,6 +23,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
   recordStart: (token: string, date: Date, groupId: string) => void;
   unregisterStartToken: (token: string) => void;
   now: Date;
+  bypassCooldown?: boolean;
 }): Promise<{ reason: string; sent: number; failed: number }> {
   const decision = selectPushToStartTargets({
     snap: input.snap,
@@ -30,6 +31,7 @@ export async function maybeStartLiveActivityForSnapshot(input: {
     activityTokens: input.activityTokens,
     startSuppressions: input.startSuppressions,
     now: input.now,
+    bypassCooldown: input.bypassCooldown,
   });
 
   if (decision.targets.length === 0) {

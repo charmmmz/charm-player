@@ -77,7 +77,9 @@ final class RelayManagerTests: XCTestCase {
         let body = RelayClient.LiveActivityPreferencesBody(
             groupId: "192.168.50.25",
             liveActivityStyleRaw: "classic",
-            selectedGroupId: "192.168.50.25"
+            selectedGroupId: "192.168.50.25",
+            clientId: "client-1",
+            resumeLiveActivity: true
         )
 
         let data = try JSONEncoder().encode(body)
@@ -88,6 +90,8 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(json["groupId"] as? String, "192.168.50.25")
         XCTAssertEqual(json["liveActivityStyleRaw"] as? String, "classic")
         XCTAssertEqual(json["selectedGroupId"] as? String, "192.168.50.25")
+        XCTAssertEqual(json["clientId"] as? String, "client-1")
+        XCTAssertEqual(json["resumeLiveActivity"] as? Bool, true)
         XCTAssertNil(json["nowPlaying"])
     }
 

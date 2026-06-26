@@ -11,6 +11,11 @@ enum SonosLocalControlAPI {
         let restUrl: String?
     }
 
+    struct AreasResponse: Decodable, Sendable {
+        let areas: [SonosArea]
+        let version: String?
+    }
+
     private nonisolated static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
@@ -42,6 +47,30 @@ enum SonosLocalControlAPI {
         return try decodePlaybackMetadata(data)
     }
 
+    nonisolated static func getAreas(ip: String, householdId: String) async throws -> AreasResponse {
+        let request = try areasRequest(ip: ip, householdId: householdId)
+        let data = try await data(for: request)
+        return try decodeAreas(data)
+    }
+
+    @discardableResult
+    nonisolated static func createGroup(
+        ip: String,
+        householdId: String,
+        playerIds: [String],
+        areaIds: [String],
+        musicContextGroupId: String?
+    ) async throws -> SonosCloudAPI.CreateGroupResponse {
+        let request = try createGroupRequest(
+            ip: ip,
+            householdId: householdId,
+            playerIds: playerIds,
+            areaIds: areaIds,
+            musicContextGroupId: musicContextGroupId)
+        let data = try await data(for: request)
+        return try JSONDecoder().decode(SonosCloudAPI.CreateGroupResponse.self, from: data)
+    }
+
     nonisolated static func playerInfoRequest(ip: String, playerId: String) throws -> URLRequest {
         try request(ip: ip, path: "/api/v1/players/\(pathSegment(playerId))/info")
     }
@@ -50,12 +79,45 @@ enum SonosLocalControlAPI {
         try request(ip: ip, path: "/api/v1/groups/\(pathSegment(groupId))/playbackMetadata")
     }
 
+    nonisolated static func areasRequest(ip: String, householdId: String) throws -> URLRequest {
+        try request(ip: ip, path: "/api/v1/households/\(pathSegment(householdId))/areas")
+    }
+
+    nonisolated static func createGroupRequest(
+        ip: String,
+        householdId: String,
+        playerIds: [String],
+        areaIds: [String],
+        musicContextGroupId: String?
+    ) throws -> URLRequest {
+        var request = try request(
+            ip: ip,
+            path: "/api/v1/households/\(pathSegment(householdId))/groups/createGroup")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = ["playerIds": playerIds]
+        if !areaIds.isEmpty {
+            body["areaIds"] = areaIds
+        }
+        if let musicContextGroupId,
+           !musicContextGroupId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["musicContextGroupId"] = musicContextGroupId
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        return request
+    }
+
     nonisolated static func decodePlayerInfo(_ data: Data) throws -> PlayerInfo {
         try JSONDecoder().decode(PlayerInfo.self, from: data)
     }
 
     nonisolated static func decodePlaybackMetadata(_ data: Data) throws -> SonosCloudAPI.CloudPlaybackMetadata {
         try JSONDecoder().decode(SonosCloudAPI.CloudPlaybackMetadata.self, from: data)
+    }
+
+    nonisolated static func decodeAreas(_ data: Data) throws -> AreasResponse {
+        try JSONDecoder().decode(AreasResponse.self, from: data)
     }
 
     private nonisolated static func request(ip: String, path: String) throws -> URLRequest {

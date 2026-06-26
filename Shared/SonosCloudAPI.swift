@@ -24,8 +24,10 @@ enum SonosCloudAPI {
     struct CloudGroup: Decodable {
         let id: String
         let name: String
+        let coordinatorId: String?
         let playbackState: String?
         let playerIds: [String]
+        let areaIds: [String]?
     }
 
     struct CloudPlayer: Decodable {
@@ -879,9 +881,11 @@ enum SonosCloudAPI {
     @discardableResult
     static func createGroup(token: String, householdId: String,
                             playerIds: [String],
-                            musicContextGroupId: String? = nil) async throws -> CreateGroupResponse {
+                            musicContextGroupId: String? = nil,
+                            areaIds: [String] = []) async throws -> CreateGroupResponse {
         var body: [String: Any] = ["playerIds": playerIds]
         if let musicContextGroupId { body["musicContextGroupId"] = musicContextGroupId }
+        if !areaIds.isEmpty { body["areaIds"] = areaIds }
         let data = try await postControl(
             path: "/households/\(householdId)/groups/createGroup",
             token: token,

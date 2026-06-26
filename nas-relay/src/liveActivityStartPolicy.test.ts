@@ -105,6 +105,21 @@ test('does not start when all start tokens are in cooldown', () => {
   assert.deepEqual(decision.targets, []);
 });
 
+test('manual resume can bypass push-to-start cooldown', () => {
+  const decision = selectPushToStartTargets({
+    snap,
+    startTokens: [
+      { ...startToken, token: 'recent-token', lastStartAt: '2026-06-24T07:59:45.000Z' },
+    ],
+    activityTokens: [],
+    now: new Date('2026-06-24T08:00:00.000Z'),
+    bypassCooldown: true,
+  });
+
+  assert.equal(decision.reason, 'start');
+  assert.deepEqual(decision.targets.map(target => target.token), ['recent-token']);
+});
+
 test('uses a 90 second default cooldown when none is supplied', () => {
   const decision = selectPushToStartTargets({
     snap,

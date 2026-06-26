@@ -307,6 +307,48 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(manager.groupStatuses[1].transportState, .playing)
     }
 
+    func testCurrentGroupMembersResolveFromGroupStatusesWhenSelectedGroupIdIsMissing() {
+        let manager = SonosManager()
+        let selected = SonosPlayer(
+            id: "playroom",
+            name: "Playroom",
+            ipAddress: "192.168.1.20",
+            isCoordinator: true,
+            groupId: nil
+        )
+        let move = SonosPlayer(
+            id: "move",
+            name: "Move",
+            ipAddress: "192.168.1.21",
+            isCoordinator: false,
+            groupId: "rooms-live"
+        )
+        let hidden = SonosPlayer(
+            id: "sub",
+            name: "Sub",
+            ipAddress: "192.168.1.22",
+            isCoordinator: false,
+            groupId: "rooms-live",
+            isInvisible: true
+        )
+        let homeTheater = makePlayer(id: "home-theater", name: "Home Theater", groupId: "home-live")
+
+        manager.selectedSpeaker = selected
+        manager.allSpeakers = [selected, move, hidden, homeTheater]
+        manager.groupStatuses = [
+            SpeakerGroupStatus(
+                id: "rooms-live",
+                coordinator: selected,
+                members: [selected, move, hidden],
+                trackInfo: nil,
+                transportState: .playing
+            ),
+            makeStatus(player: homeTheater)
+        ]
+
+        XCTAssertEqual(manager.currentGroupMembers.map(\.id), ["playroom", "move"])
+    }
+
     func testSpeakerSelectionMatchRejectsStaleRefreshTarget() {
         let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
         let move = makePlayer(id: "move", name: "Move", groupId: "move-group")
@@ -317,6 +359,34 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertTrue(
             SonosManager.speakerSelectionMatches(playroom, expectedSpeakerID: playroom.id)
         )
+    }
+
+    func testPartyModeJoinTargetsOnlyIncludeVisibleSpeakersOutsideCurrentGroup() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "home")
+        let kitchen = makePlayer(id: "kitchen", name: "Kitchen", groupId: "kitchen")
+        let bedroom = makePlayer(id: "bedroom", name: "Bedroom", groupId: "home")
+        let bridge = makePlayer(id: "bridge", name: "Bridge", groupId: "bridge", isInvisible: true)
+
+        let targets = SonosManager.partyModeJoinTargets(
+            selectedSpeaker: playroom,
+            allSpeakers: [playroom, kitchen, bedroom, bridge, kitchen]
+        )
+
+        XCTAssertEqual(targets, [kitchen])
+    }
+
+    func testPartyModeLeaveTargetsOnlyIncludeCurrentGroupNonCoordinatorMembers() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "home")
+        let kitchen = makePlayer(id: "kitchen", name: "Kitchen", groupId: "home")
+        let bedroom = makePlayer(id: "bedroom", name: "Bedroom", groupId: "bedroom")
+        let bridge = makePlayer(id: "bridge", name: "Bridge", groupId: "home", isInvisible: true)
+
+        let targets = SonosManager.partyModeLeaveTargets(
+            selectedSpeaker: playroom,
+            allSpeakers: [playroom, kitchen, bedroom, bridge, kitchen]
+        )
+
+        XCTAssertEqual(targets, [kitchen])
     }
 
     func testSpeakerSelectionArtworkRestoreUsesMatchingGroupImage() {
@@ -364,13 +434,19 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertTrue(restored?.image === cachedImage)
     }
 
-    private func makePlayer(id: String, name: String, groupId: String? = nil) -> SonosPlayer {
+    private func makePlayer(
+        id: String,
+        name: String,
+        groupId: String? = nil,
+        isInvisible: Bool = false
+    ) -> SonosPlayer {
         SonosPlayer(
             id: id,
             name: name,
             ipAddress: "192.168.1.\(abs(id.hashValue % 200) + 20)",
             isCoordinator: true,
-            groupId: groupId ?? id
+            groupId: groupId ?? id,
+            isInvisible: isInvisible
         )
     }
 

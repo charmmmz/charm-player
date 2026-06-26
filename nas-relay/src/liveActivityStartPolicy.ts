@@ -22,6 +22,7 @@ export interface PushToStartDecisionInput {
   now: Date;
   cooldownMs?: number;
   retryBackoffMs?: number;
+  bypassCooldown?: boolean;
 }
 
 export interface PushToStartDecision {
@@ -47,6 +48,10 @@ export function selectPushToStartTargets(input: PushToStartDecisionInput): PushT
   ));
   if (eligibleBySuppression.length === 0) {
     return { reason: 'suppressed', targets: [] };
+  }
+
+  if (input.bypassCooldown === true) {
+    return { reason: 'start', targets: eligibleBySuppression };
   }
 
   const cooldownMs = input.cooldownMs ?? 90_000;

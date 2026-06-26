@@ -373,6 +373,36 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
     }
 
+    func testManualResumeFallbackCreatesWhenRelayStartDidNotAttach() {
+        XCTAssertTrue(
+            SonosManager.shouldCreateManualResumeFallbackLiveActivity(
+                currentActivityExistsForGroup: false,
+                shouldKeepActivity: true,
+                userInitiatedResume: true
+            )
+        )
+    }
+
+    func testManualResumeFallbackSkipsWhenActivityExistsForGroup() {
+        XCTAssertFalse(
+            SonosManager.shouldCreateManualResumeFallbackLiveActivity(
+                currentActivityExistsForGroup: true,
+                shouldKeepActivity: true,
+                userInitiatedResume: true
+            )
+        )
+    }
+
+    func testManualResumeFallbackSkipsWhenResumeWasNotUserInitiated() {
+        XCTAssertFalse(
+            SonosManager.shouldCreateManualResumeFallbackLiveActivity(
+                currentActivityExistsForGroup: false,
+                shouldKeepActivity: true,
+                userInitiatedResume: false
+            )
+        )
+    }
+
     func testRelayPushToStartReadyRequiresRelayAndAPNsAndRegistration() {
         XCTAssertTrue(
             SonosManager.isRelayPushToStartReady(

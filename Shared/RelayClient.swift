@@ -657,6 +657,8 @@ enum RelayClient {
         let groupId: String
         let liveActivityStyleRaw: String?
         let selectedGroupId: String?
+        let clientId: String?
+        let resumeLiveActivity: Bool?
     }
 
     static func postLiveActivityPreferences(

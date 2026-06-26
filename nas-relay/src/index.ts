@@ -224,6 +224,7 @@ async function main(): Promise<void> {
     trigger: string,
     startTokenEntries: PushToStartTokenEntry[],
     activityTokenEntries: TokenEntry[],
+    options: { bypassCooldown?: boolean } = {},
   ): Promise<void> {
     const now = new Date();
     const relevanceScore = liveActivityPreferences.relevanceScoreForGroup(snap.groupId);
@@ -243,6 +244,7 @@ async function main(): Promise<void> {
         recordStart: (token, date, groupId) => startTokens.recordStart(token, date, groupId),
         unregisterStartToken: token => startTokens.unregister(token),
         now,
+        bypassCooldown: options.bypassCooldown,
       });
 
       log[result.reason === 'start' ? 'info' : 'debug'](
@@ -258,6 +260,7 @@ async function main(): Promise<void> {
           relevanceScore,
           sent: result.sent,
           failed: result.failed,
+          bypassCooldown: options.bypassCooldown === true,
           snapshot: summarizeSnapshot(snap),
         },
         'live_activity',
@@ -272,6 +275,7 @@ async function main(): Promise<void> {
           groupId: snap.groupId,
           startTokenCount: startTokenEntries.length,
           activityTokenCount: activityTokenEntries.length,
+          bypassCooldown: options.bypassCooldown === true,
           snapshot: summarizeSnapshot(snap),
         },
         'live_activity',
@@ -594,9 +598,54 @@ async function main(): Promise<void> {
         groupId: body.groupId,
         liveActivityStyleRaw: body.liveActivityStyleRaw ?? null,
         selectedGroupId: body.selectedGroupId ?? null,
+        clientId: body.clientId ?? null,
+        resumeLiveActivity: body.resumeLiveActivity === true,
       },
       'live_activity',
     );
+
+    if (body.resumeLiveActivity === true) {
+      const resumeClientId = body.clientId ?? undefined;
+      const removed = liveActivityDismissals.clearForActivity(body.groupId, resumeClientId);
+      log.info(
+        {
+          source: 'relay',
+          action: 'dismissal-suppression-clear',
+          trigger: 'app-preferences-resume',
+          groupId: body.groupId,
+          clientId: resumeClientId ?? null,
+          removed,
+        },
+        'live_activity',
+      );
+      const snap = sonos.current(body.groupId);
+      if (snap?.isPlaying) {
+        const groupStartTokens = startTokens.forGroup(body.groupId);
+        const resumeStartTokens = resumeClientId
+          ? groupStartTokens.filter(entry => entry.clientId === resumeClientId)
+          : groupStartTokens;
+        await tryStartLiveActivitySnapshot(
+          liveActivityPreferences.apply(snap),
+          'app-preferences-resume:start',
+          resumeStartTokens,
+          tokens.forGroup(body.groupId),
+          { bypassCooldown: true },
+        );
+      } else {
+        log.info(
+          {
+            source: 'relay',
+            action: 'skip',
+            trigger: 'app-preferences-resume:start',
+            reason: snap ? 'not-playing' : 'no-current-snapshot',
+            groupId: body.groupId,
+            clientId: body.clientId ?? null,
+            snapshot: snap ? summarizeSnapshot(snap) : null,
+          },
+          'live_activity',
+        );
+      }
+    }
 
     const refreshAllRelevanceScores = body.selectedGroupId !== undefined;
     const snapshots = refreshAllRelevanceScores
