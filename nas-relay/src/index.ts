@@ -10,12 +10,7 @@ import { TokenStore } from './tokenStore.js';
 import { HueAmbienceConfigStore } from './hueConfigStore.js';
 import { HueAmbienceService } from './hueAmbienceService.js';
 import { createHueAmbienceRouter } from './hueRoutes.js';
-import { createHueMusicAmbienceRenderer } from './hueEdkSidecarRenderer.js';
-import type { HueEntertainmentControlClient } from './hueEntertainmentStream.js';
-import type { HueLightClient } from './hueTypes.js';
-import { Cs2GameStateService } from './cs2GameState.js';
-import { createCs2GameStateRouter } from './cs2Routes.js';
-import { Cs2LightingService } from './cs2Lighting.js';
+import { createHueMusicAmbienceRenderer } from './hueMusicAmbienceRenderer.js';
 import { createPlaybackStateRouter } from './playbackStateRoutes.js';
 import { DeviceLogService } from './deviceLogs.js';
 import { createDeviceLogRouter } from './deviceLogRoutes.js';
@@ -56,8 +51,6 @@ const log = pino({
 const RELAY_PORT = Number(process.env.RELAY_PORT ?? 8787);
 const SEED_IP = process.env.SONOS_SEED_IP?.trim() || undefined;
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data';
-const CS2_LIGHTING_LOG_PATH = process.env.CS2_LIGHTING_LOG_PATH
-  ?? path.join(DATA_DIR, 'cs2-lighting.jsonl');
 const DEFAULT_APNS_BUNDLE_ID = 'com.charm.SonosWidget';
 const DEFAULT_APNS_TEAM_ID = '3MSS7DJGVR';
 const DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS = 30 * 60;
@@ -77,19 +70,10 @@ async function main(): Promise<void> {
     undefined,
     undefined,
     undefined,
-    (config, client) => createHueMusicAmbienceRenderer(
-      config,
-      client as HueLightClient & HueEntertainmentControlClient,
-    ),
+    (config, client) => createHueMusicAmbienceRenderer(config, client),
   );
   await hueAmbience.load();
-  const cs2GameState = new Cs2GameStateService();
   const deviceLogs = new DeviceLogService();
-  const cs2Lighting = new Cs2LightingService(hueConfigStore, undefined, {
-    beforeRender: () => hueAmbience.pauseForExternalRenderer(),
-    logger: log.child({ module: 'cs2-lighting' }),
-    logFilePath: CS2_LIGHTING_LOG_PATH,
-  });
 
   const apns = await ApnsClient.create(
     {
@@ -287,9 +271,7 @@ async function main(): Promise<void> {
     snap: SonosGroupSnapshot,
     context?: SonosSnapshotChangeContext,
   ) => {
-    if (!cs2Lighting.shouldDeferAlbumAmbience()) {
-      hueAmbience.receiveSnapshot(snap);
-    }
+    hueAmbience.receiveSnapshot(snap);
 
     const trigger = context?.trigger ?? 'sonos-change';
     const force = trigger === 'periodic-refresh';
@@ -324,12 +306,7 @@ async function main(): Promise<void> {
   app.use('/internal', internalAuthMiddleware(log), createInternalSonosRouter(sonos, log));
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
-  app.use('/api', createCs2GameStateRouter(cs2GameState, log.child({ module: 'cs2' })));
   app.use('/api', createDeviceLogRouter(deviceLogs, log.child({ module: 'device-logs' })));
-
-  cs2GameState.on('state', snapshot => {
-    void cs2Lighting.receive(snapshot);
-  });
 
   app.get('/api/health', async (_req, res) => {
     const hueAmbienceStatus = hueAmbience.status();
@@ -357,10 +334,6 @@ async function main(): Promise<void> {
       })),
       hueAmbience: hueAmbienceStatus,
       hueEntertainment: hueEntertainmentStatus,
-      cs2Lighting: cs2Lighting.status(),
-      cs2: {
-        providers: cs2GameState.status(),
-      },
     });
   });
 

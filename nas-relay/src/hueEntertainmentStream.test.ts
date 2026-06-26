@@ -127,11 +127,11 @@ function frame(overrides: { channelID?: string | null } = {}): HueAmbienceFrame 
   return buildHueAmbienceFrame({
     targets: [target(overrides)],
     snapshot: {
-      groupId: 'cs2',
-      speakerName: 'CS2',
-      trackTitle: 'flash',
-      artist: 'Counter-Strike 2',
-      album: 'competitive',
+      groupId: 'office',
+      speakerName: 'Office',
+      trackTitle: 'Track',
+      artist: 'Artist',
+      album: 'Album',
       albumArtUri: '',
       isPlaying: true,
       positionSeconds: 0,
@@ -185,7 +185,6 @@ function target(overrides: { channelID?: string | null } = {}): HueResolvedAmbie
 function config(): HueAmbienceRuntimeConfig {
   return {
     enabled: true,
-    cs2LightingEnabled: true,
     bridge: { id: 'bridge-1', ipAddress: '192.168.50.216', name: 'Hue Bridge' },
     applicationKey: 'app-key',
     streamingClientKey: '00112233445566778899aabbccddeeff',

@@ -481,16 +481,6 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "hueAmbienceEnabled") }
     }
 
-    nonisolated static var hueCS2SyncEnabled: Bool {
-        get { defaults.bool(forKey: "hueCS2SyncEnabled") }
-        set { defaults.set(newValue, forKey: "hueCS2SyncEnabled") }
-    }
-
-    nonisolated static var hueCS2EntertainmentAreaID: String? {
-        get { defaults.string(forKey: "hueCS2EntertainmentAreaID") }
-        set { defaults.set(newValue, forKey: "hueCS2EntertainmentAreaID") }
-    }
-
     nonisolated static var hueBridgeData: Data? {
         get { defaults.data(forKey: "hueBridgeData") }
         set { defaults.set(newValue, forKey: "hueBridgeData") }

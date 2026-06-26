@@ -3,8 +3,6 @@ import Observation
 
 protocol HueAmbienceStorage: AnyObject {
     var isEnabled: Bool { get set }
-    var isCS2SyncEnabled: Bool { get set }
-    var cs2EntertainmentAreaID: String? { get set }
     var bridgeData: Data? { get set }
     var mappingsData: Data? { get set }
     var resourcesData: Data? { get set }
@@ -34,38 +32,6 @@ final class HueAmbienceDefaults: HueAmbienceStorage {
                 defaults.set(newValue, forKey: "hueAmbienceEnabled")
             } else {
                 SharedStorage.hueAmbienceEnabled = newValue
-            }
-        }
-    }
-
-    var isCS2SyncEnabled: Bool {
-        get {
-            if let defaults {
-                return defaults.bool(forKey: "hueCS2SyncEnabled")
-            }
-            return SharedStorage.hueCS2SyncEnabled
-        }
-        set {
-            if let defaults {
-                defaults.set(newValue, forKey: "hueCS2SyncEnabled")
-            } else {
-                SharedStorage.hueCS2SyncEnabled = newValue
-            }
-        }
-    }
-
-    var cs2EntertainmentAreaID: String? {
-        get {
-            if let defaults {
-                return defaults.string(forKey: "hueCS2EntertainmentAreaID")
-            }
-            return SharedStorage.hueCS2EntertainmentAreaID
-        }
-        set {
-            if let defaults {
-                updateOptional(newValue, forKey: "hueCS2EntertainmentAreaID", in: defaults)
-            } else {
-                SharedStorage.hueCS2EntertainmentAreaID = newValue
             }
         }
     }
@@ -221,24 +187,11 @@ final class HueAmbienceStore {
         }
     }
 
-    var isCS2SyncEnabled: Bool {
-        didSet {
-            storage.isCS2SyncEnabled = isCS2SyncEnabled
-        }
-    }
-
-    var cs2EntertainmentAreaID: String? {
-        didSet {
-            storage.cs2EntertainmentAreaID = cs2EntertainmentAreaID
-        }
-    }
-
     var bridge: HueBridgeInfo? {
         didSet {
             if oldValue?.id != bridge?.id {
                 mappings = []
                 hueResources = .empty
-                cs2EntertainmentAreaID = nil
             }
             persistBridge()
         }
@@ -298,17 +251,11 @@ final class HueAmbienceStore {
         let storage = storage ?? HueAmbienceDefaults()
         self.storage = storage
         self.isEnabled = storage.isEnabled
-        self.isCS2SyncEnabled = storage.isCS2SyncEnabled
         self.bridge = Self.decode(HueBridgeInfo.self, from: storage.bridgeData)
         let decodedMappings = Self.decode([HueSonosMapping].self, from: storage.mappingsData) ?? []
         let decodedResources = Self.decode(HueBridgeResources.self, from: storage.resourcesData)
         let sanitizedResources = decodedResources?.sanitizedForAmbience() ?? .empty
         self.hueResources = sanitizedResources
-        let storedCS2EntertainmentAreaID = storage.cs2EntertainmentAreaID
-        self.cs2EntertainmentAreaID = Self.isValidCS2EntertainmentArea(
-            id: storedCS2EntertainmentAreaID,
-            in: sanitizedResources
-        ) ? storedCS2EntertainmentAreaID : nil
         if sanitizedResources.hasAssignableTargets {
             self.mappings = decodedMappings.compactMap { $0.sanitized(for: sanitizedResources) }
         } else {
@@ -373,9 +320,6 @@ final class HueAmbienceStore {
         let sanitizedResources = resources.sanitizedForAmbience()
         hueResources = sanitizedResources
         mappings = mappings.compactMap { $0.sanitized(for: sanitizedResources) }
-        if !Self.isValidCS2EntertainmentArea(id: cs2EntertainmentAreaID, in: sanitizedResources) {
-            cs2EntertainmentAreaID = nil
-        }
     }
 
     func updateResources(_ resources: HueBridgeResources, forBridgeID bridgeID: String) -> Bool {
@@ -389,8 +333,6 @@ final class HueAmbienceStore {
 
     func disconnectBridge() {
         isEnabled = false
-        isCS2SyncEnabled = false
-        cs2EntertainmentAreaID = nil
         bridge = nil
         mappings = []
         hueResources = .empty
@@ -416,13 +358,6 @@ final class HueAmbienceStore {
     private static func decode<T: Decodable>(_ type: T.Type, from data: Data?) -> T? {
         guard let data else { return nil }
         return try? JSONDecoder().decode(type, from: data)
-    }
-
-    private static func isValidCS2EntertainmentArea(id: String?, in resources: HueBridgeResources) -> Bool {
-        guard let id else {
-            return true
-        }
-        return resources.areas.contains { $0.id == id && $0.kind == .entertainmentArea }
     }
 }
 

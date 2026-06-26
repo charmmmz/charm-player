@@ -49,13 +49,6 @@ struct MusicAmbienceSettingsView: View {
         Group {
             sharedStatusSection
             musicSection
-            gameSection
-        }
-        .onChange(of: store.isCS2SyncEnabled) {
-            let actions = syncActions
-            Task {
-                await actions.syncableSettingChanged()
-            }
         }
     }
 
@@ -64,18 +57,14 @@ struct MusicAmbienceSettingsView: View {
             LabeledContent("NAS Relay", value: relayStatusText)
             LabeledContent("Hue Config", value: relay.hueAmbienceSyncStatus.title)
             LabeledContent("Hue Runtime", value: relay.hueAmbienceRuntimeStatus.reason)
-            LabeledContent("Streaming", value: relay.hueEntertainmentStreamingStatus.label)
 
             Text(relay.hueAmbienceRuntimeDetail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(relay.hueEntertainmentStreamingDetail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
             Text("Hue Ambience")
         } footer: {
-            Text("Shared Hue Bridge and NAS Relay status for music and game lighting.")
+            Text("Shared Hue Bridge and NAS Relay status for music ambience.")
         }
     }
 
@@ -161,24 +150,6 @@ struct MusicAmbienceSettingsView: View {
         }
     }
 
-    private var gameSection: some View {
-        Section {
-            Toggle("Enable CS2 Sync", isOn: $store.isCS2SyncEnabled)
-                .disabled(store.bridge == nil || store.cs2EntertainmentAreaID == nil)
-
-            LabeledContent("CS2 Area", value: cs2AreaLabel)
-            LabeledContent("CS2 Status", value: relay.cs2LightingMode.label)
-            LabeledContent("CS2 Transport", value: relay.cs2LightingTransport.label)
-            Text(relay.cs2LightingDetail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } header: {
-            Text("Game")
-        } footer: {
-            Text("Choose the CS2 Entertainment Area in Hub Setup. CS2 sync only uses Hue Entertainment streaming.")
-        }
-    }
-
     private var syncActions: MusicAmbienceSettingsSyncActions {
         MusicAmbienceSettingsSyncActions(
             refreshStatus: {
@@ -199,15 +170,8 @@ struct MusicAmbienceSettingsView: View {
     private var canSyncToRelay: Bool {
         relay.url != nil
             && store.bridge != nil
-            && (!store.mappings.isEmpty || store.cs2EntertainmentAreaID != nil)
+            && !store.mappings.isEmpty
             && relay.hueAmbienceSyncStatus != .syncing
-    }
-
-    private var cs2AreaLabel: String {
-        guard let id = store.cs2EntertainmentAreaID else {
-            return "Not set"
-        }
-        return store.hueAreas.first { $0.id == id && $0.kind == .entertainmentArea }?.name ?? "Entertainment Area"
     }
 
     private var nasRelayStatusText: String {

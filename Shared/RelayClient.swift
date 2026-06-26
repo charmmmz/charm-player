@@ -173,47 +173,12 @@ enum RelayClient {
                 lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
             }
         }
-        struct CS2Lighting: Decodable, Sendable {
-            let enabled: Bool?
-            let active: Bool?
-            let mode: CS2LightingMode
-            let transport: CS2LightingTransport
-            let fallbackReason: String?
-            let areaId: String?
-            let areaName: String?
-
-            private enum CodingKeys: String, CodingKey {
-                case enabled
-                case active
-                case mode
-                case transport
-                case fallbackReason
-                case areaId
-                case areaName
-            }
-
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
-                active = try container.decodeIfPresent(Bool.self, forKey: .active)
-                mode = try container
-                    .decodeIfPresent(String.self, forKey: .mode)
-                    .flatMap(CS2LightingMode.init(rawValue:)) ?? .unknown
-                transport = try container
-                    .decodeIfPresent(String.self, forKey: .transport)
-                    .flatMap(CS2LightingTransport.init(rawValue:)) ?? .unknown
-                fallbackReason = try container.decodeIfPresent(String.self, forKey: .fallbackReason)
-                areaId = try container.decodeIfPresent(String.self, forKey: .areaId)
-                areaName = try container.decodeIfPresent(String.self, forKey: .areaName)
-            }
-        }
         let ok: Bool
         let groups: [Group]
         let sonos: Sonos?
         let apns: APNs?
         let hueAmbience: HueAmbience?
         let hueEntertainment: HueEntertainment?
-        let cs2Lighting: CS2Lighting?
     }
 
     static func health(baseURL: URL) async throws -> HealthResponse {

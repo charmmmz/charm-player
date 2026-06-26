@@ -182,48 +182,6 @@ enum HueEntertainmentStreamingStatus: String, Codable, Equatable, Sendable {
     }
 }
 
-enum CS2LightingMode: String, Codable, Equatable, Sendable {
-    case idle
-    case deathmatch
-    case competitive
-    case spectatorAmbient
-    case unknown
-
-    var label: String {
-        switch self {
-        case .idle:
-            return "Idle"
-        case .deathmatch:
-            return "Deathmatch"
-        case .competitive:
-            return "Competitive"
-        case .spectatorAmbient:
-            return "Spectator Ambience"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-}
-
-enum CS2LightingTransport: String, Codable, Equatable, Sendable {
-    case clipFallback
-    case entertainmentStreaming
-    case unavailable
-    case unknown
-
-    var label: String {
-        switch self {
-        case .clipFallback:
-            return "CLIP Fallback"
-        case .entertainmentStreaming:
-            return "Entertainment Streaming"
-        case .unavailable:
-            return "Unavailable"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-}
 
 enum HueAmbienceRelayRenderMode: String, Codable, Equatable, Sendable {
     case clipFallback

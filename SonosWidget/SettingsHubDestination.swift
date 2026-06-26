@@ -31,7 +31,7 @@ enum SettingsHubDestination: String, CaseIterable, Hashable, Identifiable {
         case .sonos:
             return "Account, speakers, and music services"
         case .hueAmbience:
-            return "Music and game lighting"
+            return "Music lighting"
         case .hubSetup:
             return "Hue Bridge, NAS Relay, and NAS Agent"
         case .diagnostics:

@@ -9,7 +9,6 @@ import type { HueAmbienceRuntimeConfig } from './hueTypes.js';
 
 const config: HueAmbienceRuntimeConfig = {
   enabled: true,
-  cs2LightingEnabled: false,
   bridge: { id: 'bridge-1', ipAddress: '192.168.50.216', name: 'Hue Bridge' },
   applicationKey: 'secret-key',
   resources: { lights: [], areas: [] },
@@ -72,91 +71,12 @@ test('config store status redacts application key', async () => {
       areas: 0,
       motionStyle: 'still',
       stopBehavior: 'turnOff',
-      cs2LightingEnabled: false,
-      cs2EntertainmentAreaId: null,
       renderMode: null,
       activeTargetIds: [],
       entertainmentTargetActive: false,
       entertainmentMetadataComplete: false,
       lastFrameAt: null,
     });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('config store defaults CS2 lighting to disabled for legacy configs', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'hue-config-'));
-  try {
-    const filePath = path.join(dir, 'hue-ambience-config.json');
-    await writeFile(filePath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-
-    const store = new HueAmbienceConfigStore(dir);
-    const loaded = await store.load();
-
-    assert.equal(loaded?.cs2LightingEnabled, false);
-    assert.equal(store.status().cs2LightingEnabled, false);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('config store preserves CS2 lighting setting in status', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'hue-config-'));
-  try {
-    const store = new HueAmbienceConfigStore(dir);
-    await store.save(runtimeConfig({ cs2LightingEnabled: true }));
-
-    assert.equal(store.current?.cs2LightingEnabled, true);
-    assert.equal(store.status().cs2LightingEnabled, true);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('config store preserves valid CS2 entertainment area setting in status', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'hue-config-'));
-  try {
-    const store = new HueAmbienceConfigStore(dir);
-    await store.save(runtimeConfig({
-      cs2LightingEnabled: true,
-      cs2EntertainmentAreaId: 'ent-game',
-      resources: {
-        lights: [light({ id: 'game-light' })],
-        areas: [{
-          id: 'ent-game',
-          name: 'PC',
-          kind: 'entertainmentArea',
-          childLightIDs: ['game-light'],
-        }],
-      },
-    }));
-
-    assert.equal(store.current?.cs2EntertainmentAreaId, 'ent-game');
-    assert.equal(store.status().cs2EntertainmentAreaId, 'ent-game');
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('config store drops stale CS2 entertainment area setting', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'hue-config-'));
-  try {
-    const store = new HueAmbienceConfigStore(dir);
-    await store.save(runtimeConfig({
-      cs2EntertainmentAreaId: 'old-area',
-      resources: {
-        lights: [light({ id: 'game-light' })],
-        areas: [{
-          id: 'room-1',
-          name: 'Study',
-          kind: 'room',
-          childLightIDs: ['game-light'],
-        }],
-      },
-    }));
-
-    assert.equal(store.current?.cs2EntertainmentAreaId, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

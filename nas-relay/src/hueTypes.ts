@@ -70,8 +70,6 @@ export interface HueBridgeResources {
 
 export interface HueAmbienceRuntimeConfig {
   enabled: boolean;
-  cs2LightingEnabled?: boolean;
-  cs2EntertainmentAreaId?: string | null;
   bridge: HueBridgeInfo;
   applicationKey: string;
   streamingClientKey?: string | null;
@@ -114,8 +112,6 @@ export interface HueAmbienceStatus {
   areas?: number;
   motionStyle?: HueAmbienceMotionStyle;
   stopBehavior?: HueAmbienceStopBehavior;
-  cs2LightingEnabled?: boolean;
-  cs2EntertainmentAreaId?: string | null;
   renderMode?: HueAmbienceRenderMode | null;
   activeTargetIds?: string[];
   entertainmentTargetActive?: boolean;
