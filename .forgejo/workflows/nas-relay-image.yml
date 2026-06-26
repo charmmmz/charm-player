@@ -209,8 +209,6 @@ jobs:
             no_proxy=${{ steps.buildx-proxy.outputs.no_proxy }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ env.short_sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.build_tag }}
             ${{ steps.acr.outputs.image }}:latest
-            ${{ steps.acr.outputs.image }}:sha-${{ env.short_sha }}
             ${{ steps.acr.outputs.image }}:${{ env.build_tag }}
