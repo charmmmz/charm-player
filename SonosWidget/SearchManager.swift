@@ -363,16 +363,22 @@ final class SearchManager {
     }
 
     private func persistRecentlyPlayed() {
-        if let data = try? JSONEncoder().encode(recentlyPlayed) {
-            UserDefaults.standard.set(data, forKey: Self.recentlyPlayedKey)
-        }
+        SharedStorage.recentlyPlayedItems = recentlyPlayed
     }
 
     private func restoreRecentlyPlayed() {
+        let sharedItems = SharedStorage.recentlyPlayedItems
+        if !sharedItems.isEmpty {
+            recentlyPlayed = sharedItems
+            return
+        }
+
         guard let data = UserDefaults.standard.data(forKey: Self.recentlyPlayedKey),
               let items = try? JSONDecoder().decode([BrowseItem].self, from: data),
               !items.isEmpty else { return }
         recentlyPlayed = items
+        SharedStorage.recentlyPlayedItems = items
+        UserDefaults.standard.removeObject(forKey: Self.recentlyPlayedKey)
     }
 
     private func scheduleLocalServicePlaylistRecentlyPlayedAfterArtworkLookup(_ item: BrowseItem) {

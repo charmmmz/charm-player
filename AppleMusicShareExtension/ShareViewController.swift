@@ -240,7 +240,7 @@ final class ShareViewController: UIViewController {
             speakerGroups = AppleMusicShareExtensionStore.cachedSpeakerGroups
             updateSpeakerCards()
             refreshPlaybackStatuses(for: speakerGroups)
-            setStatus("Choose a speaker to start playback.", loading: false)
+            setStatus("Choose a speaker to start playback.", indicator: .speakerSelection)
 
             loadTask = Task { [weak self] in
                 guard let self else { return }
@@ -523,6 +523,9 @@ final class ShareViewController: UIViewController {
                     credential: credential
                 )
 
+                AppleMusicShareExtensionStore.recordRecentlyPlayed(
+                    resolved,
+                    credential: credential)
                 AppleMusicShareExtensionStore.clearPendingAppleMusicShare()
                 await MainActor.run {
                     self.isPlaying = false
@@ -573,6 +576,9 @@ final class ShareViewController: UIViewController {
 
         if let systemImageName = indicator.systemImageName {
             statusIconView.image = UIImage(systemName: systemImageName)
+            statusIconView.tintColor = indicator == .success
+                ? UIColor(red: 0.52, green: 1.0, blue: 0.68, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.58)
             statusIconView.isHidden = false
         } else {
             statusIconView.isHidden = true

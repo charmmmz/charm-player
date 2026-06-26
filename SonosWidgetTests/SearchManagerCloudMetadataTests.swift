@@ -6,9 +6,12 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
     private let enabledServicesKey = "SearchEnabledServices"
     private let serviceCatalogKey = "musicServiceCatalogByLocalSid"
     private let recentlyPlayedKey = "RecentlyPlayedItems"
+    private var previousSharedRecentlyPlayed: [BrowseItem] = []
 
     override func setUp() {
         super.setUp()
+        previousSharedRecentlyPlayed = SharedStorage.recentlyPlayedItems
+        SharedStorage.recentlyPlayedItems = []
         UserDefaults.standard.removeObject(forKey: sidMappingKey)
         UserDefaults.standard.removeObject(forKey: enabledServicesKey)
         UserDefaults.standard.removeObject(forKey: serviceCatalogKey)
@@ -20,6 +23,7 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: enabledServicesKey)
         UserDefaults.standard.removeObject(forKey: serviceCatalogKey)
         UserDefaults.standard.removeObject(forKey: recentlyPlayedKey)
+        SharedStorage.recentlyPlayedItems = previousSharedRecentlyPlayed
         super.tearDown()
     }
 
@@ -190,6 +194,51 @@ final class SearchManagerCloudMetadataTests: XCTestCase {
 
         XCTAssertTrue(item.includeAlbumArtInCloudMetadata)
         XCTAssertTrue(metadata.contains("<upnp:albumArtURI>https://example.com/playlist.jpg</upnp:albumArtURI>"))
+    }
+
+    func testRecentlyPlayedPersistsThroughSharedStorageForExtensions() {
+        let manager = SearchManager()
+        let item = BrowseItem(
+            id: "song:1440857781",
+            title: "Nikes",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            albumArtURL: "https://example.com/cover.jpg",
+            detailArtworkURL: "https://example.com/detail.jpg",
+            uri: "x-sonos-http:song%3A1440857781.mp4?sid=204&flags=8232&sn=2",
+            duration: 312,
+            isContainer: false,
+            serviceId: 204,
+            cloudType: "TRACK")
+
+        manager.pushRecentlyPlayed(item)
+
+        XCTAssertEqual(SharedStorage.recentlyPlayedItems.first?.id, "song:1440857781")
+        XCTAssertEqual(SharedStorage.recentlyPlayedItems.first?.detailArtworkURL, "https://example.com/detail.jpg")
+        XCTAssertEqual(SearchManager().recentlyPlayed.first?.id, "song:1440857781")
+    }
+
+    func testRecentlyPlayedMigratesLegacyStandardDefaultsIntoSharedStorage() throws {
+        let legacyItem = BrowseItem(
+            id: "album:1440864059",
+            title: "Blonde",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            albumArtURL: "https://example.com/cover.jpg",
+            detailArtworkURL: "https://example.com/detail.jpg",
+            uri: "x-rincon-cpcontainer:1004206calbum%3A1440864059?sid=204&flags=8300&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "ALBUM")
+        UserDefaults.standard.set(
+            try JSONEncoder().encode([legacyItem]),
+            forKey: recentlyPlayedKey)
+
+        let manager = SearchManager()
+
+        XCTAssertEqual(manager.recentlyPlayed.first?.id, "album:1440864059")
+        XCTAssertEqual(SharedStorage.recentlyPlayedItems.first?.id, "album:1440864059")
+        XCTAssertNil(UserDefaults.standard.data(forKey: recentlyPlayedKey))
     }
 
     func testLocalServicePlaylistRecentlyPlayedIsSkippedWithoutSonosTileArtwork() async {

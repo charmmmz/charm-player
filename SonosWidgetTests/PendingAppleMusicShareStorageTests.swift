@@ -68,6 +68,28 @@ final class PendingAppleMusicShareStorageTests: XCTestCase {
         XCTAssertEqual(SharedStorage.appleMusicSonosServiceCredential, credential)
     }
 
+    func testRecentlyPlayedItemsRoundTripThroughSharedStorage() {
+        let previous = SharedStorage.recentlyPlayedItems
+        defer { SharedStorage.recentlyPlayedItems = previous }
+
+        let item = BrowseItem(
+            id: "song:1440857781",
+            title: "Nikes",
+            artist: "Frank Ocean",
+            album: "Blonde",
+            albumArtURL: "https://example.com/cover.jpg",
+            detailArtworkURL: "https://example.com/detail.jpg",
+            uri: "x-sonos-http:song%3A1440857781.mp4?sid=204&flags=8232&sn=2",
+            duration: 312,
+            isContainer: false,
+            serviceId: 204,
+            cloudType: "TRACK")
+
+        SharedStorage.recentlyPlayedItems = [item]
+
+        XCTAssertEqual(SharedStorage.recentlyPlayedItems, [item])
+    }
+
     func testSpeakerIDRoundTripsThroughSharedStorage() {
         let previous = SharedStorage.speakerID
         defer { SharedStorage.speakerID = previous }

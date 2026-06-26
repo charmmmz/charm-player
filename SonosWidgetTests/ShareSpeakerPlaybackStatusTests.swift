@@ -3,6 +3,10 @@ import XCTest
 
 final class ShareSpeakerPlaybackStatusTests: XCTestCase {
     func testPlaybackVisualIndicatorReplacesLoadingWithSuccessSymbol() {
+        XCTAssertFalse(SharePlaybackVisualIndicator.speakerSelection.showsSpinner)
+        XCTAssertFalse(SharePlaybackVisualIndicator.speakerSelection.showsWaveform)
+        XCTAssertEqual(SharePlaybackVisualIndicator.speakerSelection.systemImageName, "hifispeaker.2.fill")
+
         XCTAssertTrue(SharePlaybackVisualIndicator.loading.showsSpinner)
         XCTAssertNil(SharePlaybackVisualIndicator.loading.systemImageName)
         XCTAssertFalse(SharePlaybackVisualIndicator.loading.showsWaveform)
@@ -110,6 +114,32 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
 
         XCTAssertNil(ShareSpeakerNowPlaying(positionInfoXML: xml))
         XCTAssertNil(ShareSpeakerNowPlaying(title: "  ", artist: "John Mayer"))
+    }
+
+    func testNowPlayingFallsBackToTVAudioFromTrackURI() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackURI>x-sonos-htastream:RINCON_ABC:spdif</TrackURI>
+        <TrackMetaData>NOT_IMPLEMENTED</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        let nowPlaying = ShareSpeakerNowPlaying(positionInfoXML: xml)
+
+        XCTAssertEqual(nowPlaying?.displayText, "TV Audio - HDMI")
+    }
+
+    func testNowPlayingFallsBackToLineInFromTrackURI() {
+        let xml = """
+        <u:GetPositionInfoResponse>
+        <TrackURI>x-rincon-stream:RINCON_ABC01400</TrackURI>
+        <TrackMetaData>NOT_IMPLEMENTED</TrackMetaData>
+        </u:GetPositionInfoResponse>
+        """
+
+        let nowPlaying = ShareSpeakerNowPlaying(positionInfoXML: xml)
+
+        XCTAssertEqual(nowPlaying?.displayText, "Line-In")
     }
 
     func testDetailTextPrefersUsefulNowPlayingForActiveSpeakers() {

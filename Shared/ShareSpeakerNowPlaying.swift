@@ -45,7 +45,14 @@ struct ShareSpeakerNowPlaying: Equatable, Sendable {
     }
 
     init?(positionInfoXML xml: String, speakerIP: String? = nil) {
+        let trackURI = Self.decodeXMLEntities(Self.extractTag("TrackURI", from: xml) ?? "")
+        let inputSourceFallback = Self.inputSourceFallback(fromTrackURI: trackURI)
+
         guard let rawMetadata = Self.extractTag("TrackMetaData", from: xml) else {
+            if let inputSourceFallback {
+                self.init(title: inputSourceFallback.title, artist: inputSourceFallback.artist)
+                return
+            }
             return nil
         }
 
@@ -61,6 +68,11 @@ struct ShareSpeakerNowPlaying: Equatable, Sendable {
             Self.applyStreamContent(streamContent, title: &title, artist: &artist)
         }
 
+        if Self.clean(title) == nil, let inputSourceFallback {
+            self.init(title: inputSourceFallback.title, artist: inputSourceFallback.artist)
+            return
+        }
+
         self.init(
             title: title,
             artist: artist,
@@ -73,6 +85,23 @@ struct ShareSpeakerNowPlaying: Equatable, Sendable {
             return "\(title) - \(artist)"
         }
         return title
+    }
+
+    private static func inputSourceFallback(fromTrackURI trackURI: String) -> (title: String, artist: String?)? {
+        let uri = trackURI.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !uri.isEmpty else { return nil }
+
+        if uri.hasPrefix("x-sonos-htastream:") {
+            return ("TV Audio", "HDMI")
+        }
+        if uri.hasPrefix("x-rincon-stream:") {
+            return ("Line-In", nil)
+        }
+        if uri.hasPrefix("x-sonos-vli:"), uri.contains(",airplay:") {
+            return ("AirPlay", nil)
+        }
+
+        return nil
     }
 
     private static func applyStreamContent(

@@ -6,6 +6,107 @@ private struct PendingAppleMusicSharePayload: Codable {
     let receivedAt: Date
 }
 
+struct ShareRecentlyPlayedBrowseItem: Codable, Equatable, Sendable {
+    var id: String
+    var title: String
+    var artist: String
+    var album: String
+    var albumArtURL: String?
+    var detailArtworkURL: String?
+    var uri: String?
+    var metaXML: String?
+    var duration: TimeInterval
+    var resMD: String?
+    var isContainer: Bool
+    var serviceId: Int?
+    var cloudType: String?
+    var includeAlbumArtInCloudMetadata: Bool
+    var cloudFavoriteId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case artist
+        case album
+        case albumArtURL
+        case detailArtworkURL
+        case uri
+        case metaXML
+        case duration
+        case resMD
+        case isContainer
+        case serviceId
+        case cloudType
+        case includeAlbumArtInCloudMetadata
+        case cloudFavoriteId
+    }
+
+    init(
+        playable: ShareAppleMusicPlayable,
+        credential: ShareAppleMusicSonosCredential
+    ) {
+        id = playable.sonosObjectID
+        title = playable.title
+        artist = playable.artist
+        album = playable.album
+        albumArtURL = playable.artworkURLString
+        detailArtworkURL = playable.artworkURLString
+        uri = Self.playableURI(playable: playable, credential: credential)
+        metaXML = nil
+        duration = playable.duration ?? 0
+        resMD = nil
+        isContainer = playable.kind == .album || playable.kind == .playlist
+        serviceId = credential.localServiceId
+        cloudType = playable.cloudType
+        includeAlbumArtInCloudMetadata = true
+        cloudFavoriteId = nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        artist = try container.decode(String.self, forKey: .artist)
+        album = try container.decode(String.self, forKey: .album)
+        albumArtURL = try container.decodeIfPresent(String.self, forKey: .albumArtURL)
+        detailArtworkURL = try container.decodeIfPresent(String.self, forKey: .detailArtworkURL)
+        uri = try container.decodeIfPresent(String.self, forKey: .uri)
+        metaXML = try container.decodeIfPresent(String.self, forKey: .metaXML)
+        duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+        resMD = try container.decodeIfPresent(String.self, forKey: .resMD)
+        isContainer = try container.decode(Bool.self, forKey: .isContainer)
+        serviceId = try container.decodeIfPresent(Int.self, forKey: .serviceId)
+        cloudType = try container.decodeIfPresent(String.self, forKey: .cloudType)
+        includeAlbumArtInCloudMetadata = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .includeAlbumArtInCloudMetadata
+        ) ?? true
+        cloudFavoriteId = try container.decodeIfPresent(String.self, forKey: .cloudFavoriteId)
+    }
+
+    private static func playableURI(
+        playable: ShareAppleMusicPlayable,
+        credential: ShareAppleMusicSonosCredential
+    ) -> String {
+        let encodedObjectID = playable.sonosObjectID.replacingOccurrences(of: ":", with: "%3a")
+        let sid = credential.localServiceId
+        let accountID = credential.accountId
+
+        switch playable.cloudType {
+        case "TRACK":
+            return "x-sonos-http:\(encodedObjectID).mp4?sid=\(sid)&flags=8232&sn=\(accountID)"
+        case "ALBUM":
+            return "x-rincon-cpcontainer:1004206c\(encodedObjectID)?sid=\(sid)&flags=8300&sn=\(accountID)"
+        case "PLAYLIST":
+            return "x-rincon-cpcontainer:1006206c\(encodedObjectID)?sid=\(sid)&flags=8300&sn=\(accountID)"
+        case "ARTIST":
+            return "x-rincon-cpcontainer:\(encodedObjectID)?sid=\(sid)&flags=8300&sn=\(accountID)"
+        default:
+            return ""
+        }
+    }
+}
+
 enum AppleMusicShareExtensionStore {
     private static let appGroupID = "group.com.charm.SonosWidget"
     private static let pendingShareKey = "pendingAppleMusicShare"
@@ -16,6 +117,8 @@ enum AppleMusicShareExtensionStore {
     private static let coordinatorIPKey = "coordinatorIP"
     private static let speakerOrderKey = "homeSpeakerGroupOrder"
     private static let appleMusicCredentialKey = "appleMusicSonosServiceCredential"
+    private static let recentlyPlayedKey = "RecentlyPlayedItems"
+    private static let recentlyPlayedLimit = 20
 
     enum StoreError: LocalizedError {
         case missingAppleMusicURL
@@ -57,6 +160,32 @@ enum AppleMusicShareExtensionStore {
 
     static func clearPendingAppleMusicShare() {
         defaults?.removeObject(forKey: pendingShareKey)
+    }
+
+    @discardableResult
+    static func recordRecentlyPlayed(
+        _ playable: ShareAppleMusicPlayable,
+        credential: ShareAppleMusicSonosCredential
+    ) -> Bool {
+        guard let defaults else { return false }
+        let item = ShareRecentlyPlayedBrowseItem(
+            playable: playable,
+            credential: credential)
+        guard !item.id.isEmpty, !item.title.isEmpty else { return false }
+
+        var items = recentlyPlayedItems(from: defaults)
+        items.removeAll { existing in
+            existing.id == item.id ||
+            (existing.title == item.title && existing.artist == item.artist)
+        }
+        items.insert(item, at: 0)
+        if items.count > recentlyPlayedLimit {
+            items = Array(items.prefix(recentlyPlayedLimit))
+        }
+
+        guard let data = try? JSONEncoder().encode(items) else { return false }
+        defaults.set(data, forKey: recentlyPlayedKey)
+        return true
     }
 
     static var appleMusicCredential: ShareAppleMusicSonosCredential? {
@@ -117,6 +246,16 @@ enum AppleMusicShareExtensionStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ".,)]}>'\""))
         return URL(string: sanitized)
+    }
+
+    private static func recentlyPlayedItems(
+        from defaults: UserDefaults
+    ) -> [ShareRecentlyPlayedBrowseItem] {
+        guard let data = defaults.data(forKey: recentlyPlayedKey),
+              let items = try? JSONDecoder().decode([ShareRecentlyPlayedBrowseItem].self, from: data) else {
+            return []
+        }
+        return items
     }
 
     private static func isAppleMusicURL(_ url: URL) -> Bool {

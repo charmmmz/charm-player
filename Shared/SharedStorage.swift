@@ -41,6 +41,7 @@ enum SharedStorage {
 
     private nonisolated static let pendingAppleMusicShareKey = "pendingAppleMusicShare"
     private nonisolated static let appleMusicSonosServiceCredentialKey = "appleMusicSonosServiceCredential"
+    private nonisolated static let recentlyPlayedItemsKey = "RecentlyPlayedItems"
     private nonisolated static let liveActivityRelayPushTokensByGroupIDKey = "liveActivityRelayPushTokensByGroupID"
     private nonisolated static let liveActivityPushToStartRegistrationsByGroupIDKey =
         "liveActivityPushToStartRegistrationsByGroupID"
@@ -68,6 +69,27 @@ enum SharedStorage {
 
     nonisolated static func clearPendingAppleMusicShare() {
         pendingAppleMusicShare = nil
+    }
+
+    // MARK: - Browse Recently Played
+
+    nonisolated static var recentlyPlayedItems: [BrowseItem] {
+        get {
+            guard let data = defaults.data(forKey: recentlyPlayedItemsKey),
+                  let items = try? JSONDecoder().decode([BrowseItem].self, from: data) else {
+                return []
+            }
+            return items
+        }
+        set {
+            guard !newValue.isEmpty else {
+                defaults.removeObject(forKey: recentlyPlayedItemsKey)
+                return
+            }
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: recentlyPlayedItemsKey)
+            }
+        }
     }
 
     nonisolated static var appleMusicSonosServiceCredential: AppleMusicSonosServiceCredential? {

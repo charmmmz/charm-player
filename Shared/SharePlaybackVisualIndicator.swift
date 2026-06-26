@@ -16,6 +16,7 @@ enum SharePlaybackWaveformLayout {
 
 enum SharePlaybackVisualIndicator: Equatable, Sendable {
     case none
+    case speakerSelection
     case restingWaveform
     case playingWaveform
     case loading
@@ -29,7 +30,7 @@ enum SharePlaybackVisualIndicator: Equatable, Sendable {
         switch self {
         case .restingWaveform, .playingWaveform:
             return true
-        case .none, .loading, .success:
+        case .none, .speakerSelection, .loading, .success:
             return false
         }
     }
@@ -42,6 +43,8 @@ enum SharePlaybackVisualIndicator: Equatable, Sendable {
         switch self {
         case .none, .restingWaveform, .playingWaveform, .loading:
             return nil
+        case .speakerSelection:
+            return "hifispeaker.2.fill"
         case .success:
             return "checkmark.circle.fill"
         }
