@@ -58,9 +58,9 @@ services:
       # Optional override. Leave blank to use the Light Motion Speed selected
       # in the iOS app. Lower values move faster; examples: 8, 6, 4.
       HUE_FLOW_INTERVAL_SECONDS: ${HUE_FLOW_INTERVAL_SECONDS:-}
-      # Use the private Hue EDK sidecar for Entertainment streaming effects.
-      # If the sidecar is unavailable, Music Ambience falls back to CLIP color
-      # rotation; CS2 sync expects the sidecar when this is set.
+      # Use the private Hue EDK sidecar for CS2 Entertainment effects.
+      # Music Ambience is fixed to CLIP v2 color rotation and ignores this
+      # renderer setting.
       HUE_RENDERER: ${HUE_RENDERER:-edk-sidecar}
       HUE_EDK_SIDECAR_URL: ${HUE_EDK_SIDECAR_URL:-http://127.0.0.1:8788}
       HUE_EDK_SIDECAR_TOKEN: ${HUE_EDK_SIDECAR_TOKEN:-}

@@ -83,38 +83,7 @@ test('Hue EDK sidecar renderer sends Music Ambience frames with channel colors',
   });
 });
 
-test('Music Ambience renderer factory selects the EDK sidecar when configured', async () => {
-  const { createHueMusicAmbienceRenderer } = await loadSidecarRendererModule();
-  const recorder = recordingFetch();
-  const renderer = createHueMusicAmbienceRenderer(
-    config,
-    {
-      updateLight: async () => {
-        assert.fail('expected sidecar renderer instead of CLIP fallback');
-      },
-      setEntertainmentStreaming: async () => {
-        assert.fail('expected sidecar renderer instead of built-in DTLS fallback');
-      },
-    },
-    {
-      HUE_RENDERER: 'edk-sidecar',
-      HUE_EDK_SIDECAR_URL: 'http://hue-edk-sidecar:8787',
-      HUE_EDK_SIDECAR_TOKEN: 'relay-token',
-    },
-    { sidecarFetch: recorder.fetch },
-  );
-
-  await renderer.render(musicFrame([{ r: 0.82, g: 0.12, b: 0.08 }]));
-
-  assert.deepEqual(recorder.calls.map(call => call.path), [
-    '/configure',
-    '/session/start',
-    '/ambient/music',
-  ]);
-  assert.equal(recorder.calls[0]?.headers.authorization, 'Bearer relay-token');
-});
-
-test('Music Ambience renderer factory can force CLIP v2 while CS2 keeps the global sidecar setting', async () => {
+test('Music Ambience renderer factory always uses CLIP v2 even when the global renderer is EDK sidecar', async () => {
   const { createHueMusicAmbienceRenderer } = await loadSidecarRendererModule();
   const recorder = recordingFetch();
   const updates: Array<{ id: string; body: unknown }> = [];
@@ -131,16 +100,13 @@ test('Music Ambience renderer factory can force CLIP v2 while CS2 keeps the glob
     },
     {
       HUE_RENDERER: 'edk-sidecar',
-      HUE_MUSIC_RENDERER: 'clip-v2',
       HUE_EDK_SIDECAR_URL: 'http://hue-edk-sidecar:8787',
+      HUE_EDK_SIDECAR_TOKEN: 'relay-token',
     },
     { sidecarFetch: recorder.fetch },
   );
 
-  const result = await renderer.render(musicFrame([
-    { r: 0.82, g: 0.12, b: 0.08 },
-    { r: 0.08, g: 0.22, b: 0.74 },
-  ]));
+  const result = await renderer.render(musicFrame([{ r: 0.82, g: 0.12, b: 0.08 }]));
 
   assert.equal(result.transport, 'clipFallback');
   assert.deepEqual(recorder.calls, []);
@@ -179,7 +145,7 @@ test('Music Ambience renderer factory skips sync for grouped playback and uses C
   assert.deepEqual(updates.map(update => update.id), ['light-1']);
 });
 
-test('Music Ambience renderer factory falls back directly to CLIP when sidecar sync is unavailable', async () => {
+test('Music Ambience renderer factory does not contact sidecar when sidecar sync is unavailable', async () => {
   const { createHueMusicAmbienceRenderer } = await loadSidecarRendererModule();
   const recorder = recordingFetch({ failPath: '/session/start', status: 409 });
   const updates: Array<{ id: string; body: unknown }> = [];
@@ -202,11 +168,7 @@ test('Music Ambience renderer factory falls back directly to CLIP when sidecar s
 
   const result = await renderer.render(musicFrame([{ r: 0.82, g: 0.12, b: 0.08 }]));
 
-  assert.deepEqual(recorder.calls.map(call => call.path), [
-    '/configure',
-    '/session/start',
-    '/session/stop',
-  ]);
+  assert.deepEqual(recorder.calls, []);
   assert.equal(result.transport, 'clipFallback');
   assert.deepEqual(updates.map(update => update.id), ['light-1']);
 });

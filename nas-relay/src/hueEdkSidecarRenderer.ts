@@ -1,8 +1,4 @@
 import type { HueAmbienceFrame, HueAmbienceTargetFrame } from './hueAmbienceFrames.js';
-import {
-  createHueEntertainmentStreamingOnlyRenderer,
-  type HueEntertainmentControlClient,
-} from './hueEntertainmentStream.js';
 import { ClipHueAmbienceRenderer, type HueAmbienceRenderResult, type HueAmbienceRenderer } from './hueFrameRenderer.js';
 import type { HueAmbienceRuntimeConfig, HueLightClient, HueRGBColor } from './hueTypes.js';
 
@@ -39,77 +35,12 @@ export function createHueEdkSidecarRenderer(
 }
 
 export function createHueMusicAmbienceRenderer(
-  config: HueAmbienceRuntimeConfig,
-  lightClient: HueLightClient & HueEntertainmentControlClient,
-  env: Record<string, string | undefined> = process.env,
-  options: HueMusicAmbienceRendererOptions = {},
+  _config: HueAmbienceRuntimeConfig,
+  lightClient: HueLightClient,
+  _env: Record<string, string | undefined> = process.env,
+  _options: HueMusicAmbienceRendererOptions = {},
 ): HueAmbienceRenderer {
-  const clipFallback = new ClipHueAmbienceRenderer(lightClient);
-  const rendererName = (env.HUE_MUSIC_RENDERER ?? env.HUE_RENDERER ?? '').toLowerCase();
-  if (rendererName === 'clip' || rendererName === 'clip-v2' || rendererName === 'clipv2') {
-    return clipFallback;
-  }
-
-  const syncRenderer = rendererName === 'edk-sidecar'
-    ? new HueEdkSidecarRenderer(config, {
-      baseUrl: env.HUE_EDK_SIDECAR_URL ?? 'http://127.0.0.1:8787',
-      token: env.HUE_EDK_SIDECAR_TOKEN,
-      fetch: options.sidecarFetch,
-      targetFps: numericEnv(env.HUE_EDK_SIDECAR_TARGET_FPS) ?? 60,
-      sessionPolicy: env.HUE_EDK_SIDECAR_SESSION_POLICY === 'takeover' ? 'takeover' : 'reuse',
-    })
-    : createHueEntertainmentStreamingOnlyRenderer(config, lightClient);
-
-  return new MusicSyncFallbackRenderer(syncRenderer, clipFallback);
-}
-
-class MusicSyncFallbackRenderer implements HueAmbienceRenderer {
-  private activeRenderer: 'sync' | 'clip' | null = null;
-
-  constructor(
-    private readonly sync: HueAmbienceRenderer,
-    private readonly clipFallback: HueAmbienceRenderer,
-  ) {}
-
-  async render(frame: HueAmbienceFrame): Promise<HueAmbienceRenderResult> {
-    if (!canUseMusicSync(frame)) {
-      await this.releaseSyncIfNeeded();
-      this.activeRenderer = 'clip';
-      return await this.clipFallback.render(frame);
-    }
-
-    try {
-      const result = await this.sync.render(frame);
-      this.activeRenderer = 'sync';
-      return result;
-    } catch {
-      await this.sync.release?.().catch(() => {});
-      this.activeRenderer = 'clip';
-      return await this.clipFallback.render(frame);
-    }
-  }
-
-  async stop(frame: HueAmbienceFrame): Promise<void> {
-    if (this.activeRenderer === 'sync') {
-      await this.sync.stop(frame);
-    } else if (this.activeRenderer === 'clip') {
-      await this.clipFallback.stop(frame);
-    }
-    this.activeRenderer = null;
-  }
-
-  async release(): Promise<void> {
-    await Promise.allSettled([
-      this.sync.release?.(),
-      this.clipFallback.release?.(),
-    ]);
-    this.activeRenderer = null;
-  }
-
-  private async releaseSyncIfNeeded(): Promise<void> {
-    if (this.activeRenderer !== 'sync') return;
-    await this.sync.release?.();
-  }
+  return new ClipHueAmbienceRenderer(lightClient);
 }
 
 class HueEdkSidecarRenderer implements HueAmbienceRenderer {
@@ -332,18 +263,6 @@ function entertainmentTargetForSidecar(frame: HueAmbienceFrame): HueAmbienceTarg
   return targets[0];
 }
 
-function canUseMusicSync(frame: HueAmbienceFrame): boolean {
-  if (frame.effect?.source === 'cs2') return false;
-  if ((frame.groupMemberCount ?? 1) > 1) return false;
-  if (!frame.metadataComplete) return false;
-  try {
-    entertainmentTargetForSidecar(frame);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sidecarUrl(baseUrl: string, path: string): string {
   const normalized = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   return `${normalized}${path}`;
@@ -466,10 +385,4 @@ function clampColor(color: HueRGBColor): HueRGBColor {
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-function numericEnv(value: string | undefined): number | null {
-  if (value === undefined) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
