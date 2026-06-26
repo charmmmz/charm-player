@@ -242,7 +242,7 @@ class HueEdkSidecarRenderer implements HueAmbienceRenderer {
     }
 
     await this.post('/ambient/music', musicAmbientBody(frame, target));
-    return { transport: 'entertainmentStreaming', nativeEffectActive: true };
+    return { transport: 'entertainmentStreaming' };
   }
 
   async stop(_frame: HueAmbienceFrame): Promise<void> {

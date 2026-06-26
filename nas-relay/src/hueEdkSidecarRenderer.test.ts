@@ -56,7 +56,7 @@ test('Hue EDK sidecar renderer sends Music Ambience frames with channel colors',
   ]));
 
   assert.equal(result.transport, 'entertainmentStreaming');
-  assert.equal(result.nativeEffectActive, true);
+  assert.equal(result.nativeEffectActive, undefined);
   assert.deepEqual(recorder.calls.map(call => call.path), [
     '/configure',
     '/session/start',
