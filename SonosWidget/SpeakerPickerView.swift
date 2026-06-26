@@ -1,13 +1,21 @@
 import SwiftUI
 
 enum SpeakerPickerCardLayout {
-    static let cornerRadius: CGFloat = 8
-    static let iconSize: CGFloat = 40
-    static let minimumRowHeight: CGFloat = 76
-    static let horizontalPadding: CGFloat = 12
-    static let indicatorSlotSize = CGSize(width: 34, height: 42)
-    static let pillHeight: CGFloat = 54
-    static let nowPlayingArtworkSize: CGFloat = 56
+    nonisolated static let cornerRadius: CGFloat = 8
+    nonisolated static let iconSize: CGFloat = 36
+    nonisolated static let minimumRowHeight: CGFloat = 68
+    nonisolated static let horizontalPadding: CGFloat = 12
+    nonisolated static let rowVerticalPadding: CGFloat = 8
+    nonisolated static let rowSpacing: CGFloat = 8
+    nonisolated static let indicatorSlotSize = CGSize(width: 30, height: 38)
+    nonisolated static let pillHeight: CGFloat = 46
+    nonisolated static let pillHorizontalPadding: CGFloat = 18
+    nonisolated static let pillRailTopPadding: CGFloat = 14
+    nonisolated static let pillRailBottomPadding: CGFloat = 10
+    nonisolated static let volumeRowSpacing: CGFloat = 8
+    nonisolated static let volumeTopPadding: CGFloat = 2
+    nonisolated static let volumeBottomPadding: CGFloat = 8
+    nonisolated static let nowPlayingArtworkSize: CGFloat = 56
 }
 
 enum SpeakerPickerPillLayout {
@@ -20,13 +28,23 @@ enum SpeakerPickerSheetBackgroundCoverage: Equatable, Sendable {
 }
 
 enum SpeakerPickerSheetLayout {
-    static let backgroundCoverage = SpeakerPickerSheetBackgroundCoverage.presentationChrome
+    nonisolated static let backgroundCoverage = SpeakerPickerSheetBackgroundCoverage.presentationChrome
+    nonisolated static let usesNavigationCloseButton = false
+    nonisolated static let extendsIntoBottomSafeArea = true
+    nonisolated static let baseScrollContentBottomPadding: CGFloat = 22
 
-    nonisolated static func contentFrameSize(containerSize: CGSize) -> CGSize {
+    nonisolated static func contentFrameSize(
+        containerSize: CGSize,
+        bottomSafeAreaInset: CGFloat = 0
+    ) -> CGSize {
         CGSize(
             width: max(containerSize.width, 0),
-            height: max(containerSize.height, 0)
+            height: max(containerSize.height + max(bottomSafeAreaInset, 0), 0)
         )
+    }
+
+    nonisolated static func scrollContentBottomPadding(bottomSafeAreaInset: CGFloat) -> CGFloat {
+        baseScrollContentBottomPadding + max(bottomSafeAreaInset, 0)
     }
 }
 
@@ -379,7 +397,6 @@ struct SpeakerPickerView: View {
     }
 
     @Bindable var manager: SonosManager
-    @Environment(\.dismiss) private var dismiss
     @State private var processingTarget: ProcessingTarget?
     @State private var premuteMemberVolumes: [String: Int] = [:]
 
@@ -428,35 +445,23 @@ struct SpeakerPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                let contentSize = SpeakerPickerSheetLayout.contentFrameSize(
-                    containerSize: proxy.size
-                )
+        GeometryReader { proxy in
+            let contentSize = SpeakerPickerSheetLayout.contentFrameSize(
+                containerSize: proxy.size,
+                bottomSafeAreaInset: proxy.safeAreaInsets.bottom
+            )
 
-                sheetContent
-                    .frame(
-                        width: contentSize.width,
-                        height: contentSize.height,
-                        alignment: .top
-                    )
-                    .clipped()
-            }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .onAppear { loadVolumes() }
+            sheetContent(bottomSafeAreaInset: proxy.safeAreaInsets.bottom)
+                .frame(
+                    width: contentSize.width,
+                    height: contentSize.height,
+                    alignment: .top
+                )
+                .clipped()
         }
+        .background { speakerPickerBackground }
+        .ignoresSafeArea(.container, edges: .bottom)
+        .onAppear { loadVolumes() }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(24)
@@ -466,7 +471,7 @@ struct SpeakerPickerView: View {
         .tint(accent)
     }
 
-    private var sheetContent: some View {
+    private func sheetContent(bottomSafeAreaInset: CGFloat) -> some View {
         VStack(spacing: 0) {
             nowPlayingHeader
                 .padding(.horizontal, 20)
@@ -478,8 +483,8 @@ struct SpeakerPickerView: View {
 
             if hasPillTargets {
                 pillRail
-                    .padding(.top, 18)
-                    .padding(.bottom, 14)
+                    .padding(.top, SpeakerPickerCardLayout.pillRailTopPadding)
+                    .padding(.bottom, SpeakerPickerCardLayout.pillRailBottomPadding)
             }
 
             ScrollView {
@@ -489,7 +494,7 @@ struct SpeakerPickerView: View {
                                            description: Text("Make sure your Sonos speakers are on the same network."))
                     .padding(.top, 60)
                 } else {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: SpeakerPickerCardLayout.rowSpacing) {
                         ForEach(selectableGroups) { group in
                             groupRow(group)
                         }
@@ -500,7 +505,9 @@ struct SpeakerPickerView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 22)
+                    .padding(.bottom, SpeakerPickerSheetLayout.scrollContentBottomPadding(
+                        bottomSafeAreaInset: bottomSafeAreaInset
+                    ))
                 }
             }
             .scrollContentBackground(.hidden)
@@ -725,7 +732,7 @@ struct SpeakerPickerView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SpeakerPickerCardLayout.pillHorizontalPadding)
         .frame(height: SpeakerPickerCardLayout.pillHeight)
         .background {
             Capsule()
@@ -902,7 +909,7 @@ struct SpeakerPickerView: View {
             indicatorView(indicator, isActive: isActive)
         }
         .padding(.horizontal, SpeakerPickerCardLayout.horizontalPadding)
-        .padding(.vertical, 10)
+        .padding(.vertical, SpeakerPickerCardLayout.rowVerticalPadding)
         .frame(minHeight: SpeakerPickerCardLayout.minimumRowHeight)
         .contentShape(Rectangle())
     }
@@ -966,7 +973,7 @@ struct SpeakerPickerView: View {
     // MARK: - Volume Row (matches Home page GroupVolumeBar pattern)
 
     private func volumeRow(speaker: SonosPlayer, vol: Int) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SpeakerPickerCardLayout.volumeRowSpacing) {
             Image(systemName: vol == 0 ? "speaker.slash.fill" : "speaker.wave.1.fill")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.4))
@@ -1007,8 +1014,8 @@ struct SpeakerPickerView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, SpeakerPickerCardLayout.horizontalPadding)
-        .padding(.top, 4)
-        .padding(.bottom, 10)
+        .padding(.top, SpeakerPickerCardLayout.volumeTopPadding)
+        .padding(.bottom, SpeakerPickerCardLayout.volumeBottomPadding)
     }
 
     // MARK: - Actions

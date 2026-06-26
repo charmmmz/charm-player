@@ -5,10 +5,19 @@ import UIKit
 final class SpeakerPickerPresentationTests: XCTestCase {
     func testSpeakerPickerCardLayoutMatchesShareSheetDensity() {
         XCTAssertEqual(SpeakerPickerCardLayout.cornerRadius, 8)
-        XCTAssertEqual(SpeakerPickerCardLayout.iconSize, 40)
-        XCTAssertEqual(SpeakerPickerCardLayout.minimumRowHeight, 76)
-        XCTAssertEqual(SpeakerPickerCardLayout.indicatorSlotSize.width, 34)
-        XCTAssertEqual(SpeakerPickerCardLayout.indicatorSlotSize.height, 42)
+        XCTAssertEqual(SpeakerPickerCardLayout.iconSize, 36)
+        XCTAssertEqual(SpeakerPickerCardLayout.minimumRowHeight, 68)
+        XCTAssertEqual(SpeakerPickerCardLayout.rowVerticalPadding, 8)
+        XCTAssertEqual(SpeakerPickerCardLayout.rowSpacing, 8)
+        XCTAssertEqual(SpeakerPickerCardLayout.indicatorSlotSize.width, 30)
+        XCTAssertEqual(SpeakerPickerCardLayout.indicatorSlotSize.height, 38)
+        XCTAssertEqual(SpeakerPickerCardLayout.pillHeight, 46)
+        XCTAssertEqual(SpeakerPickerCardLayout.pillHorizontalPadding, 18)
+        XCTAssertEqual(SpeakerPickerCardLayout.pillRailTopPadding, 14)
+        XCTAssertEqual(SpeakerPickerCardLayout.pillRailBottomPadding, 10)
+        XCTAssertEqual(SpeakerPickerCardLayout.volumeRowSpacing, 8)
+        XCTAssertEqual(SpeakerPickerCardLayout.volumeTopPadding, 2)
+        XCTAssertEqual(SpeakerPickerCardLayout.volumeBottomPadding, 8)
     }
 
     func testSpeakerPickerPillsUseTextOnlyLabels() {
@@ -67,6 +76,24 @@ final class SpeakerPickerPresentationTests: XCTestCase {
         XCTAssertEqual(
             SpeakerPickerSheetLayout.contentFrameSize(containerSize: container),
             container
+        )
+    }
+
+    func testSpeakerPickerSheetExtendsIntoBottomSafeArea() {
+        let container = CGSize(width: 393, height: 720)
+
+        XCTAssertFalse(SpeakerPickerSheetLayout.usesNavigationCloseButton)
+        XCTAssertTrue(SpeakerPickerSheetLayout.extendsIntoBottomSafeArea)
+        XCTAssertEqual(
+            SpeakerPickerSheetLayout.contentFrameSize(
+                containerSize: container,
+                bottomSafeAreaInset: 34
+            ),
+            CGSize(width: 393, height: 754)
+        )
+        XCTAssertEqual(
+            SpeakerPickerSheetLayout.scrollContentBottomPadding(bottomSafeAreaInset: 34),
+            56
         )
     }
 
