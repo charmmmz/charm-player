@@ -114,6 +114,40 @@ test('Music Ambience renderer factory selects the EDK sidecar when configured', 
   assert.equal(recorder.calls[0]?.headers.authorization, 'Bearer relay-token');
 });
 
+test('Music Ambience renderer factory can force CLIP v2 while CS2 keeps the global sidecar setting', async () => {
+  const { createHueMusicAmbienceRenderer } = await loadSidecarRendererModule();
+  const recorder = recordingFetch();
+  const updates: Array<{ id: string; body: unknown }> = [];
+  let entertainmentStreamingAttempts = 0;
+  const renderer = createHueMusicAmbienceRenderer(
+    config,
+    {
+      updateLight: async (id, body) => {
+        updates.push({ id, body });
+      },
+      setEntertainmentStreaming: async () => {
+        entertainmentStreamingAttempts += 1;
+      },
+    },
+    {
+      HUE_RENDERER: 'edk-sidecar',
+      HUE_MUSIC_RENDERER: 'clip-v2',
+      HUE_EDK_SIDECAR_URL: 'http://hue-edk-sidecar:8787',
+    },
+    { sidecarFetch: recorder.fetch },
+  );
+
+  const result = await renderer.render(musicFrame([
+    { r: 0.82, g: 0.12, b: 0.08 },
+    { r: 0.08, g: 0.22, b: 0.74 },
+  ]));
+
+  assert.equal(result.transport, 'clipFallback');
+  assert.deepEqual(recorder.calls, []);
+  assert.equal(entertainmentStreamingAttempts, 0);
+  assert.deepEqual(updates.map(update => update.id), ['light-1']);
+});
+
 test('Music Ambience renderer factory skips sync for grouped playback and uses CLIP color rotation', async () => {
   const { createHueMusicAmbienceRenderer } = await loadSidecarRendererModule();
   const recorder = recordingFetch();

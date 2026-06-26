@@ -46,6 +46,10 @@ export function createHueMusicAmbienceRenderer(
 ): HueAmbienceRenderer {
   const clipFallback = new ClipHueAmbienceRenderer(lightClient);
   const rendererName = (env.HUE_MUSIC_RENDERER ?? env.HUE_RENDERER ?? '').toLowerCase();
+  if (rendererName === 'clip' || rendererName === 'clip-v2' || rendererName === 'clipv2') {
+    return clipFallback;
+  }
+
   const syncRenderer = rendererName === 'edk-sidecar'
     ? new HueEdkSidecarRenderer(config, {
       baseUrl: env.HUE_EDK_SIDECAR_URL ?? 'http://127.0.0.1:8787',
