@@ -5,6 +5,7 @@ import {
   buildHueAmbienceFrame,
   entertainmentMetadataComplete,
 } from './hueAmbienceFrames.js';
+import { rgbToXy } from './huePalette.js';
 import type {
   HueAmbienceMotionStyle,
   HueAreaResource,
@@ -205,23 +206,46 @@ test('flowing frame engine renders gradient lights as deep spatial segments', ()
   );
 });
 
-test('still frame engine keeps overhead fill darker than spatial accent lights', () => {
+test('still frame engine lets decorative overhead lights participate as colored accents', () => {
   const frame = spatialFrame('still');
-  const fill = frame.targets[0]!.lights.find(light => light.light.id === 'main-light');
+  const overhead = frame.targets[0]!.lights.find(light => light.light.id === 'main-light');
   const accent = frame.targets[0]!.lights.find(light => light.light.id === 'floor-light');
-  assert.ok(fill);
+  assert.ok(overhead);
   assert.ok(accent);
 
-  assert.equal(fill.colors.length, 1);
+  assert.equal(overhead.colors.length, 1);
   assert.equal(accent.colors.length, 1);
-  assert.ok(maxComponent(fill.colors[0]!) <= 0.24, `fill too bright: ${JSON.stringify(fill.colors[0])}`);
   assert.ok(
-    maxComponent(accent.colors[0]!) > maxComponent(fill.colors[0]!),
-    `accent should sit above fill: ${JSON.stringify({ accent: accent.colors[0], fill: fill.colors[0] })}`,
+    maxComponent(overhead.colors[0]!) >= 0.24,
+    `decorative overhead should receive visible color: ${JSON.stringify(overhead.colors[0])}`,
   );
   assert.ok(
-    saturation(fill.colors[0]!) <= 0.28,
-    `fill should stay muted: ${JSON.stringify(fill.colors[0])}`,
+    saturation(overhead.colors[0]!) >= 0.35,
+    `decorative overhead should stay chromatic: ${JSON.stringify(overhead.colors[0])}`,
+  );
+});
+
+test('decorative overhead lights stay chromatic for pale album palettes instead of drifting to white', () => {
+  const frame = buildHueAmbienceFrame({
+    targets: [spatialRoomTarget()],
+    snapshot: snapshot({ positionSeconds: 0, durationSeconds: 180 }),
+    palette: [{ r: 0.95, g: 0.89, b: 0.81 }],
+    reason: 'steady',
+    phase: 0,
+    transitionSeconds: 8,
+    motionStyle: 'flowing',
+    now,
+  });
+  const overhead = frame.targets[0]!.lights.find(light => light.light.id === 'main-light');
+  assert.ok(overhead);
+
+  const color = overhead.colors[0]!;
+  const xy = rgbToXy(color);
+  const distanceFromWhite = Math.hypot(xy.x - 0.3127, xy.y - 0.329);
+  assert.ok(maxComponent(color) <= 0.44, `decorative overhead too bright: ${JSON.stringify(color)}`);
+  assert.ok(
+    distanceFromWhite >= 0.06,
+    `decorative overhead too close to white: ${JSON.stringify({ color, xy, distanceFromWhite })}`,
   );
 });
 

@@ -60,10 +60,10 @@ const TONE_PROFILES: Record<HueSpatialLightRole, ToneProfile> = {
     minLightness: 0.08,
     maxLightness: 0.18,
     maxBrightness: 0.22,
-    minSaturation: 0,
-    maxSaturation: 0.14,
-    saturationScale: 0.25,
-    darkMix: 0.56,
+    minSaturation: 0.18,
+    maxSaturation: 0.32,
+    saturationScale: 0.5,
+    darkMix: 0.34,
   },
   functional: {
     minLightness: 0.06,
@@ -94,9 +94,6 @@ export function classifySpatialLightRole(light: HueLightResource): HueSpatialLig
   if (light.function === 'functional') return 'functional';
 
   const name = light.name.trim().toLowerCase();
-  if (/(主灯|餐桌|吊灯|顶灯|ceiling|main|dining|overhead)/i.test(name)) {
-    return 'fill';
-  }
   if (/(落地|支架|桌边|边灯|角灯|floor|stand|side|corner|table)/i.test(name)) {
     return 'accent';
   }
