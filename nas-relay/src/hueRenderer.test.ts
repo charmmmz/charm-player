@@ -160,6 +160,67 @@ test('target resolution can prefer configured fallback when entertainment sync i
   assert.deepEqual(targets[0]!.lights.map(l => l.id), ['room-lamp']);
 });
 
+test('room target resolution borrows matching entertainment channel positions for CLIP spatial rendering', () => {
+  const spatialConfig = runtimeConfig({
+    resources: {
+      lights: [
+        light({ id: 'wall-gradient', name: '洗墙灯', ownerID: 'wall-device', supportsGradient: true }),
+        light({ id: 'main-light', name: '主灯-1', ownerID: 'main-device' }),
+      ],
+      areas: [
+        {
+          id: 'room-1',
+          name: 'Home Theater',
+          kind: 'room',
+          childLightIDs: ['wall-gradient', 'main-light'],
+          childDeviceIDs: ['wall-device', 'main-device'],
+        },
+        {
+          id: 'ent-1',
+          name: 'TV',
+          kind: 'entertainmentArea',
+          childLightIDs: ['wall-gradient', 'main-light'],
+          entertainmentChannels: [
+            { id: '0', lightID: 'wall-gradient', position: { x: -1, y: 0, z: -0.4 } },
+            { id: '1', lightID: 'wall-gradient', position: { x: 0, y: 0, z: 0 } },
+            { id: '2', lightID: 'wall-gradient', position: { x: 1, y: 0, z: 0.4 } },
+            { id: '3', lightID: 'main-light', position: { x: 0, y: 1, z: 1 } },
+          ],
+        },
+      ],
+    },
+    mappings: [
+      {
+        sonosID: 'home-theater',
+        sonosName: 'Home Theater',
+        relayGroupID: '192.168.50.25',
+        preferredTarget: { kind: 'room', id: 'room-1' },
+        fallbackTarget: null,
+        includedLightIDs: [],
+        excludedLightIDs: [],
+        capability: 'gradientReady',
+      },
+    ],
+  });
+
+  const targets = resolveHueTargets(spatialConfig, snapshot());
+
+  assert.equal(targets[0]!.area.kind, 'room');
+  assert.deepEqual(
+    targets[0]!.area.entertainmentChannels?.map(channel => [
+      channel.id,
+      channel.lightID,
+      channel.position?.x,
+    ]),
+    [
+      ['0', 'wall-gradient', -1],
+      ['1', 'wall-gradient', 0],
+      ['2', 'wall-gradient', 1],
+      ['3', 'main-light', 0],
+    ],
+  );
+});
+
 test('target resolution supports direct light targets by id', () => {
   const directLightConfig: HueAmbienceRuntimeConfig = {
     ...config,

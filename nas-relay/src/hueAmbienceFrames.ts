@@ -1,6 +1,15 @@
 import { rotatePalette } from './huePalette.js';
+import {
+  averagePosition,
+  buildSpatialLightColors,
+  compareSpatialPositions,
+  isSpatialPosition,
+  positionedChannelsForLight,
+  type HueSpatialPosition,
+} from './hueSpatialAmbience.js';
 import type {
   HueAmbienceFrameReason,
+  HueAmbienceMotionStyle,
   HueAmbienceRenderMode,
   HueAreaResource,
   HueEntertainmentChannelResource,
@@ -61,12 +70,15 @@ export interface BuildHueAmbienceFrameInput {
   transitionSeconds: number;
   now?: Date;
   effect?: HueAmbienceFrameEffect;
+  motionStyle?: HueAmbienceMotionStyle;
 }
 
 interface LightFrameSource {
   light: HueLightResource;
   channelID?: string | null;
   offsetIndex: number;
+  position?: HueSpatialPosition | null;
+  segmentPositions?: HueSpatialPosition[];
 }
 
 export function buildHueAmbienceFrame(input: BuildHueAmbienceFrameInput): HueAmbienceFrame {
@@ -86,7 +98,10 @@ export function buildHueAmbienceFrame(input: BuildHueAmbienceFrameInput): HueAmb
           target.area,
           palette,
           input.phase + progressOffset + targetIndex + source.offsetIndex,
+          input.motionStyle,
           source.channelID,
+          source.position,
+          source.segmentPositions,
         ),
       ),
       metadataComplete,
@@ -122,7 +137,17 @@ export function entertainmentMetadataComplete(area: HueAreaResource): boolean {
 
 function lightFrameSources(target: HueResolvedAmbienceTarget): LightFrameSource[] {
   if (target.area.kind !== 'entertainmentArea') {
-    return target.lights.map((light, index) => ({ light, offsetIndex: index }));
+    const positionRanks = roomLightSpatialRanks(target);
+    return target.lights.map((light, index) => {
+      const segmentPositions = positionedChannelsForLight(target.area.entertainmentChannels, light.id);
+      const position = averagePosition(segmentPositions);
+      return {
+        light,
+        offsetIndex: positionRanks?.get(light.id) ?? index,
+        ...(position ? { position } : {}),
+        ...(segmentPositions.length > 0 ? { segmentPositions } : {}),
+      };
+    });
   }
 
   const lightsByID = new Map(target.lights.map(light => [light.id, light]));
@@ -146,7 +171,24 @@ function lightFrameSources(target: HueResolvedAmbienceTarget): LightFrameSource[
     light: source.light,
     channelID: source.channel.id,
     offsetIndex: spatialRanks?.get(source.channel.id) ?? source.fallbackIndex,
+    ...(isSpatialPosition(source.channel.position) ? { position: source.channel.position } : {}),
   }));
+}
+
+function roomLightSpatialRanks(target: HueResolvedAmbienceTarget): Map<string, number> | null {
+  const positionedLights = target.lights.map(light => {
+    const position = averagePosition(positionedChannelsForLight(target.area.entertainmentChannels, light.id));
+    return position ? { lightID: light.id, position } : null;
+  });
+
+  if (positionedLights.some(light => light === null)) return null;
+
+  return new Map(
+    positionedLights
+      .filter((light): light is NonNullable<typeof light> => light !== null)
+      .sort((a, b) => compareSpatialPositions(a.position, b.position) || a.lightID.localeCompare(b.lightID))
+      .map((light, index) => [light.lightID, index]),
+  );
 }
 
 function entertainmentChannelSpatialRanks(
@@ -188,9 +230,22 @@ function buildLightFrame(
   area: HueAreaResource,
   palette: HueRGBColor[],
   offset: number,
+  motionStyle?: HueAmbienceMotionStyle,
   channelIDOverride?: string | null,
+  position?: HueSpatialPosition | null,
+  segmentPositions?: HueSpatialPosition[],
 ): HueAmbienceLightFrame {
-  const colors = rotatePalette(palette, offset).slice(0, light.supportsGradient ? 5 : 1);
+  const colors = motionStyle
+    ? buildSpatialLightColors({
+      light,
+      palette,
+      phase: offset,
+      offset,
+      motionStyle,
+      position,
+      segmentPositions: channelIDOverride ? undefined : segmentPositions,
+    })
+    : rotatePalette(palette, offset).slice(0, light.supportsGradient ? 5 : 1);
   const channelID = channelIDOverride ?? area.entertainmentChannels?.find(channel => channel.lightID === light.id)?.id;
 
   return {

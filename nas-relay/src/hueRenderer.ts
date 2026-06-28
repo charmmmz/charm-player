@@ -1,6 +1,7 @@
 import { brightness, rgbToXy, rotatePalette } from './huePalette.js';
 import type {
   HueAmbienceRuntimeConfig,
+  HueAreaResource,
   HueLightResource,
   HueRGBColor,
   HueResolvedAmbienceTarget,
@@ -54,16 +55,17 @@ export function resolveHueTargets(
       const area = shouldPreferFallback ? fallbackArea : preferredArea ?? fallbackArea;
       if (!area || seenAreaIDs.has(area.id)) return [];
       seenAreaIDs.add(area.id);
+      const enrichedArea = areaWithBorrowedEntertainmentChannels(config, area);
 
-      const lights = area.childLightIDs
+      const lights = enrichedArea.childLightIDs
         .map(id => lightsByID.get(id))
         .filter((light): light is HueLightResource => Boolean(light))
-        .filter(light => area.kind === 'entertainmentArea' || lightBelongsToAreaDevice(light, area, mapping))
+        .filter(light => enrichedArea.kind === 'entertainmentArea' || lightBelongsToAreaDevice(light, enrichedArea, mapping))
         .filter(light => light.supportsColor)
-        .filter(light => area.kind === 'light' || shouldUseLightForAmbience(light, mapping, area.kind));
+        .filter(light => enrichedArea.kind === 'light' || shouldUseLightForAmbience(light, mapping, enrichedArea.kind));
 
       if (lights.length === 0) return [];
-      return [{ area, mapping, lights }];
+      return [{ area: enrichedArea, mapping, lights }];
     });
 }
 
@@ -149,6 +151,31 @@ function resolveArea(
   }
   return config.resources.areas.find(area => area.id === target.id && area.kind === target.kind)
     ?? config.resources.areas.find(area => area.id === target.id);
+}
+
+function areaWithBorrowedEntertainmentChannels(
+  config: HueAmbienceRuntimeConfig,
+  area: HueAreaResource,
+): HueAreaResource {
+  if (area.kind === 'entertainmentArea' || (area.entertainmentChannels?.length ?? 0) > 0) {
+    return area;
+  }
+
+  const areaLightIDs = new Set(area.childLightIDs);
+  let bestChannels: NonNullable<typeof area.entertainmentChannels> = [];
+
+  for (const candidate of config.resources.areas) {
+    if (candidate.kind !== 'entertainmentArea') continue;
+    const channels = (candidate.entertainmentChannels ?? [])
+      .filter(channel => channel.lightID && areaLightIDs.has(channel.lightID));
+    if (channels.length > bestChannels.length) {
+      bestChannels = channels;
+    }
+  }
+
+  return bestChannels.length > 0
+    ? { ...area, entertainmentChannels: bestChannels }
+    : area;
 }
 
 function lightBelongsToAreaDevice(

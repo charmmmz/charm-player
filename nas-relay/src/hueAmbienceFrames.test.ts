@@ -6,7 +6,9 @@ import {
   entertainmentMetadataComplete,
 } from './hueAmbienceFrames.js';
 import type {
+  HueAmbienceMotionStyle,
   HueAreaResource,
+  HueLightResource,
   HueRGBColor,
   HueResolvedAmbienceTarget,
   HueSnapshot,
@@ -185,6 +187,44 @@ test('frame engine keeps multiple colors for gradients and one color for basic l
   assert.deepEqual(frame.targets[0]!.lights[1]!.colors, [palette[1]]);
 });
 
+test('flowing frame engine renders gradient lights as deep spatial segments', () => {
+  const frame = spatialFrame('flowing');
+  const gradient = frame.targets[0]!.lights.find(light => light.light.id === 'wall-gradient');
+  assert.ok(gradient);
+
+  assert.equal(gradient.colors.length, 3);
+  assert.notDeepEqual(gradient.colors[0], gradient.colors[1]);
+  assert.notDeepEqual(gradient.colors[1], gradient.colors[2]);
+  assert.ok(
+    gradient.colors.every(color => maxComponent(color) <= 0.46),
+    `gradient colors too bright: ${JSON.stringify(gradient.colors)}`,
+  );
+  assert.ok(
+    gradient.colors.every(color => saturation(color) <= 0.52),
+    `gradient colors too saturated: ${JSON.stringify(gradient.colors)}`,
+  );
+});
+
+test('still frame engine keeps overhead fill darker than spatial accent lights', () => {
+  const frame = spatialFrame('still');
+  const fill = frame.targets[0]!.lights.find(light => light.light.id === 'main-light');
+  const accent = frame.targets[0]!.lights.find(light => light.light.id === 'floor-light');
+  assert.ok(fill);
+  assert.ok(accent);
+
+  assert.equal(fill.colors.length, 1);
+  assert.equal(accent.colors.length, 1);
+  assert.ok(maxComponent(fill.colors[0]!) <= 0.24, `fill too bright: ${JSON.stringify(fill.colors[0])}`);
+  assert.ok(
+    maxComponent(accent.colors[0]!) > maxComponent(fill.colors[0]!),
+    `accent should sit above fill: ${JSON.stringify({ accent: accent.colors[0], fill: fill.colors[0] })}`,
+  );
+  assert.ok(
+    saturation(fill.colors[0]!) <= 0.28,
+    `fill should stay muted: ${JSON.stringify(fill.colors[0])}`,
+  );
+});
+
 test('frame engine emits one entertainment frame per gradient channel', () => {
   const frame = buildHueAmbienceFrame({
     targets: [
@@ -294,3 +334,85 @@ test('entertainment metadata requires complete channel metadata for entertainmen
   }).area), false);
   assert.equal(entertainmentMetadataComplete(target({ kind: 'room' }).area), false);
 });
+
+function spatialFrame(motionStyle: HueAmbienceMotionStyle) {
+  return buildHueAmbienceFrame({
+    targets: [spatialRoomTarget()],
+    snapshot: snapshot({ positionSeconds: 42, durationSeconds: 180 }),
+    palette: [
+      { r: 1, g: 0, b: 0 },
+      { r: 0, g: 0.92, b: 1 },
+      { r: 1, g: 0.82, b: 0 },
+    ],
+    reason: 'steady',
+    phase: 0.5,
+    transitionSeconds: 8,
+    motionStyle,
+    now,
+  });
+}
+
+function spatialRoomTarget(): HueResolvedAmbienceTarget {
+  const wallGradient = spatialLight({
+    id: 'wall-gradient',
+    name: '洗墙灯',
+    supportsGradient: true,
+  });
+  const floorLight = spatialLight({
+    id: 'floor-light',
+    name: '落地灯',
+  });
+  const mainLight = spatialLight({
+    id: 'main-light',
+    name: '主灯-1',
+  });
+
+  return {
+    area: {
+      id: 'room-1',
+      name: 'Home Theater',
+      kind: 'room',
+      childLightIDs: ['wall-gradient', 'floor-light', 'main-light'],
+      entertainmentChannels: [
+        { id: '0', lightID: 'wall-gradient', position: { x: -1, y: 0, z: -0.4 } },
+        { id: '1', lightID: 'wall-gradient', position: { x: 0, y: 0, z: 0 } },
+        { id: '2', lightID: 'wall-gradient', position: { x: 1, y: 0, z: 0.4 } },
+        { id: '3', lightID: 'floor-light', position: { x: -0.8, y: -0.2, z: 0.6 } },
+        { id: '4', lightID: 'main-light', position: { x: 0, y: 1, z: 1 } },
+      ],
+    },
+    mapping: {
+      sonosID: 'home-theater',
+      sonosName: 'Home Theater',
+      relayGroupID: '192.168.50.25',
+      preferredTarget: { kind: 'room', id: 'room-1' },
+      fallbackTarget: null,
+      includedLightIDs: [],
+      excludedLightIDs: [],
+      capability: 'gradientReady',
+    },
+    lights: [wallGradient, floorLight, mainLight],
+  };
+}
+
+function spatialLight(overrides: Partial<HueLightResource> & Pick<HueLightResource, 'id' | 'name'>): HueLightResource {
+  return {
+    supportsColor: true,
+    supportsGradient: false,
+    supportsEntertainment: true,
+    function: 'decorative',
+    functionMetadataResolved: true,
+    ...overrides,
+  };
+}
+
+function maxComponent(color: HueRGBColor): number {
+  return Math.max(color.r, color.g, color.b);
+}
+
+function saturation(color: HueRGBColor): number {
+  const max = maxComponent(color);
+  const min = Math.min(color.r, color.g, color.b);
+  if (max <= 0) return 0;
+  return (max - min) / max;
+}

@@ -259,6 +259,7 @@ export class HueAmbienceService {
           phase: config.motionStyle === 'flowing' ? phase : 0,
           transitionSeconds,
           reason: step === 0 ? 'trackChange' : 'steady',
+          motionStyle: config.motionStyle,
         });
         const result = await renderer.render(frame);
         this.activeFrame = frame;
