@@ -39,20 +39,21 @@ enum AlbumPaletteExtractor {
     ) -> [HueRGBColor] {
         guard maxColors > 0 else { return [] }
         let colorLimit = min(maxColors, 5)
+        let profile = themeColorProfile(for: themeColors)
         var palette: [HueRGBColor] = []
 
-        if let background = themeColors.background {
+        if let background = themeColors.background, profile.shouldUseBackground {
             appendDistinct(
-                ambienceThemeColor(background),
+                ambienceThemeColor(background, profile: profile),
                 to: &palette,
                 limit: colorLimit,
                 minimumDistance: 0.18
             )
         }
 
-        for textColor in themeColors.textColors where textColor.isUsefulArtworkThemeAccent {
+        for textColor in themeColors.textColors where textColor.isUsefulArtworkThemeAccent(for: profile) {
             appendDistinct(
-                ambienceThemeColor(textColor),
+                ambienceThemeColor(textColor, profile: profile),
                 to: &palette,
                 limit: colorLimit,
                 minimumDistance: 0.22
@@ -103,13 +104,32 @@ enum AlbumPaletteExtractor {
         palette.append(color)
     }
 
-    private static func ambienceThemeColor(_ color: HueRGBColor) -> HueRGBColor {
-        let readable = readableLightColor(color)
+    private static func themeColorProfile(for themeColors: ArtworkThemeColors) -> ArtworkThemeColorProfile {
+        let usefulAccentCount = themeColors.textColors.filter {
+            $0.isUsefulArtworkThemeAccent(for: .darkNeon)
+        }.count
+        if let background = themeColors.background,
+           background.brightness <= 0.12,
+           usefulAccentCount >= 2 {
+            return .darkNeon
+        }
+        return .standard
+    }
+
+    private static func ambienceThemeColor(
+        _ color: HueRGBColor,
+        profile: ArtworkThemeColorProfile = .standard
+    ) -> HueRGBColor {
+        let readable = readableLightColor(
+            color,
+            minBrightness: profile.minReadableBrightness,
+            maxBrightness: profile.maxReadableBrightness
+        )
         let hsl = rgbToHSL(readable)
         return hslToRGB(
             h: hsl.h,
-            s: min(hsl.s, 0.58),
-            l: min(max(hsl.l, 0.24), 0.68)
+            s: min(max(hsl.s, profile.minSaturation), profile.maxSaturation),
+            l: min(max(hsl.l, profile.minLightness), profile.maxLightness)
         )
     }
 
@@ -130,13 +150,17 @@ enum AlbumPaletteExtractor {
         ))
     }
 
-    private static func readableLightColor(_ color: HueRGBColor) -> HueRGBColor {
+    private static func readableLightColor(
+        _ color: HueRGBColor,
+        minBrightness: Double = 0.3,
+        maxBrightness: Double = 0.82
+    ) -> HueRGBColor {
         let maxComponent = color.brightness
         guard maxComponent > 0 else {
-            return HueRGBColor(r: 0.3, g: 0.3, b: 0.3)
+            return HueRGBColor(r: minBrightness, g: minBrightness, b: minBrightness)
         }
 
-        let targetMax = min(max(maxComponent, 0.3), 0.82)
+        let targetMax = min(max(maxComponent, minBrightness), maxBrightness)
         let scale = targetMax / maxComponent
         return HueRGBColor(
             r: min(max(color.r * scale, 0), 1),
@@ -206,6 +230,39 @@ enum AlbumPaletteExtractor {
     private static func clamp(_ value: Double) -> Double {
         min(max(value, 0), 1)
     }
+}
+
+private struct ArtworkThemeColorProfile {
+    var shouldUseBackground: Bool
+    var allowsBrightAccents: Bool
+    var minReadableBrightness: Double
+    var maxReadableBrightness: Double
+    var minSaturation: Double
+    var maxSaturation: Double
+    var minLightness: Double
+    var maxLightness: Double
+
+    static let standard = ArtworkThemeColorProfile(
+        shouldUseBackground: true,
+        allowsBrightAccents: false,
+        minReadableBrightness: 0.3,
+        maxReadableBrightness: 0.82,
+        minSaturation: 0,
+        maxSaturation: 0.58,
+        minLightness: 0.24,
+        maxLightness: 0.68
+    )
+
+    static let darkNeon = ArtworkThemeColorProfile(
+        shouldUseBackground: false,
+        allowsBrightAccents: true,
+        minReadableBrightness: 0.22,
+        maxReadableBrightness: 0.62,
+        minSaturation: 0.45,
+        maxSaturation: 0.82,
+        minLightness: 0.20,
+        maxLightness: 0.42
+    )
 }
 
 private struct ColorBucketKey: Hashable {
@@ -303,6 +360,13 @@ private extension HueRGBColor {
 
     var isUsefulArtworkThemeAccent: Bool {
         brightness >= 0.16 && brightness <= 0.96 && saturation >= 0.18
+    }
+
+    func isUsefulArtworkThemeAccent(for profile: ArtworkThemeColorProfile) -> Bool {
+        if profile.allowsBrightAccents {
+            return brightness >= 0.16 && saturation >= 0.18
+        }
+        return isUsefulArtworkThemeAccent
     }
 
     func distance(to color: HueRGBColor) -> Double {

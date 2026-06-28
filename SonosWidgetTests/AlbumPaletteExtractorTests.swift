@@ -75,15 +75,15 @@ final class AlbumPaletteExtractorTests: XCTestCase {
 
         let palette = AlbumPaletteExtractor.palette(from: themeColors, maxColors: 4)
 
-        XCTAssertGreaterThanOrEqual(palette.count, 2)
-        XCTAssertTrue(palette.allSatisfy { $0.brightness <= 0.62 })
-        XCTAssertTrue(palette.allSatisfy { saturation(of: $0) >= 0.35 })
+        XCTAssertGreaterThanOrEqual(palette.count, 2, "palette: \(palette)")
+        XCTAssertTrue(palette.allSatisfy { $0.brightness <= 0.62 }, "palette: \(palette)")
+        XCTAssertTrue(palette.allSatisfy { saturation(of: $0) >= 0.35 }, "palette: \(palette)")
         XCTAssertTrue(palette.contains {
             $0.r > 0.42 && $0.r > $0.g * 1.5 && $0.r > $0.b * 1.25
-        })
+        }, "palette: \(palette)")
         XCTAssertTrue(palette.contains {
             max($0.g, $0.b) > 0.42 && max($0.g, $0.b) > $0.r * 1.45
-        })
+        }, "palette: \(palette)")
     }
 
     func testArtworkThemeColorsParseAppleMusicAPIHexFields() throws {
