@@ -10,7 +10,6 @@ final class HueAmbienceRelayConfigTests: XCTestCase {
 
         let store = HueAmbienceStore(storage: HueAmbienceDefaults(defaults: defaults))
         store.isEnabled = true
-        store.isCS2SyncEnabled = true
         store.flowSpeed = .fast
         store.bridge = HueBridgeInfo(id: "bridge-1", ipAddress: "192.168.50.216", name: "Hue Bridge")
         store.updateResources(HueBridgeResources(
@@ -38,7 +37,6 @@ final class HueAmbienceRelayConfigTests: XCTestCase {
                 )
             ]
         ))
-        store.cs2EntertainmentAreaID = "ent-1"
         store.upsertMapping(HueSonosMapping(
             sonosID: "RINCON_playroom",
             sonosName: "Playroom",
@@ -79,8 +77,6 @@ final class HueAmbienceRelayConfigTests: XCTestCase {
         XCTAssertEqual(preferredTarget["kind"] as? String, "entertainmentArea")
         XCTAssertEqual(preferredTarget["id"] as? String, "ent-1")
         XCTAssertEqual(object["flowIntervalSeconds"] as? Double, 4)
-        XCTAssertEqual(object["cs2LightingEnabled"] as? Bool, true)
-        XCTAssertEqual(object["cs2EntertainmentAreaId"] as? String, "ent-1")
 
         let resources = try XCTUnwrap(object["resources"] as? [String: Any])
         let areas = try XCTUnwrap(resources["areas"] as? [[String: Any]])

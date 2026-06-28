@@ -4,44 +4,17 @@ import XCTest
 final class SettingsInputDraftTests: XCTestCase {
     func testCommitFocusedRelayFieldSavesRelayDraftAndClearsFocus() {
         let drafts = SettingsInputDrafts(
-            relayURL: " http://192.168.50.10:8787 ",
-            agentURL: "http://192.168.50.10:8790",
-            agentToken: "token"
+            relayURL: " http://192.168.50.10:8787 "
         )
         var savedRelayURL: String?
-        var savedAgentURL: String?
-        var savedAgentToken: String?
 
         let nextFocus = drafts.commit(
             focusedField: .relayURL,
-            relayURL: { savedRelayURL = $0 },
-            agentURL: { savedAgentURL = $0 },
-            agentToken: { savedAgentToken = $0 }
+            relayURL: { savedRelayURL = $0 }
         )
 
         XCTAssertNil(nextFocus)
         XCTAssertEqual(savedRelayURL, " http://192.168.50.10:8787 ")
-        XCTAssertNil(savedAgentURL)
-        XCTAssertNil(savedAgentToken)
-    }
-
-    func testCommitFocusedAgentTokenSavesTokenDraftAndClearsFocus() {
-        let drafts = SettingsInputDrafts(
-            relayURL: "http://192.168.50.10:8787",
-            agentURL: "http://192.168.50.10:8790",
-            agentToken: " token-value "
-        )
-        var savedAgentToken: String?
-
-        let nextFocus = drafts.commit(
-            focusedField: .agentToken,
-            relayURL: { _ in XCTFail("Relay URL should not be committed") },
-            agentURL: { _ in XCTFail("Agent URL should not be committed") },
-            agentToken: { savedAgentToken = $0 }
-        )
-
-        XCTAssertNil(nextFocus)
-        XCTAssertEqual(savedAgentToken, " token-value ")
     }
 }
 

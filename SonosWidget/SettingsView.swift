@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Consolidated Settings tab. Groups account, speakers, music services, and
-/// about-app rows into one place, replacing the two per-tab menus that used
-/// to live in `PlayerView` (ellipsis) and `SearchView` (sliders).
+/// Consolidated Settings tab. Groups Sonos account, speakers, external
+/// connections, feature settings, diagnostics, and about-app rows into one
+/// place, replacing the two per-tab menus that used to live in `PlayerView`
+/// (ellipsis) and `SearchView` (sliders).
 struct SettingsView: View {
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
@@ -17,10 +18,7 @@ struct SettingsView: View {
     /// observable changes and re-renders the status row.
     @Bindable private var relay = RelayManager.shared
 
-    @State private var agentURLDraft: String = AgentManager.shared.urlString
-    @State private var agentTokenDraft: String = AgentManager.shared.tokenString
     @FocusState private var focusedInputField: SettingsInputField?
-    @Bindable private var agent = AgentManager.shared
     @Bindable private var auth = SonosAuth.shared
     @Bindable private var hueStore = HueAmbienceStore.shared
     @Bindable private var musicAmbience = MusicAmbienceManager.shared
@@ -47,11 +45,8 @@ struct SettingsView: View {
             }
             .onAppear {
                 relayURLDraft = relay.urlString
-                agentURLDraft = agent.urlString
-                agentTokenDraft = agent.tokenString
                 liveActivityStyle = SharedStorage.liveActivityStyle
                 Task { await relay.probeNow() }
-                Task { await agent.probeNow() }
                 musicAmbience.refreshStatus()
             }
         }
@@ -103,16 +98,14 @@ struct SettingsView: View {
                     manager: musicAmbience,
                     sonosSpeakers: displayedSpeakers,
                     presentSetup: {
-                        settingsPath.append(.hubSetup)
+                        settingsPath.append(.externalConnection)
                     }
                 )
             }
-        case .hubSetup:
+        case .externalConnection:
             settingsDetailForm(title: destination.title) {
                 hueBridgeSetupSection
-                liveActivityStyleSection
-                relaySection
-                agentSection
+                liveActivitySection
             }
         case .diagnostics:
             settingsDetailForm(title: destination.title) {
@@ -144,7 +137,7 @@ struct SettingsView: View {
             return "\(sonosAccountStatusSummary) · \(speakersStatusSummary)"
         case .hueAmbience:
             return musicAmbienceStatusSummary
-        case .hubSetup:
+        case .externalConnection:
             return "\(hueBridgeStatusSummary) · Activity \(liveActivityStyle.displayName) · Relay \(relayStatusTitle)"
         case .diagnostics:
             return "Local logs · category filters"
@@ -208,9 +201,7 @@ struct SettingsView: View {
 
     private var inputDrafts: SettingsInputDrafts {
         SettingsInputDrafts(
-            relayURL: relayURLDraft,
-            agentURL: agentURLDraft,
-            agentToken: agentTokenDraft
+            relayURL: relayURLDraft
         )
     }
 
@@ -221,9 +212,7 @@ struct SettingsView: View {
     private func finishEditingInput(_ field: SettingsInputField?) {
         focusedInputField = inputDrafts.commit(
             focusedField: field,
-            relayURL: { relay.setURL($0) },
-            agentURL: { agent.setURL($0) },
-            agentToken: { agent.setToken($0) }
+            relayURL: { relay.setURL($0) }
         )
     }
 
@@ -527,7 +516,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Hub Setup
+    // MARK: - External Connection
 
     @ViewBuilder
     private var hueBridgeSetupSection: some View {
@@ -570,7 +559,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Live Activity Style
+    // MARK: - Live Activity
 
     private var liveActivityStyleBinding: Binding<LiveActivityStyle> {
         Binding {
@@ -583,7 +572,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var liveActivityStyleSection: some View {
+    private var liveActivitySection: some View {
         Section {
             Picker("Live Activity Style", selection: liveActivityStyleBinding) {
                 ForEach(LiveActivityStyle.allCases) { style in
@@ -609,18 +598,7 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
             }
-        } header: {
-            Text("Live Activity Style")
-        } footer: {
-            Text("Rich style uses the music card for music and automatically switches to the TV remote when the source is live TV.")
-        }
-    }
 
-    // MARK: - Live Activity Relay
-
-    @ViewBuilder
-    private var relaySection: some View {
-        Section {
             TextField("Auto-discover, or enter http://192.168.50.10:8787", text: $relayURLDraft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -645,12 +623,13 @@ struct SettingsView: View {
                 Label("Test Connection", systemImage: "antenna.radiowaves.left.and.right")
             }
         } header: {
-            Text("Live Activity Relay")
+            Text("Live Activity")
         } footer: {
             Text("""
-                 Optional. Leave blank to auto-discover `nas-relay/` on your \
-                 local network. Enter a URL only when Bonjour is unavailable, \
-                 the relay is on another subnet, or you use a tunnel.
+                 Rich style uses the music card for music and switches to the \
+                 TV remote when the source is live TV. Leave the relay URL blank \
+                 to auto-discover `nas-relay/`; enter a URL only when Bonjour is \
+                 unavailable, the relay is on another subnet, or you use a tunnel.
                  """)
         }
     }
@@ -770,110 +749,6 @@ struct SettingsView: View {
             return "\(mode) · \(status) · \(error)"
         }
         return "\(mode) · \(status)"
-    }
-
-    // MARK: - NAS Agent
-
-    @ViewBuilder
-    private var agentSection: some View {
-        Section {
-            TextField("http://192.168.50.10:8790", text: $agentURLDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .submitLabel(.done)
-                .focused($focusedInputField, equals: .agentURL)
-                .onSubmit {
-                    finishEditingInput(.agentURL)
-                }
-
-            SecureField("Agent bearer token", text: $agentTokenDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .focused($focusedInputField, equals: .agentToken)
-                .onSubmit {
-                    finishEditingInput(.agentToken)
-                }
-
-            agentStatusRow
-
-            Button {
-                finishEditingInput(.agentURL)
-                finishEditingInput(.agentToken)
-                Task { await agent.probeNow() }
-            } label: {
-                Label("Test Agent Connection", systemImage: "bolt.horizontal.circle")
-            }
-            .disabled(
-                agentURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || agentTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-        } header: {
-            Text("NAS Agent")
-        } footer: {
-            Text("""
-                 Optional Python agent (`nas-agent/`) for natural-language Sonos control via \
-                 your relay. Use the same machine as the relay with port 8790 by default, \
-                 and paste the `AGENT_USER_TOKEN` from your Docker `.env`. Requires OpenAI \
-                 API key on the server.
-                 """)
-        }
-    }
-
-    @ViewBuilder
-    private var agentStatusRow: some View {
-        HStack(spacing: 12) {
-            agentStatusIndicator
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agentStatusTitle)
-                    .font(.subheadline.weight(.semibold))
-                if let detail = agentStatusDetail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-            }
-        }
-    }
-
-    private var agentStatusIndicator: some View {
-        let color: Color
-        switch agent.status {
-        case .connected: color = .green
-        case .probing: color = .yellow
-        case .disabled: color = .secondary
-        case .unreachable: color = .red
-        }
-        return Circle()
-            .fill(color)
-            .frame(width: 10, height: 10)
-            .overlay {
-                if case .probing = agent.status {
-                    Circle().stroke(Color.yellow, lineWidth: 1).scaleEffect(1.5)
-                        .opacity(0.5)
-                }
-            }
-    }
-
-    private var agentStatusTitle: String {
-        switch agent.status {
-        case .disabled: return "Disabled"
-        case .probing: return "Probing…"
-        case .connected: return "Connected"
-        case .unreachable: return "Unreachable"
-        }
-    }
-
-    private var agentStatusDetail: String? {
-        switch agent.status {
-        case .disabled:
-            return "Enter agent URL and bearer token from your NAS stack `.env`."
-        case .probing: return nil
-        case .connected: return "Agent can reach OpenAI and the Node relay."
-        case .unreachable(let reason): return reason
-        }
     }
 
     // MARK: - About

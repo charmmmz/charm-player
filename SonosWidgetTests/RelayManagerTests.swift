@@ -383,7 +383,7 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(response.hueAmbience?.activeTargetIds, ["area-1", "light-2"])
     }
 
-    func testHealthResponseDecodesEntertainmentAndCS2LightingStatus() throws {
+    func testHealthResponseDecodesEntertainmentStatus() throws {
         let data = Data("""
         {
           "ok": true,
@@ -399,15 +399,6 @@ final class RelayManagerTests: XCTestCase {
             "activeStreamer": "Hue Sync",
             "activeAreaId": "ent-1",
             "lastError": null
-          },
-          "cs2Lighting": {
-            "enabled": true,
-            "active": false,
-            "mode": "competitive",
-            "transport": "clipFallback",
-            "fallbackReason": "entertainment_occupied",
-            "areaId": "ent-game",
-            "areaName": "PC"
           }
         }
         """.utf8)
@@ -417,13 +408,6 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(response.hueEntertainment?.streaming, .occupied)
         XCTAssertEqual(response.hueEntertainment?.activeStreamer, "Hue Sync")
         XCTAssertEqual(response.hueEntertainment?.activeAreaId, "ent-1")
-        XCTAssertEqual(response.cs2Lighting?.enabled, true)
-        XCTAssertEqual(response.cs2Lighting?.active, false)
-        XCTAssertEqual(response.cs2Lighting?.mode, .competitive)
-        XCTAssertEqual(response.cs2Lighting?.transport, .clipFallback)
-        XCTAssertEqual(response.cs2Lighting?.fallbackReason, "entertainment_occupied")
-        XCTAssertEqual(response.cs2Lighting?.areaId, "ent-game")
-        XCTAssertEqual(response.cs2Lighting?.areaName, "PC")
     }
 
     func testHealthResponseDecodesRelayDiscoveryAndAPNsStatus() throws {
@@ -474,8 +458,6 @@ final class RelayManagerTests: XCTestCase {
             "mappings": 1,
             "lights": 2,
             "areas": 1,
-            "cs2LightingEnabled": true,
-            "cs2EntertainmentAreaId": "ent-game",
             "runtimeActive": true,
             "activeGroupId": "group-1",
             "renderMode": "trueStreaming",
@@ -491,8 +473,6 @@ final class RelayManagerTests: XCTestCase {
         let response = try JSONDecoder().decode(RelayClient.HueAmbienceStatusResponse.self, from: data)
 
         XCTAssertNil(response.status.renderMode)
-        XCTAssertEqual(response.status.cs2LightingEnabled, true)
-        XCTAssertEqual(response.status.cs2EntertainmentAreaId, "ent-game")
     }
 
     func testDisabledHueAmbienceConfigStillReportsSynced() async {
@@ -517,7 +497,7 @@ final class RelayManagerTests: XCTestCase {
         )
         XCTAssertEqual(
             relay.hueAmbienceRuntimeDetail,
-            "Enable album ambience or CS2 sync to let NAS control your lights."
+            "Enable album ambience to let NAS control your lights."
         )
         XCTAssertFalse(relay.shouldDeferLocalHueAmbience)
     }

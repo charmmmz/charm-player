@@ -79,7 +79,7 @@ struct MusicAmbienceSettingsView: View {
                 presentSetup()
             } label: {
                 Label(
-                    store.bridge == nil ? "Set Up in Hub Setup" : "Manage in Hub Setup",
+                    store.bridge == nil ? "Set Up in External Connection" : "Manage in External Connection",
                     systemImage: "externaldrive.connected.to.line.below"
                 )
             }
