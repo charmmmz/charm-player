@@ -16,8 +16,37 @@ test('album art palette extraction keeps distinct useful cover colors', () => {
   ]);
 
   assert.ok(palette.length >= 2);
-  assert.ok(palette.some(color => color.b > 0.7 && color.r < 0.2));
-  assert.ok(palette.some(color => color.r > 0.7 && color.g > 0.6 && color.b < 0.2));
+  assert.ok(palette.some(isModeratedBlue));
+  assert.ok(palette.some(isModeratedYellow));
+});
+
+test('album art palette moderates overly saturated cover colors for ambience', () => {
+  const palette = extractPaletteFromColors(Array(20).fill({ r: 1, g: 0, b: 0 }));
+
+  assert.equal(palette.length, 1);
+  const red = palette[0]!;
+  assert.ok(red.r > red.g);
+  assert.ok(red.r > red.b);
+  assert.ok(red.r < 0.8);
+  assert.ok(red.g > 0.1);
+  assert.ok(red.b > 0.1);
+});
+
+test('dark album art limits bright neon accents for ambience', () => {
+  const palette = extractPaletteFromColors([
+    ...Array(70).fill({ r: 0.03, g: 0.03, b: 0.04 }),
+    ...Array(12).fill({ r: 1, g: 0, b: 0 }),
+    ...Array(10).fill({ r: 0, g: 0.9, b: 1 }),
+    ...Array(9).fill({ r: 1, g: 0.8, b: 0 }),
+    ...Array(8).fill({ r: 1, g: 0, b: 0.9 }),
+    ...Array(7).fill({ r: 0, g: 1, b: 0.2 }),
+  ]);
+
+  assert.ok(palette.length > 0);
+  assert.ok(palette.length <= 4);
+  assert.ok(palette.every(color => Math.max(color.r, color.g, color.b) <= 0.58));
+  assert.ok(palette.some(color => color.r > color.g && color.r > color.b));
+  assert.ok(palette.some(color => color.b > color.r || color.g > color.r));
 });
 
 test('snapshot palette prefers fetched album art colors over stable metadata colors', async () => {
@@ -41,14 +70,16 @@ test('snapshot palette prefers fetched album art colors over stable metadata col
     },
   );
 
-  assert.deepEqual(palette, [blue, yellow]);
+  assert.equal(palette.length, 2);
+  assert.ok(isModeratedBlue(palette[0]!));
+  assert.ok(isModeratedYellow(palette[1]!));
 });
 
 test('album art palette extraction decodes PNG artwork bytes', () => {
   const palette = paletteFromAlbumArtBuffer(makeStripedPng([blue, yellow]));
 
-  assert.ok(palette.some(color => color.b > 0.7 && color.r < 0.2));
-  assert.ok(palette.some(color => color.r > 0.7 && color.g > 0.6 && color.b < 0.2));
+  assert.ok(palette.some(isModeratedBlue));
+  assert.ok(palette.some(isModeratedYellow));
 });
 
 test('black and white album art falls back to a neutral cover color', () => {
@@ -82,4 +113,20 @@ function makeStripedPng(colors: HueRGBColor[]): Buffer {
   }
 
   return PNG.sync.write(png);
+}
+
+function isModeratedBlue(color: HueRGBColor): boolean {
+  return color.b > color.r
+    && color.b > color.g
+    && color.b > 0.5
+    && color.b < 0.75
+    && color.r > 0.1;
+}
+
+function isModeratedYellow(color: HueRGBColor): boolean {
+  return color.r > color.b
+    && color.g > color.b
+    && color.r > 0.55
+    && color.r < 0.75
+    && color.b > 0.1;
 }

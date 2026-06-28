@@ -61,6 +61,9 @@ test('Sonos artwork resolver logs an iTunes shadow lookup without replacing geta
   const logs: Array<Record<string, unknown>> = [];
   const resolver = createSonosArtworkResolver({
     logger: {
+      debug: (fields: Record<string, unknown>, message: string) => {
+        logs.push({ ...fields, message });
+      },
       info: (fields: Record<string, unknown>, message: string) => {
         logs.push({ ...fields, message });
       },
@@ -109,6 +112,9 @@ test('Sonos artwork resolver uses iTunes artwork for Apple Music live radio stat
   const logs: Array<Record<string, unknown>> = [];
   const resolver = createSonosArtworkResolver({
     logger: {
+      debug: (fields: Record<string, unknown>, message: string) => {
+        logs.push({ ...fields, message });
+      },
       info: (fields: Record<string, unknown>, message: string) => {
         logs.push({ ...fields, message });
       },

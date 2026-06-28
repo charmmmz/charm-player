@@ -246,7 +246,7 @@ export class ApnsClient {
     let pendingTokens = [...tokens];
     for (let attempt = 1; pendingTokens.length > 0 && attempt <= DEFAULT_APNS_MAX_ATTEMPTS; attempt += 1) {
       try {
-        this.log.info(
+        this.log[attempt === 1 ? 'debug' : 'info'](
           {
             source: 'relay',
             action: attempt === 1 ? 'apns-payload' : 'apns-retry',

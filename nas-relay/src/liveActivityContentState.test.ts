@@ -441,7 +441,7 @@ function captureLogger(): { logger: pino.Logger; lines: string[] } {
       lines.push(line);
     },
   };
-  return { logger: pino({ level: 'info' }, destination), lines };
+  return { logger: pino({ level: 'debug' }, destination), lines };
 }
 
 function parseLogLine(line: string): Record<string, any> | null {

@@ -734,7 +734,7 @@ test('bridge keeps getaa snapshot artwork before emitting', async () => {
   );
 });
 
-test('bridge logs getaa snapshot artwork source at info level', async () => {
+test('bridge logs getaa snapshot artwork source at debug level', async () => {
   const { logger, lines } = captureLogger();
   const bridge = new SonosBridge(logger, {
     localControl: null,
@@ -1227,7 +1227,7 @@ function captureLogger(): { logger: pino.Logger; lines: string[] } {
       lines.push(line);
     },
   };
-  return { logger: pino({ level: 'info' }, destination), lines };
+  return { logger: pino({ level: 'debug' }, destination), lines };
 }
 
 function zoneGroup(device: Record<string, unknown>) {

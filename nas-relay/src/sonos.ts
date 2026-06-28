@@ -639,7 +639,7 @@ export class SonosBridge extends EventEmitter {
           albumArtFallbackUri = null;
         } else {
           albumArtFallbackUri = usableAlbumArtUri(artworkResolution.fallbackUrl) ?? null;
-          this.log.info(
+          this.log.debug(
             {
               groupId: resolvedGroupId,
               trigger,

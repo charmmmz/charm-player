@@ -20,16 +20,52 @@ interface DecodedImage {
   data: Uint8Array;
 }
 
+interface AmbienceColorProfile {
+  maxColors: number;
+  minUsefulBrightness: number;
+  minUsefulSaturation: number;
+  minReadableBrightness: number;
+  maxReadableBrightness: number;
+  maxSaturation: number;
+  minLightness: number;
+  maxLightness: number;
+  deduplicateDistance: number;
+}
+
+const STANDARD_AMBIENCE_PROFILE: AmbienceColorProfile = {
+  maxColors: MAX_PALETTE_COLORS,
+  minUsefulBrightness: 0.14,
+  minUsefulSaturation: 0.22,
+  minReadableBrightness: 0.3,
+  maxReadableBrightness: 0.82,
+  maxSaturation: 0.58,
+  minLightness: 0.24,
+  maxLightness: 0.68,
+  deduplicateDistance: 0.28,
+};
+
+const DARK_COVER_AMBIENCE_PROFILE: AmbienceColorProfile = {
+  maxColors: 4,
+  minUsefulBrightness: 0.11,
+  minUsefulSaturation: 0.25,
+  minReadableBrightness: 0.24,
+  maxReadableBrightness: 0.68,
+  maxSaturation: 0.5,
+  minLightness: 0.18,
+  maxLightness: 0.52,
+  deduplicateDistance: 0.31,
+};
+
 export async function paletteForSnapshot(
   snapshot: HueSnapshot,
   dependencies: HueAlbumArtPaletteDependencies = {},
 ): Promise<HueRGBColor[]> {
-  const fallback = stablePaletteForTrack(
+  const fallback = constrainAmbiencePalette(stablePaletteForTrack(
     snapshot.trackTitle,
     snapshot.artist,
     snapshot.album,
     snapshot.albumArtUri ?? '',
-  );
+  ));
 
   if (!snapshot.albumArtUri) {
     return fallback;
@@ -37,7 +73,10 @@ export async function paletteForSnapshot(
 
   try {
     const imageData = await (dependencies.fetchAlbumArt ?? defaultFetchAlbumArt)(snapshot.albumArtUri);
-    const palette = await (dependencies.extractPalette ?? paletteFromAlbumArtBuffer)(imageData);
+    const extractedPalette = await (dependencies.extractPalette ?? paletteFromAlbumArtBuffer)(imageData);
+    const palette = dependencies.extractPalette
+      ? constrainAmbiencePalette(extractedPalette)
+      : extractedPalette;
     return palette.length > 0 ? palette : fallback;
   } catch {
     return fallback;
@@ -54,12 +93,13 @@ export function extractPaletteFromColors(
   colors: HueRGBColor[],
   maxColors = MAX_PALETTE_COLORS,
 ): HueRGBColor[] {
-  const colorLimit = Math.max(0, Math.min(maxColors, MAX_PALETTE_COLORS));
+  const profile = ambienceColorProfile(colors);
+  const colorLimit = Math.max(0, Math.min(maxColors, profile.maxColors));
   if (colorLimit === 0) return [];
 
   const buckets = new Map<string, ColorBucket>();
   for (const color of colors) {
-    if (!isUsefulAlbumColor(color)) continue;
+    if (!isUsefulAlbumColor(color, profile)) continue;
     const key = bucketKey(color);
     const bucket = buckets.get(key) ?? new ColorBucket();
     bucket.add(color);
@@ -68,8 +108,8 @@ export function extractPaletteFromColors(
 
   const palette: HueRGBColor[] = [];
   for (const bucket of Array.from(buckets.values()).sort((a, b) => b.score - a.score)) {
-    const color = bucket.averageColor;
-    if (palette.some(existing => distance(existing, color) < 0.28)) continue;
+    const color = constrainAmbienceColor(bucket.averageColor, profile);
+    if (palette.some(existing => distance(existing, color) < profile.deduplicateDistance)) continue;
     palette.push(color);
     if (palette.length === colorLimit) return palette;
   }
@@ -163,8 +203,22 @@ class ColorBucket {
   }
 }
 
-function isUsefulAlbumColor(color: HueRGBColor): boolean {
-  return brightness(color) >= 0.14 && saturation(color) >= 0.22;
+function ambienceColorProfile(colors: HueRGBColor[]): AmbienceColorProfile {
+  if (colors.length === 0) return STANDARD_AMBIENCE_PROFILE;
+
+  const darkRatio = colors.filter(color => brightness(color) < 0.16).length / colors.length;
+  const vividRatio = colors.filter(color =>
+    brightness(color) >= 0.3 && saturation(color) >= 0.45
+  ).length / colors.length;
+
+  return darkRatio >= 0.45 && vividRatio >= 0.05
+    ? DARK_COVER_AMBIENCE_PROFILE
+    : STANDARD_AMBIENCE_PROFILE;
+}
+
+function isUsefulAlbumColor(color: HueRGBColor, profile: AmbienceColorProfile): boolean {
+  return brightness(color) >= profile.minUsefulBrightness
+    && saturation(color) >= profile.minUsefulSaturation;
 }
 
 function saturation(color: HueRGBColor): number {
@@ -187,6 +241,7 @@ function distance(a: HueRGBColor, b: HueRGBColor): number {
 
 function fallbackPaletteFromAlbumColors(colors: HueRGBColor[]): HueRGBColor[] {
   if (colors.length === 0) return [];
+  const profile = ambienceColorProfile(colors);
 
   const total = colors.reduce(
     (sum, color) => ({
@@ -196,18 +251,47 @@ function fallbackPaletteFromAlbumColors(colors: HueRGBColor[]): HueRGBColor[] {
     }),
     { r: 0, g: 0, b: 0 },
   );
-  return [readableLightColor({
+  return [constrainAmbienceColor({
     r: total.r / colors.length,
     g: total.g / colors.length,
     b: total.b / colors.length,
-  })];
+  }, profile)];
 }
 
-function readableLightColor(color: HueRGBColor): HueRGBColor {
-  const maxComponent = brightness(color);
-  if (maxComponent <= 0) return { r: 0.3, g: 0.3, b: 0.3 };
+function constrainAmbiencePalette(
+  colors: HueRGBColor[],
+  profile: AmbienceColorProfile = STANDARD_AMBIENCE_PROFILE,
+): HueRGBColor[] {
+  return colors.map(color => constrainAmbienceColor(color, profile));
+}
 
-  const targetMax = Math.min(Math.max(maxComponent, 0.3), 0.82);
+function constrainAmbienceColor(
+  color: HueRGBColor,
+  profile: AmbienceColorProfile = STANDARD_AMBIENCE_PROFILE,
+): HueRGBColor {
+  const readable = readableLightColor(color, profile);
+  const hsl = rgbToHsl(readable);
+  return hslToRgb(
+    hsl.h,
+    Math.min(hsl.s, profile.maxSaturation),
+    Math.min(Math.max(hsl.l, profile.minLightness), profile.maxLightness),
+  );
+}
+
+function readableLightColor(color: HueRGBColor, profile: AmbienceColorProfile): HueRGBColor {
+  const maxComponent = brightness(color);
+  if (maxComponent <= 0) {
+    return {
+      r: profile.minReadableBrightness,
+      g: profile.minReadableBrightness,
+      b: profile.minReadableBrightness,
+    };
+  }
+
+  const targetMax = Math.min(
+    Math.max(maxComponent, profile.minReadableBrightness),
+    profile.maxReadableBrightness,
+  );
   const scale = targetMax / maxComponent;
   return {
     r: clamp(color.r * scale),
@@ -218,4 +302,56 @@ function readableLightColor(color: HueRGBColor): HueRGBColor {
 
 function clamp(value: number): number {
   return Math.min(Math.max(value, 0), 1);
+}
+
+function rgbToHsl(color: HueRGBColor): { h: number; s: number; l: number } {
+  const r = clamp(color.r);
+  const g = clamp(color.g);
+  const b = clamp(color.b);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+
+  if (max === min) {
+    return { h: 0, s: 0, l };
+  }
+
+  const delta = max - min;
+  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+  let h = 0;
+  if (max === r) {
+    h = (g - b) / delta + (g < b ? 6 : 0);
+  } else if (max === g) {
+    h = (b - r) / delta + 2;
+  } else {
+    h = (r - g) / delta + 4;
+  }
+
+  return { h: h / 6, s, l };
+}
+
+function hslToRgb(h: number, s: number, l: number): HueRGBColor {
+  const hue = positiveModulo(h, 1);
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return {
+    r: hueToRgb(p, q, hue + 1 / 3),
+    g: hueToRgb(p, q, hue),
+    b: hueToRgb(p, q, hue - 1 / 3),
+  };
+}
+
+function hueToRgb(p: number, q: number, t: number): number {
+  let value = t;
+  if (value < 0) value += 1;
+  if (value > 1) value -= 1;
+  if (value < 1 / 6) return p + (q - p) * 6 * value;
+  if (value < 1 / 2) return q;
+  if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
+  return p;
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  const remainder = value % divisor;
+  return remainder >= 0 ? remainder : remainder + divisor;
 }

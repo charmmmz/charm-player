@@ -34,7 +34,7 @@ export interface SonosArtworkResolver {
 }
 
 export interface SonosArtworkResolverOptions {
-  logger?: Pick<Logger, 'info' | 'warn'> | null;
+  logger?: Pick<Logger, 'debug' | 'info' | 'warn'> | null;
   itunes?: ITunesArtworkLookupClient | null;
   countryCode?: string | null;
 }
@@ -230,14 +230,18 @@ export function appleMusicCatalogIDFromSonosValues(
 }
 
 function logITunesArtworkProbe(
-  logger: Pick<Logger, 'info' | 'warn'> | null,
+  logger: Pick<Logger, 'debug' | 'info' | 'warn'> | null,
   input: SonosArtworkResolveInput,
   result: ITunesArtworkProbeResult,
   message: string,
 ): void {
   if (!logger || result.status === 'skipped') return;
 
-  const level = result.status === 'error' ? 'warn' : 'info';
+  const level = result.status === 'error'
+    ? 'warn'
+    : message === 'iTunes artwork shadow probe'
+      ? 'debug'
+      : 'info';
   logger[level]({
     source: 'relay',
     action: 'itunes-artwork-shadow-probe',

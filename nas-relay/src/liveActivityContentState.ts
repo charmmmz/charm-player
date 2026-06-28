@@ -240,7 +240,8 @@ function logAlbumArt(
   const logger = dependencies.logger;
   if (!logger) return;
 
-  logger[level]({
+  const resolvedLevel = liveActivityAlbumArtLogLevel(dependencies, level, fields.status);
+  logger[resolvedLevel]({
     source: 'relay',
     action: 'album-art',
     ...dependencies.logContext,
@@ -257,6 +258,26 @@ function logAlbumArt(
     primaryFetchUri: summarizeAlbumArtUri(fields.primaryFetchUri),
     cacheKey: summarizeAlbumArtUri(fields.cacheKey),
   }, 'live activity album art');
+}
+
+function liveActivityAlbumArtLogLevel(
+  dependencies: LiveActivityContentStateDependencies,
+  requestedLevel: 'debug' | 'info' | 'warn',
+  status: unknown,
+): 'debug' | 'info' | 'warn' {
+  if (requestedLevel === 'warn') return 'warn';
+
+  if (dependencies.logContext?.trigger === 'periodic-refresh') return 'debug';
+
+  if (
+    status === 'cache-hit'
+    || status === 'missing-uri'
+    || status === 'unsupported-uri'
+  ) {
+    return 'debug';
+  }
+
+  return requestedLevel;
 }
 
 function summarizeAlbumArtUri(value: unknown): string | null {
