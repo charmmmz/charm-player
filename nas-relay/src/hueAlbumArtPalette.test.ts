@@ -49,6 +49,33 @@ test('dark album art limits bright neon accents for ambience', () => {
   assert.ok(palette.some(color => color.b > color.r || color.g > color.r));
 });
 
+test('dark album art keeps neon accents saturated instead of pastel', () => {
+  const palette = extractPaletteFromColors([
+    ...Array(72).fill({ r: 0.02, g: 0.02, b: 0.03 }),
+    ...Array(14).fill({ r: 1, g: 0, b: 0 }),
+    ...Array(13).fill({ r: 0, g: 0.9, b: 1 }),
+    ...Array(10).fill({ r: 1, g: 0.78, b: 0 }),
+  ]);
+
+  assert.ok(palette.length >= 2, `palette: ${JSON.stringify(palette)}`);
+  assert.ok(
+    palette.every(color => Math.max(color.r, color.g, color.b) <= 0.62),
+    `palette: ${JSON.stringify(palette)}`,
+  );
+  assert.ok(
+    palette.every(color => saturation(color) >= 0.65),
+    `palette: ${JSON.stringify(palette)}`,
+  );
+
+  const red = palette.find(color => color.r > color.g && color.r > color.b);
+  assert.ok(red, `palette: ${JSON.stringify(palette)}`);
+  assert.ok(red.g < 0.12 && red.b < 0.12, `red: ${JSON.stringify(red)}`);
+
+  const cool = palette.find(color => color.b > color.r && color.g > color.r);
+  assert.ok(cool, `palette: ${JSON.stringify(palette)}`);
+  assert.ok(cool.r < 0.12, `cool: ${JSON.stringify(cool)}`);
+});
+
 test('snapshot palette prefers fetched album art colors over stable metadata colors', async () => {
   const palette = await paletteForSnapshot(
     {
@@ -129,4 +156,11 @@ function isModeratedYellow(color: HueRGBColor): boolean {
     && color.r > 0.55
     && color.r < 0.75
     && color.b > 0.1;
+}
+
+function saturation(color: HueRGBColor): number {
+  const maxComponent = Math.max(color.r, color.g, color.b);
+  const minComponent = Math.min(color.r, color.g, color.b);
+  if (maxComponent <= 0) return 0;
+  return (maxComponent - minComponent) / maxComponent;
 }

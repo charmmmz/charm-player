@@ -48,11 +48,11 @@ const DARK_COVER_AMBIENCE_PROFILE: AmbienceColorProfile = {
   maxColors: 4,
   minUsefulBrightness: 0.11,
   minUsefulSaturation: 0.25,
-  minReadableBrightness: 0.24,
-  maxReadableBrightness: 0.68,
-  maxSaturation: 0.5,
-  minLightness: 0.18,
-  maxLightness: 0.52,
+  minReadableBrightness: 0.22,
+  maxReadableBrightness: 0.62,
+  maxSaturation: 0.82,
+  minLightness: 0.2,
+  maxLightness: 0.42,
   deduplicateDistance: 0.31,
 };
 
