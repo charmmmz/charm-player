@@ -318,8 +318,10 @@ struct AlbumDetailView: View {
     @ViewBuilder
     private var artistLabel: some View {
         let label = Text(artistName)
-            .font(.subheadline)
-            .foregroundStyle(themeColor ?? .secondary)
+            .font(MusicDetailHeaderTypography.sonosAlbumArtistStyle.font)
+            .fontWeight(.regular)
+            .foregroundStyle(.white.opacity(MusicDetailHeaderTypography.artistOpacity))
+            .lineLimit(2)
 
         if let nav = artistBrowseItem {
             NavigationLink {

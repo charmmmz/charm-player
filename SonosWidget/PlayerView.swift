@@ -1401,9 +1401,11 @@ struct NowPlayingOverlay: View {
                         // `tvFormatPanel` already conveys the codec.
                         if manager.trackInfo?.source != .tv {
                             Text(manager.trackInfo?.artist ?? "—")
-                                .font(.body)
-                                .foregroundStyle(.white.opacity(0.7))
+                                .font(MusicDetailHeaderTypography.nowPlayingArtistStyle.font)
+                                .fontWeight(.regular)
+                                .foregroundStyle(.white.opacity(MusicDetailHeaderTypography.artistOpacity))
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.82)
                                 .padding(.top, 3)
                             Text(manager.trackInfo?.album ?? "")
                                 .font(.subheadline)
@@ -1507,55 +1509,13 @@ struct NowPlayingOverlay: View {
 
     @ViewBuilder
     private var artBackground: some View {
-        // Apple Music-style "water reflection" backdrop: a vertically
-        // flipped, heavily blurred copy of the cover lives below the
-        // sharp cover. Because the flipped image's top edge IS the
-        // original cover's bottom edge, the seam at the cover's lower
-        // boundary is automatically continuous in colour — no need for
-        // a hand-tuned gradient anchor.
-        let dominant = manager.albumArtDominantColor ?? Color(white: 0.10)
         let transitionID = albumArtTransitionID
-        GeometryReader { geo in
-            let coverHeight = min(geo.size.width, geo.size.height * 0.55)
-            let coverBottomY = geo.safeAreaInsets.top + coverHeight
-            let totalH = geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom
-            let coverBottomFrac = max(0.30, min(0.7, coverBottomY / max(totalH, 1)))
-            ZStack {
-                // Fallback while album art is loading.
-                dominant
-
-                if let image = manager.albumArtImage {
-                    VStack(spacing: 0) {
-                        // Reserve the area the sharp cover will occupy so the
-                        // flipped reflection only fills below it.
-                        Color.clear.frame(height: coverBottomY)
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                            .blur(radius: 60)
-                            .scaleEffect(x: 1, y: -1)
-                            .id(transitionID)
-                            .transition(.opacity)
-                    }
-                }
-
-                // Subtle dark vignette so transport text / buttons remain
-                // legible even when the reflected art is bright. Stays
-                // clear at the seam so the mirror effect reads cleanly.
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0.0),
-                        .init(color: .clear, location: min(0.95, coverBottomFrac + 0.06)),
-                        .init(color: .black.opacity(0.35), location: min(0.97, coverBottomFrac + 0.22)),
-                        .init(color: .black.opacity(0.6), location: 1.0)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-        }
+        SonosArtworkBackground(
+            image: manager.albumArtImage,
+            fallbackColor: manager.albumArtDominantColor,
+            overlayOpacity: NowPlayingBackgroundPresentation.sharedArtworkOverlayOpacity
+        )
+        .id(transitionID)
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.8), value: transitionID)
         .animation(.easeInOut(duration: 0.8), value: manager.albumArtDominantColor)
@@ -1767,13 +1727,21 @@ struct NowPlayingOverlay: View {
                         navigateFromNowPlaying(kind: .artist, item: artistNav)
                     } label: {
                         Text(manager.trackInfo?.artist ?? "—")
-                            .font(.body).foregroundStyle(manager.albumArtDominantColor ?? .white.opacity(0.7)).lineLimit(1)
+                            .font(MusicDetailHeaderTypography.nowPlayingArtistStyle.font)
+                            .fontWeight(.regular)
+                            .foregroundStyle(.white.opacity(MusicDetailHeaderTypography.artistOpacity))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
                             .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                     }
                     .buttonStyle(.plain)
                 } else {
                     Text(manager.trackInfo?.artist ?? "—")
-                        .font(.body).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                        .font(MusicDetailHeaderTypography.nowPlayingArtistStyle.font)
+                        .fontWeight(.regular)
+                        .foregroundStyle(.white.opacity(MusicDetailHeaderTypography.artistOpacity))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                         .shadow(color: .black.opacity(0.4), radius: 5, y: 1)
                 }
 
@@ -2663,6 +2631,12 @@ enum MiniPlayerLayoutMetrics {
             homeActionDefaultBottomPadding
         }
     }
+}
+
+enum NowPlayingBackgroundPresentation {
+    nonisolated static let usesSharedArtworkBackground = true
+    nonisolated static let usesReflectedArtwork = false
+    nonisolated static let sharedArtworkOverlayOpacity = 0.6
 }
 
 nonisolated enum PlaybackControlPresentation {

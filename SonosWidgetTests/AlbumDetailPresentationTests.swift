@@ -117,6 +117,12 @@ final class AlbumDetailPresentationTests: XCTestCase {
         XCTAssertEqual(metrics.contentLeadingInset, metrics.horizontalPadding)
     }
 
+    func testAlbumHeaderArtistTypographyUsesReadableWhiteStyle() {
+        XCTAssertEqual(MusicDetailHeaderTypography.sonosAlbumArtistStyle, .body)
+        XCTAssertEqual(MusicDetailHeaderTypography.localAlbumArtistStyle, .title3)
+        XCTAssertEqual(MusicDetailHeaderTypography.artistOpacity, 1)
+    }
+
     func testEditorialDescriptionPrefersStandardText() {
         XCTAssertEqual(
             EditorialDescriptionPolicy.text(

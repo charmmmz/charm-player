@@ -8,10 +8,17 @@ private func openLocalMusicAppleMusicURL(_ url: URL, context: String) {
     AppleMusicExternalLinkOpener.open(url, context: context)
 }
 
+private enum LocalMusicDetailSpacing {
+    static let descriptionDividerGap: CGFloat = 14
+    static let compactTrackRowVerticalPadding: CGFloat = 8
+    static let trackListTopPadding: CGFloat = 0
+    static let descriptionSectionBottomPadding = descriptionDividerGap - compactTrackRowVerticalPadding
+}
+
 @ViewBuilder
 private func editorialDescriptionSection(text: String?, title: String) -> some View {
     if let text {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: LocalMusicDetailSpacing.descriptionDividerGap) {
             ExpandableText(
                 text: text,
                 title: title,
@@ -28,7 +35,7 @@ private func editorialDescriptionSection(text: String?, title: String) -> some V
         }
         .padding(.horizontal)
         .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.bottom, LocalMusicDetailSpacing.descriptionSectionBottomPadding)
     }
 }
 
@@ -184,8 +191,9 @@ struct LocalMusicAlbumDetailView: View {
                     .lineLimit(3)
 
                 Text(displayAlbum.artistName)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(MusicDetailHeaderTypography.localAlbumArtistStyle.font)
+                    .fontWeight(.regular)
+                    .foregroundStyle(.white.opacity(MusicDetailHeaderTypography.artistOpacity))
                     .lineLimit(2)
 
                 Text(albumMetadata)
@@ -345,6 +353,8 @@ struct LocalMusicAlbumDetailView: View {
                         isPlaying: isPlaying,
                         isDisabled: store.isStartingPlayback && !isPlaying,
                         isLast: index == tracks.count - 1,
+                        verticalPadding: LocalMusicDetailSpacing.compactTrackRowVerticalPadding,
+                        numberAlignment: .center,
                         action: {
                             Task {
                                 await playTrack(track)
@@ -355,7 +365,7 @@ struct LocalMusicAlbumDetailView: View {
                     }
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, LocalMusicDetailSpacing.trackListTopPadding)
             .padding(.horizontal)
         }
     }
@@ -997,7 +1007,7 @@ struct LocalMusicPlaylistDetailView: View {
                     }
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, LocalMusicDetailSpacing.trackListTopPadding)
         }
     }
 

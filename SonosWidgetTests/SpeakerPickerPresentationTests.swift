@@ -18,6 +18,9 @@ final class SpeakerPickerPresentationTests: XCTestCase {
         XCTAssertEqual(SpeakerPickerCardLayout.volumeRowSpacing, 8)
         XCTAssertEqual(SpeakerPickerCardLayout.volumeTopPadding, 2)
         XCTAssertEqual(SpeakerPickerCardLayout.volumeBottomPadding, 8)
+        XCTAssertEqual(SpeakerPickerCardLayout.separatorHeight, 0.5)
+        XCTAssertEqual(SpeakerPickerCardLayout.headerSeparatorOpacity, 0.14)
+        XCTAssertEqual(SpeakerPickerCardLayout.activeRowSeparatorOpacity, 0.16)
     }
 
     func testSpeakerPickerPillsUseTextOnlyLabels() {

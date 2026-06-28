@@ -16,6 +16,9 @@ enum SpeakerPickerCardLayout {
     nonisolated static let volumeTopPadding: CGFloat = 2
     nonisolated static let volumeBottomPadding: CGFloat = 8
     nonisolated static let nowPlayingArtworkSize: CGFloat = 56
+    nonisolated static let separatorHeight: CGFloat = 0.5
+    nonisolated static let headerSeparatorOpacity = 0.14
+    nonisolated static let activeRowSeparatorOpacity = 0.16
 }
 
 enum SpeakerPickerPillLayout {
@@ -478,8 +481,7 @@ struct SpeakerPickerView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 18)
 
-            Divider()
-                .background(.white.opacity(0.14))
+            speakerPickerSeparator(opacity: SpeakerPickerCardLayout.headerSeparatorOpacity)
 
             if hasPillTargets {
                 pillRail
@@ -844,8 +846,7 @@ struct SpeakerPickerView: View {
             .buttonStyle(.plain)
 
             if inGroup {
-                Divider()
-                    .background(.white.opacity(0.16))
+                speakerPickerSeparator(opacity: SpeakerPickerCardLayout.activeRowSeparatorOpacity)
                     .padding(.horizontal, SpeakerPickerCardLayout.horizontalPadding)
 
                 volumeRow(speaker: speaker, vol: vol)
@@ -854,6 +855,13 @@ struct SpeakerPickerView: View {
         }
         .cardChrome(isActive: inGroup, accent: accent)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: inGroup)
+    }
+
+    private func speakerPickerSeparator(opacity: Double) -> some View {
+        Rectangle()
+            .fill(.white.opacity(opacity))
+            .frame(height: SpeakerPickerCardLayout.separatorHeight)
+            .accessibilityHidden(true)
     }
 
     private func subtitle(for speaker: SonosPlayer, inGroup: Bool, isCoordinator: Bool) -> String {

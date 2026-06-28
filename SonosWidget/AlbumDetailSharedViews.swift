@@ -1,5 +1,29 @@
 import SwiftUI
 
+enum MusicDetailArtistTextStyle: Equatable {
+    case body
+    case title2
+    case title3
+
+    var font: Font {
+        switch self {
+        case .body:
+            .body
+        case .title2:
+            .title2
+        case .title3:
+            .title3
+        }
+    }
+}
+
+enum MusicDetailHeaderTypography {
+    nonisolated static let nowPlayingArtistStyle: MusicDetailArtistTextStyle = .body
+    nonisolated static let sonosAlbumArtistStyle: MusicDetailArtistTextStyle = .body
+    nonisolated static let localAlbumArtistStyle: MusicDetailArtistTextStyle = .title3
+    nonisolated static let artistOpacity = 1.0
+}
+
 struct AlbumPrimaryActionBar: View {
     let favoriteKind: AlbumFavoriteKind
     let tint: Color?
@@ -95,6 +119,8 @@ struct AlbumTrackRow<MenuContent: View>: View {
     let isPlaying: Bool
     let isDisabled: Bool
     let isLast: Bool
+    let verticalPadding: CGFloat
+    let numberAlignment: Alignment
     let action: () -> Void
 
     private let menuContent: () -> MenuContent
@@ -108,6 +134,8 @@ struct AlbumTrackRow<MenuContent: View>: View {
         isPlaying: Bool,
         isDisabled: Bool,
         isLast: Bool,
+        verticalPadding: CGFloat = 12,
+        numberAlignment: Alignment = .trailing,
         action: @escaping () -> Void,
         @ViewBuilder menuContent: @escaping () -> MenuContent
     ) {
@@ -119,6 +147,8 @@ struct AlbumTrackRow<MenuContent: View>: View {
         self.isPlaying = isPlaying
         self.isDisabled = isDisabled
         self.isLast = isLast
+        self.verticalPadding = verticalPadding
+        self.numberAlignment = numberAlignment
         self.action = action
         self.menuContent = menuContent
     }
@@ -129,7 +159,7 @@ struct AlbumTrackRow<MenuContent: View>: View {
                 Text(number)
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 24, alignment: .trailing)
+                    .frame(width: 24, alignment: numberAlignment)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
@@ -157,7 +187,7 @@ struct AlbumTrackRow<MenuContent: View>: View {
 
                 trailingAccessory
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, verticalPadding)
             .contentShape(Rectangle())
             .opacity(isDisabled ? 0.4 : 1)
         }

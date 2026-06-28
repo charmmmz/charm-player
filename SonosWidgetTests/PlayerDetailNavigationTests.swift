@@ -37,4 +37,16 @@ final class PlayerDetailNavigationTests: XCTestCase {
             )
         )
     }
+
+    func testNowPlayingArtistTypographyMatchesAlbumHeaderArtist() {
+        XCTAssertEqual(MusicDetailHeaderTypography.nowPlayingArtistStyle, .body)
+        XCTAssertEqual(MusicDetailHeaderTypography.sonosAlbumArtistStyle, .body)
+        XCTAssertEqual(MusicDetailHeaderTypography.localAlbumArtistStyle, .title3)
+        XCTAssertEqual(MusicDetailHeaderTypography.artistOpacity, 1)
+    }
+
+    func testNowPlayingBackgroundUsesSharedArtworkBlurInsteadOfReflection() {
+        XCTAssertTrue(NowPlayingBackgroundPresentation.usesSharedArtworkBackground)
+        XCTAssertFalse(NowPlayingBackgroundPresentation.usesReflectedArtwork)
+    }
 }
