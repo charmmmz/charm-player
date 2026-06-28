@@ -44,6 +44,11 @@ enum AppleMusicExternalResourceKind: Equatable, Sendable {
     }
 }
 
+struct AppleMusicArtworkInfo: Equatable, Sendable {
+    let artworkURLString: String?
+    let themeColors: ArtworkThemeColors?
+}
+
 struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     let id: String
     let type: AppleMusicCatalogItemType
@@ -51,6 +56,7 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
     let artist: String
     let album: String
     let artworkURLString: String?
+    let artworkThemeColors: ArtworkThemeColors?
     let duration: TimeInterval?
     let urlString: String?
 
@@ -61,6 +67,7 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
         artist: String,
         album: String,
         artworkURLString: String?,
+        artworkThemeColors: ArtworkThemeColors? = nil,
         duration: TimeInterval?,
         urlString: String? = nil
     ) {
@@ -70,6 +77,7 @@ struct AppleMusicCatalogSearchItem: Identifiable, Equatable, Sendable {
         self.artist = artist
         self.album = album
         self.artworkURLString = Self.normalizedArtworkURLString(artworkURLString)
+        self.artworkThemeColors = artworkThemeColors
         self.duration = duration
         self.urlString = urlString
     }
@@ -536,13 +544,13 @@ enum LocalMusicCatalogIDExtractor {
 }
 
 enum LocalMusicCatalogArtworkFallback {
-    static func artworkURLString(
+    static func artworkInfo(
         in items: [AppleMusicCatalogSearchItem],
         kind: LocalServiceAppleMusicPlayable.Kind,
         title: String,
         artist: String?,
         album: String?
-    ) -> String? {
+    ) -> AppleMusicArtworkInfo? {
         guard let match = LocalMusicCatalogMatcher.bestItem(
             in: items,
             kind: kind,
@@ -553,7 +561,31 @@ enum LocalMusicCatalogArtworkFallback {
             return nil
         }
 
-        return validURLString(match.artworkURLString)
+        let artworkURLString = validURLString(match.artworkURLString)
+        guard artworkURLString != nil || match.artworkThemeColors != nil else {
+            return nil
+        }
+
+        return AppleMusicArtworkInfo(
+            artworkURLString: artworkURLString,
+            themeColors: match.artworkThemeColors
+        )
+    }
+
+    static func artworkURLString(
+        in items: [AppleMusicCatalogSearchItem],
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        title: String,
+        artist: String?,
+        album: String?
+    ) -> String? {
+        artworkInfo(
+            in: items,
+            kind: kind,
+            title: title,
+            artist: artist,
+            album: album
+        )?.artworkURLString
     }
 
     private static func validURLString(_ value: String?) -> String? {
@@ -739,6 +771,13 @@ struct AppleMusicCatalogSearchClient {
         kind: LocalServiceAppleMusicPlayable.Kind,
         catalogID: String
     ) async throws -> String? {
+        try await artworkInfo(kind: kind, catalogID: catalogID)?.artworkURLString
+    }
+
+    func artworkInfo(
+        kind: LocalServiceAppleMusicPlayable.Kind,
+        catalogID: String
+    ) async throws -> AppleMusicArtworkInfo? {
         try await ensureAuthorized()
 
         switch kind {
@@ -749,7 +788,7 @@ struct AppleMusicCatalogSearchClient {
             )
             request.limit = 1
             let response = try await request.response()
-            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+            return response.items.first.flatMap { Self.artworkInfo($0.artwork) }
         case .album:
             var request = MusicCatalogResourceRequest<Album>(
                 matching: \.id,
@@ -757,7 +796,7 @@ struct AppleMusicCatalogSearchClient {
             )
             request.limit = 1
             let response = try await request.response()
-            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+            return response.items.first.flatMap { Self.artworkInfo($0.artwork) }
         case .artist:
             var request = MusicCatalogResourceRequest<Artist>(
                 matching: \.id,
@@ -765,7 +804,7 @@ struct AppleMusicCatalogSearchClient {
             )
             request.limit = 1
             let response = try await request.response()
-            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+            return response.items.first.flatMap { Self.artworkInfo($0.artwork) }
         case .playlist:
             var request = MusicCatalogResourceRequest<Playlist>(
                 matching: \.id,
@@ -773,7 +812,7 @@ struct AppleMusicCatalogSearchClient {
             )
             request.limit = 1
             let response = try await request.response()
-            return response.items.first.flatMap { Self.artworkURLString($0.artwork) }
+            return response.items.first.flatMap { Self.artworkInfo($0.artwork) }
         case .station:
             return nil
         }
@@ -860,6 +899,7 @@ struct AppleMusicCatalogSearchClient {
             artist: song.artistName,
             album: song.albumTitle ?? "",
             artworkURLString: artworkURLString(song.artwork),
+            artworkThemeColors: artworkThemeColors(song.artwork),
             duration: song.duration,
             urlString: song.url?.absoluteString
         )
@@ -873,6 +913,7 @@ struct AppleMusicCatalogSearchClient {
             artist: album.artistName,
             album: album.title,
             artworkURLString: artworkURLString(album.artwork),
+            artworkThemeColors: artworkThemeColors(album.artwork),
             duration: nil,
             urlString: album.url?.absoluteString
         )
@@ -886,6 +927,7 @@ struct AppleMusicCatalogSearchClient {
             artist: "",
             album: "",
             artworkURLString: artworkURLString(artist.artwork),
+            artworkThemeColors: artworkThemeColors(artist.artwork),
             duration: nil,
             urlString: artist.url?.absoluteString
         )
@@ -899,6 +941,7 @@ struct AppleMusicCatalogSearchClient {
             artist: playlist.curatorName ?? "",
             album: "",
             artworkURLString: artworkURLString(playlist.artwork),
+            artworkThemeColors: artworkThemeColors(playlist.artwork),
             duration: nil,
             urlString: playlist.url?.absoluteString
         )
@@ -912,5 +955,33 @@ struct AppleMusicCatalogSearchClient {
             )?.absoluteString,
             shortSidePixels: LocalMusicArtworkURL.catalogDisplayShortSidePixels
         )
+    }
+
+    private static func artworkInfo(_ artwork: Artwork?) -> AppleMusicArtworkInfo? {
+        let urlString = artworkURLString(artwork)
+        let themeColors = artworkThemeColors(artwork)
+        guard urlString != nil || themeColors != nil else {
+            return nil
+        }
+
+        return AppleMusicArtworkInfo(
+            artworkURLString: urlString,
+            themeColors: themeColors
+        )
+    }
+
+    private static func artworkThemeColors(_ artwork: Artwork?) -> ArtworkThemeColors? {
+        guard let artwork else { return nil }
+
+        let colors = ArtworkThemeColors(
+            background: artwork.backgroundColor.flatMap(HueRGBColor.init(cgColor:)),
+            textColors: [
+                artwork.primaryTextColor,
+                artwork.secondaryTextColor,
+                artwork.tertiaryTextColor,
+                artwork.quaternaryTextColor
+            ].compactMap { $0.flatMap(HueRGBColor.init(cgColor:)) }
+        )
+        return colors.background != nil || !colors.textColors.isEmpty ? colors : nil
     }
 }

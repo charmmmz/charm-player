@@ -40,6 +40,62 @@ final class AlbumPaletteExtractorTests: XCTestCase {
         XCTAssertLessThanOrEqual(palette.count, 5)
     }
 
+    func testArtworkThemePalettePrefersAppleBackgroundOverVibrantFallback() throws {
+        let fallbackImage = makeSolidImage(color: .red, size: CGSize(width: 40, height: 40))
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.12, g: 0.18, b: 0.27),
+            textColors: [
+                HueRGBColor(r: 1, g: 1, b: 1),
+                HueRGBColor(r: 0.95, g: 0.42, b: 0.12)
+            ]
+        )
+
+        let palette = AlbumPaletteExtractor.palette(
+            from: themeColors,
+            fallbackImage: fallbackImage,
+            maxColors: 4
+        )
+
+        let first = try XCTUnwrap(palette.first)
+        XCTAssertGreaterThan(first.b, first.r)
+        XCTAssertGreaterThan(first.b, first.g)
+        XCTAssertFalse(first.r > 0.8 && first.g < 0.2 && first.b < 0.2)
+    }
+
+    func testDarkArtworkThemeKeepsDimNeonAccentsInsteadOfPastels() throws {
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.02, g: 0.02, b: 0.03),
+            textColors: [
+                HueRGBColor(r: 0.96, g: 0.96, b: 0.9),
+                HueRGBColor(r: 0.98, g: 0.05, b: 0.12),
+                HueRGBColor(r: 0.0, g: 0.72, b: 0.95),
+                HueRGBColor(r: 1.0, g: 0.46, b: 0.06)
+            ]
+        )
+
+        let palette = AlbumPaletteExtractor.palette(from: themeColors, maxColors: 4)
+
+        XCTAssertGreaterThanOrEqual(palette.count, 2)
+        XCTAssertTrue(palette.allSatisfy { $0.brightness <= 0.62 })
+        XCTAssertTrue(palette.allSatisfy { saturation(of: $0) >= 0.35 })
+        XCTAssertTrue(palette.contains {
+            $0.r > 0.42 && $0.r > $0.g * 1.5 && $0.r > $0.b * 1.25
+        })
+        XCTAssertTrue(palette.contains {
+            max($0.g, $0.b) > 0.42 && max($0.g, $0.b) > $0.r * 1.45
+        })
+    }
+
+    func testArtworkThemeColorsParseAppleMusicAPIHexFields() throws {
+        let themeColors = try XCTUnwrap(ArtworkThemeColors(
+            backgroundHex: "203044",
+            textColorHexes: ["FFFFFF", "#dd8844", "bad"]
+        ))
+
+        XCTAssertEqual(themeColors.background, HueRGBColor(r: 32.0 / 255.0, g: 48.0 / 255.0, b: 68.0 / 255.0))
+        XCTAssertEqual(themeColors.textColors.count, 2)
+    }
+
     func testPlainArtworkFallsBackToUsableHueColor() throws {
         let image = makeSolidImage(color: .black, size: CGSize(width: 40, height: 40))
 
@@ -105,5 +161,12 @@ final class AlbumPaletteExtractorTests: XCTestCase {
             color.setFill()
             context.fill(CGRect(origin: .zero, size: size))
         }
+    }
+
+    private func saturation(of color: HueRGBColor) -> Double {
+        let maxComponent = max(color.r, color.g, color.b)
+        let minComponent = min(color.r, color.g, color.b)
+        guard maxComponent > 0 else { return 0 }
+        return (maxComponent - minComponent) / maxComponent
     }
 }

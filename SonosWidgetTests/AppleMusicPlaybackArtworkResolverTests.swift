@@ -2,14 +2,25 @@ import XCTest
 @testable import SonosWidget
 
 final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
-    func testExistingPublicArtworkShortCircuitsRegistryCacheAndLookups() async {
+    func testExistingPublicArtworkCarriesMusicKitThemeColorsAndSkipsFallbackLookups() async {
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.10, g: 0.22, b: 0.32),
+            textColors: [HueRGBColor(r: 0.75, g: 0.72, b: 0.64)]
+        )
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let resolver = AppleMusicPlaybackArtworkResolver(
             cache: cache,
             registryLookup: { _ in XCTFail("registry should not run for public artwork"); return nil },
             musicKitIsAuthorized: { true },
-            musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run for public artwork"); return nil },
+            musicKitDirectLookup: { kind, catalogID in
+                XCTAssertEqual(kind, .song)
+                XCTAssertEqual(catalogID, "1440857781")
+                return AppleMusicArtworkInfo(
+                    artworkURLString: "https://cdn.example.com/musickit-direct.jpg",
+                    themeColors: themeColors
+                )
+            },
             musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run for public artwork"); return nil },
             iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run for public artwork"); return nil },
             iTunesSearch: { _ in XCTFail("iTunes search should not run for public artwork"); return nil },
@@ -28,9 +39,14 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
 
         XCTAssertEqual(result?.source, .existingPublic)
         XCTAssertEqual(result?.urlString, "https://is1-ssl.mzstatic.com/image/thumb/Music/freudian.jpg/600x600bb.jpg")
+        XCTAssertEqual(result?.artworkThemeColors, themeColors)
     }
 
-    func testRegistryRunsBeforePersistentCache() async {
+    func testRegistryRunsBeforePersistentCacheAndCarriesMusicKitThemeColors() async {
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.18, g: 0.30, b: 0.42),
+            textColors: [HueRGBColor(r: 0.82, g: 0.80, b: 0.70)]
+        )
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         cache.register(
@@ -52,7 +68,14 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
             cache: cache,
             registryLookup: { _ in "https://cdn.example.com/current-detail.jpg" },
             musicKitIsAuthorized: { true },
-            musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run after registry hit"); return nil },
+            musicKitDirectLookup: { kind, catalogID in
+                XCTAssertEqual(kind, .song)
+                XCTAssertEqual(catalogID, "1440857781")
+                return AppleMusicArtworkInfo(
+                    artworkURLString: "https://cdn.example.com/musickit-direct.jpg",
+                    themeColors: themeColors
+                )
+            },
             musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run after registry hit"); return nil },
             iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run after registry hit"); return nil },
             iTunesSearch: { _ in XCTFail("iTunes search should not run after registry hit"); return nil },
@@ -68,9 +91,14 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
 
         XCTAssertEqual(result?.source, .registry)
         XCTAssertEqual(result?.urlString, "https://cdn.example.com/current-detail.jpg")
+        XCTAssertEqual(result?.artworkThemeColors, themeColors)
     }
 
-    func testPersistentCacheRunsBeforeMusicKitWhenRegistryMisses() async {
+    func testPersistentCacheRunsBeforeMusicKitFallbackAndCarriesThemeColors() async {
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.12, g: 0.26, b: 0.38),
+            textColors: [HueRGBColor(r: 0.78, g: 0.74, b: 0.64)]
+        )
         let (cache, defaults, suiteName) = makeCache()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         cache.register(
@@ -92,7 +120,14 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
             cache: cache,
             registryLookup: { _ in nil },
             musicKitIsAuthorized: { true },
-            musicKitDirectLookup: { _, _ in XCTFail("MusicKit direct should not run after persistent cache hit"); return nil },
+            musicKitDirectLookup: { kind, catalogID in
+                XCTAssertEqual(kind, .song)
+                XCTAssertEqual(catalogID, "1440857781")
+                return AppleMusicArtworkInfo(
+                    artworkURLString: "https://cdn.example.com/musickit-direct.jpg",
+                    themeColors: themeColors
+                )
+            },
             musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run after persistent cache hit"); return nil },
             iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run after persistent cache hit"); return nil },
             iTunesSearch: { _ in XCTFail("iTunes search should not run after persistent cache hit"); return nil },
@@ -108,6 +143,44 @@ final class AppleMusicPlaybackArtworkResolverTests: XCTestCase {
 
         XCTAssertEqual(result?.source, .persistentCache)
         XCTAssertEqual(result?.urlString, "https://cdn.example.com/persistent.jpg")
+        XCTAssertEqual(result?.artworkThemeColors, themeColors)
+    }
+
+    func testMusicKitDirectCarriesArtworkThemeColorsIntoResolution() async {
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.10, g: 0.24, b: 0.36),
+            textColors: [
+                HueRGBColor(r: 0.82, g: 0.78, b: 0.68),
+                HueRGBColor(r: 0.42, g: 0.52, b: 0.58)
+            ]
+        )
+        let (cache, defaults, suiteName) = makeCache()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let resolver = AppleMusicPlaybackArtworkResolver(
+            cache: cache,
+            registryLookup: { _ in nil },
+            musicKitIsAuthorized: { true },
+            musicKitDirectLookup: { kind, catalogID in
+                XCTAssertEqual(kind, .song)
+                XCTAssertEqual(catalogID, "1440857781")
+                return AppleMusicArtworkInfo(
+                    artworkURLString: "https://cdn.example.com/musickit-direct.jpg",
+                    themeColors: themeColors
+                )
+            },
+            musicKitSearchLookup: { _ in XCTFail("MusicKit search should not run after direct hit"); return nil },
+            iTunesLookup: { _, _ in XCTFail("iTunes lookup should not run after direct hit"); return nil },
+            iTunesSearch: { _ in XCTFail("iTunes search should not run after direct hit"); return nil },
+            sonosCloudArtworkLookup: { _ in XCTFail("Sonos Cloud should not run after direct hit"); return nil }
+        )
+
+        let result = await resolver.resolve(
+            request: request(catalogID: "1440857781")
+        )
+
+        XCTAssertEqual(result?.source, .musicKitDirect)
+        XCTAssertEqual(result?.urlString, "https://cdn.example.com/musickit-direct.jpg")
+        XCTAssertEqual(result?.artworkThemeColors, themeColors)
     }
 
     func testUnauthorizedMusicKitIsSkippedAndITunesLookupRuns() async {

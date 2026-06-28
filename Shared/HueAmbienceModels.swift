@@ -249,6 +249,7 @@ struct HueAmbiencePlaybackSnapshot: Equatable, Sendable {
     var albumArtURL: String?
     var isPlaying: Bool
     var albumArtImage: Data?
+    var artworkThemeColors: ArtworkThemeColors? = nil
 }
 
 enum HueLightFunction: String, Codable, Equatable, Sendable, CaseIterable {

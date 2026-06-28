@@ -91,11 +91,17 @@ final class MusicAmbienceManagerTests: XCTestCase {
             album: "Album",
             albumArtURL: "https://example.com/art.jpg"
         )
+        let themeColors = ArtworkThemeColors(
+            background: HueRGBColor(r: 0.12, g: 0.18, b: 0.27),
+            textColors: []
+        )
+        var infoWithTheme = info
+        infoWithTheme.artworkThemeColors = themeColors
 
         let snapshot = SonosManager.musicAmbienceSnapshot(
             selectedSpeaker: selected,
             currentGroupMembers: [selected, kitchen],
-            trackInfo: info,
+            trackInfo: infoWithTheme,
             isPlaying: true,
             albumArtData: Data([1, 2, 3])
         )
@@ -109,6 +115,7 @@ final class MusicAmbienceManagerTests: XCTestCase {
         XCTAssertEqual(snapshot.albumArtURL, "https://example.com/art.jpg")
         XCTAssertTrue(snapshot.isPlaying)
         XCTAssertEqual(snapshot.albumArtImage, Data([1, 2, 3]))
+        XCTAssertEqual(snapshot.artworkThemeColors, themeColors)
     }
 
     func testAreaOptionsListAssignableTargetsWithEntertainmentFirst() {
@@ -189,7 +196,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            targetResolver: resolver
+            targetResolver: resolver,
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
 
         manager.receive(snapshot: HueAmbiencePlaybackSnapshot(
@@ -209,6 +217,48 @@ final class MusicAmbienceManagerTests: XCTestCase {
         XCTAssertEqual(renderer.lastTargets.map(\.areaID), ["room-1"])
     }
 
+    func testReceivePrefersAppleArtworkThemeColorsOverSampledArtwork() async throws {
+        let store = makeStore()
+        store.isEnabled = true
+        store.motionStyle = .still
+        store.bridge = HueBridgeInfo(id: "bridge-1", ipAddress: "192.168.1.20", name: "Home Hue")
+        store.upsertMapping(HueSonosMapping(
+            sonosID: "living",
+            sonosName: "Living",
+            preferredTarget: .room("room-1")
+        ))
+
+        let applyExpectation = expectation(description: "renderer applies Apple theme palette")
+        let renderer = RecordingAmbienceRendering(applyExpectation: applyExpectation)
+        let manager = MusicAmbienceManager(
+            store: store,
+            renderer: renderer,
+            targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
+        )
+
+        manager.receive(snapshot: HueAmbiencePlaybackSnapshot(
+            selectedSonosID: "living",
+            selectedSonosName: "Living",
+            groupMemberIDs: ["living"],
+            groupMemberNamesByID: ["living": "Living"],
+            trackTitle: "Song",
+            artist: "Artist",
+            albumArtURL: "art",
+            isPlaying: true,
+            albumArtImage: makeRedImageData(),
+            artworkThemeColors: ArtworkThemeColors(
+                background: HueRGBColor(r: 0.12, g: 0.18, b: 0.27),
+                textColors: []
+            )
+        ))
+
+        await fulfillment(of: [applyExpectation], timeout: 1)
+        let firstColor = try XCTUnwrap(renderer.appliedPalettes.first?.first)
+        XCTAssertGreaterThan(firstColor.b, firstColor.r)
+        XCTAssertGreaterThan(firstColor.b, firstColor.g)
+    }
+
     func testReceiveDoesNotReapplySameTrackPaletteAndTargets() async {
         let store = makeStore()
         store.isEnabled = true
@@ -226,7 +276,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            targetResolver: StaticHueTargetResolving(targets: [makeTarget()])
+            targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
         let snapshot = makePlayingSnapshot(trackTitle: "Song")
 
@@ -318,6 +369,7 @@ final class MusicAmbienceManagerTests: XCTestCase {
             store: store,
             renderer: renderer,
             targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false),
             flowIntervalSeconds: 0.1
         )
         var snapshot = makePlayingSnapshot(trackTitle: "Flow Song")
@@ -355,6 +407,7 @@ final class MusicAmbienceManagerTests: XCTestCase {
             store: store,
             renderer: renderer,
             targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false),
             flowIntervalSeconds: 0.1
         )
         var snapshot = makePlayingSnapshot(trackTitle: "Single Color Flow Song")
@@ -392,7 +445,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            targetResolver: StaticHueTargetResolving(targets: [target])
+            targetResolver: StaticHueTargetResolving(targets: [target]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
 
         manager.receive(snapshot: makePlayingSnapshot(trackTitle: "Song"))
@@ -427,7 +481,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            targetResolver: StaticHueTargetResolving(targets: [makeTarget()])
+            targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
 
         manager.receive(snapshot: makePlayingSnapshot(trackTitle: "Song One"))
@@ -610,7 +665,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            resourceFetcher: resourceFetcher
+            resourceFetcher: resourceFetcher,
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
         let snapshot = makePlayingSnapshot(trackTitle: "Metadata Song")
 
@@ -662,7 +718,8 @@ final class MusicAmbienceManagerTests: XCTestCase {
         let manager = MusicAmbienceManager(
             store: store,
             renderer: renderer,
-            resourceFetcher: resourceFetcher
+            resourceFetcher: resourceFetcher,
+            relayRuntime: StaticHueAmbienceRelayRuntime(shouldDeferLocalHueAmbience: false)
         )
 
         manager.receive(snapshot: makePlayingSnapshot(trackTitle: "Entertainment Metadata Song"))

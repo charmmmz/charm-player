@@ -493,7 +493,8 @@ final class SonosManager {
             artist: trackInfo?.artist,
             albumArtURL: trackInfo?.albumArtURL,
             isPlaying: isPlaying,
-            albumArtImage: albumArtData
+            albumArtImage: albumArtData,
+            artworkThemeColors: trackInfo?.artworkThemeColors
         )
     }
 
@@ -5380,16 +5381,15 @@ final class SonosManager {
         }
         let currentURLString = info.albumArtURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let needsFallback = currentURLString.isEmpty || QueueArtPrefetchPolicy.isLocalSonosArtworkURL(currentURLString)
-        guard needsFallback else {
+        if !needsFallback {
             let displayURLString = PlaybackArtworkImageSize.nowPlayingURLString(from: currentURLString)
             if displayURLString != currentURLString {
                 trackInfo?.albumArtURL = displayURLString
             }
             SonosLog.debug(
                 .nowPlaying,
-                "Current artwork fallback skipped reason=public_artwork " +
+                "Current artwork fallback skip_url_resolution reason=public_artwork " +
                     "url=\(SonosLog.playbackLinkValue(displayURLString, maxLength: 240))")
-            return
         }
 
         let originalTrackIdentity = AlbumArtTrackIdentity.make(from: info)
@@ -5427,10 +5427,14 @@ final class SonosManager {
             shortSidePixels: PlaybackArtworkImageSize.nowPlayingShortSidePixels
         )
         trackInfo?.albumArtURL = resolvedURLString
+        if let artworkThemeColors = resolution.artworkThemeColors {
+            trackInfo?.artworkThemeColors = artworkThemeColors
+        }
         SonosLog.debug(
             .nowPlaying,
             "Current artwork fallback hit source=\(resolution.source.rawValue) " +
-                "url=\(SonosLog.playbackLinkValue(resolvedURLString, maxLength: 240))")
+                "url=\(SonosLog.playbackLinkValue(resolvedURLString, maxLength: 240)) " +
+                "colors=\(resolution.artworkThemeColors == nil ? "nil" : "yes")")
     }
 
     private static var defaultArtworkCountryCode: String {

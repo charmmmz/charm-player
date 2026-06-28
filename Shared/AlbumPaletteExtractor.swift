@@ -1,48 +1,5 @@
 import UIKit
 
-struct HueXYColor: Equatable, Sendable {
-    var x: Double
-    var y: Double
-}
-
-struct HueRGBColor: Codable, Equatable, Hashable, Sendable {
-    var r: Double
-    var g: Double
-    var b: Double
-
-    var brightness: Double {
-        max(r, g, b)
-    }
-
-    var xy: HueXYColor {
-        let red = gammaCorrect(r)
-        let green = gammaCorrect(g)
-        let blue = gammaCorrect(b)
-
-        let x = red * 0.664511 + green * 0.154324 + blue * 0.162028
-        let y = red * 0.283881 + green * 0.668433 + blue * 0.047685
-        let z = red * 0.000088 + green * 0.072310 + blue * 0.986039
-        let total = x + y + z
-
-        guard total > 0 else {
-            return HueXYColor(x: 0.3127, y: 0.3290)
-        }
-
-        return HueXYColor(
-            x: min(max(x / total, 0), 1),
-            y: min(max(y / total, 0), 1)
-        )
-    }
-
-    func gammaCorrect(_ value: Double) -> Double {
-        let clamped = min(max(value, 0), 1)
-        if clamped > 0.04045 {
-            return pow((clamped + 0.055) / 1.055, 2.4)
-        }
-        return clamped / 12.92
-    }
-}
-
 enum AlbumPaletteExtractor {
     static func palette(from image: UIImage, maxColors: Int = 5) -> [HueRGBColor] {
         guard maxColors > 0 else { return [] }
@@ -75,6 +32,42 @@ enum AlbumPaletteExtractor {
         return palette
     }
 
+    static func palette(
+        from themeColors: ArtworkThemeColors,
+        fallbackImage: UIImage? = nil,
+        maxColors: Int = 5
+    ) -> [HueRGBColor] {
+        guard maxColors > 0 else { return [] }
+        let colorLimit = min(maxColors, 5)
+        var palette: [HueRGBColor] = []
+
+        if let background = themeColors.background {
+            appendDistinct(
+                ambienceThemeColor(background),
+                to: &palette,
+                limit: colorLimit,
+                minimumDistance: 0.18
+            )
+        }
+
+        for textColor in themeColors.textColors where textColor.isUsefulArtworkThemeAccent {
+            appendDistinct(
+                ambienceThemeColor(textColor),
+                to: &palette,
+                limit: colorLimit,
+                minimumDistance: 0.22
+            )
+        }
+
+        if let fallbackImage, palette.count < colorLimit {
+            for color in Self.palette(from: fallbackImage, maxColors: colorLimit) {
+                appendDistinct(color, to: &palette, limit: colorLimit, minimumDistance: 0.28)
+            }
+        }
+
+        return palette
+    }
+
     static func motionPalette(from palette: [HueRGBColor]) -> [HueRGBColor] {
         guard palette.count == 1, let base = palette.first else {
             return palette
@@ -95,6 +88,29 @@ enum AlbumPaletteExtractor {
             hslToRGB(h: hsl.h + 0.025, s: clamp(hsl.s * 0.90), l: clamp(hsl.l - 0.07)),
             hslToRGB(h: hsl.h + 0.05, s: clamp(hsl.s * 0.82), l: clamp(hsl.l + 0.03))
         ]
+    }
+
+    private static func appendDistinct(
+        _ color: HueRGBColor,
+        to palette: inout [HueRGBColor],
+        limit: Int,
+        minimumDistance: Double
+    ) {
+        guard palette.count < limit,
+              !palette.contains(where: { $0.distance(to: color) < minimumDistance }) else {
+            return
+        }
+        palette.append(color)
+    }
+
+    private static func ambienceThemeColor(_ color: HueRGBColor) -> HueRGBColor {
+        let readable = readableLightColor(color)
+        let hsl = rgbToHSL(readable)
+        return hslToRGB(
+            h: hsl.h,
+            s: min(hsl.s, 0.58),
+            l: min(max(hsl.l, 0.24), 0.68)
+        )
     }
 
     private static func fallbackColor(from colors: [HueRGBColor]) -> HueRGBColor? {
@@ -283,6 +299,10 @@ private extension HueRGBColor {
 
     var isUsefulAlbumColor: Bool {
         brightness >= 0.14 && saturation >= 0.22
+    }
+
+    var isUsefulArtworkThemeAccent: Bool {
+        brightness >= 0.16 && brightness <= 0.96 && saturation >= 0.18
     }
 
     func distance(to color: HueRGBColor) -> Double {

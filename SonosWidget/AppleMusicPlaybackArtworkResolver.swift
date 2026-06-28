@@ -15,8 +15,8 @@ struct PlaybackArtworkRequest: Sendable {
 
 struct AppleMusicPlaybackArtworkResolver {
     typealias RegistryLookup = (PlaybackArtworkRequest) async -> String?
-    typealias MusicKitDirectLookup = (LocalServiceAppleMusicPlayable.Kind, String) async throws -> String?
-    typealias MusicKitSearchLookup = (PlaybackArtworkRequest) async throws -> String?
+    typealias MusicKitDirectLookup = (LocalServiceAppleMusicPlayable.Kind, String) async throws -> AppleMusicArtworkInfo?
+    typealias MusicKitSearchLookup = (PlaybackArtworkRequest) async throws -> AppleMusicArtworkInfo?
     typealias ITunesLookup = (String, String?) async throws -> String?
     typealias ITunesSearch = (PlaybackArtworkRequest) async throws -> String?
     typealias SonosCloudArtworkLookup = (PlaybackArtworkRequest) async throws -> String?
@@ -43,7 +43,7 @@ struct AppleMusicPlaybackArtworkResolver {
             MusicAuthorization.currentStatus == .authorized
         },
         musicKitDirectLookup: @escaping MusicKitDirectLookup = { kind, catalogID in
-            try await AppleMusicCatalogSearchClient.shared.artworkURLString(
+            try await AppleMusicCatalogSearchClient.shared.artworkInfo(
                 kind: kind,
                 catalogID: catalogID
             )
@@ -57,7 +57,7 @@ struct AppleMusicPlaybackArtworkResolver {
             )
             guard !term.isEmpty else { return nil }
             let items = try await AppleMusicCatalogSearchClient.shared.search(term: term, limit: 8)
-            return LocalMusicCatalogArtworkFallback.artworkURLString(
+            return LocalMusicCatalogArtworkFallback.artworkInfo(
                 in: items,
                 kind: request.kind,
                 title: request.title,
@@ -109,21 +109,33 @@ struct AppleMusicPlaybackArtworkResolver {
 
         if let existing = normalizedPublicArtworkURLString(request.currentArtworkURLString) {
             store(existing, source: .existingPublic, request: request)
+            let themeColors = await musicKitThemeColorsForResolvedArtwork(request, stage: "existing_public_theme_colors")
             SonosLog.debug(
                 .playbackLink,
                 "Playback artwork resolver hit stage=existing_public " +
-                    "url=\(SonosLog.playbackLinkValue(existing, maxLength: 240))")
-            return PlaybackArtworkResolution(urlString: existing, source: .existingPublic)
+                    "url=\(SonosLog.playbackLinkValue(existing, maxLength: 240)) " +
+                    "colors=\(themeColors == nil ? "nil" : "yes")")
+            return PlaybackArtworkResolution(
+                urlString: existing,
+                source: .existingPublic,
+                artworkThemeColors: themeColors
+            )
         }
 
         if PlaybackArtworkCachingPolicy.isRegistryEnabled {
             if let registryURL = normalizedPublicArtworkURLString(await registryLookup(request)) {
                 store(registryURL, source: .registry, request: request)
+                let themeColors = await musicKitThemeColorsForResolvedArtwork(request, stage: "registry_theme_colors")
                 SonosLog.debug(
                     .playbackLink,
                     "Playback artwork resolver hit stage=registry " +
-                        "url=\(SonosLog.playbackLinkValue(registryURL, maxLength: 240))")
-                return PlaybackArtworkResolution(urlString: registryURL, source: .registry)
+                        "url=\(SonosLog.playbackLinkValue(registryURL, maxLength: 240)) " +
+                        "colors=\(themeColors == nil ? "nil" : "yes")")
+                return PlaybackArtworkResolution(
+                    urlString: registryURL,
+                    source: .registry,
+                    artworkThemeColors: themeColors
+                )
             }
             SonosLog.debug(.playbackLink, "Playback artwork resolver miss stage=registry")
         } else {
@@ -132,25 +144,41 @@ struct AppleMusicPlaybackArtworkResolver {
 
         if PlaybackArtworkCachingPolicy.isPlaybackURLCacheEnabled {
             if let cached = cache.cachedURL(for: request.identity, service: request.service) {
+                let themeColors = await musicKitThemeColorsForResolvedArtwork(request, stage: "persistent_cache_theme_colors")
                 SonosLog.debug(
                     .playbackLink,
                     "Playback artwork resolver hit stage=persistent_cache source=\(cached.source.rawValue) " +
-                        "url=\(SonosLog.playbackLinkValue(cached.urlString, maxLength: 240))")
-                return PlaybackArtworkResolution(urlString: cached.urlString, source: .persistentCache)
+                        "url=\(SonosLog.playbackLinkValue(cached.urlString, maxLength: 240)) " +
+                        "colors=\(themeColors == nil ? "nil" : "yes")")
+                return PlaybackArtworkResolution(
+                    urlString: cached.urlString,
+                    source: .persistentCache,
+                    artworkThemeColors: themeColors
+                )
             }
         } else {
             SonosLog.debug(.playbackLink, "Playback artwork resolver skip stage=persistent_cache reason=cache_disabled")
         }
 
         if musicKitIsAuthorized() {
-            if let direct = await musicKitDirectArtworkURL(request) {
-                store(direct, source: .musicKitDirect, request: request)
-                return PlaybackArtworkResolution(urlString: direct, source: .musicKitDirect)
+            if let direct = await musicKitDirectArtworkURL(request),
+               let directURLString = direct.artworkURLString {
+                store(directURLString, source: .musicKitDirect, request: request)
+                return PlaybackArtworkResolution(
+                    urlString: directURLString,
+                    source: .musicKitDirect,
+                    artworkThemeColors: direct.themeColors
+                )
             }
 
-            if let searched = await musicKitSearchArtworkURL(request) {
-                store(searched, source: .musicKitSearch, request: request)
-                return PlaybackArtworkResolution(urlString: searched, source: .musicKitSearch)
+            if let searched = await musicKitSearchArtworkURL(request),
+               let searchedURLString = searched.artworkURLString {
+                store(searchedURLString, source: .musicKitSearch, request: request)
+                return PlaybackArtworkResolution(
+                    urlString: searchedURLString,
+                    source: .musicKitSearch,
+                    artworkThemeColors: searched.themeColors
+                )
             }
         } else {
             SonosLog.debug(
@@ -177,35 +205,67 @@ struct AppleMusicPlaybackArtworkResolver {
         return nil
     }
 
-    private func musicKitDirectArtworkURL(_ request: PlaybackArtworkRequest) async -> String? {
+    private func musicKitDirectArtworkURL(_ request: PlaybackArtworkRequest) async -> AppleMusicArtworkInfo? {
         guard let catalogID = nonEmpty(request.catalogID) else {
             SonosLog.debug(.playbackLink, "Playback artwork resolver skip stage=musicKit_direct reason=missing_catalog_id")
             return nil
         }
 
         do {
-            let urlString = try await musicKitDirectLookup(request.kind, catalogID)
-                .flatMap(normalizedPublicArtworkURLString)
+            let artworkInfo = normalizedArtworkInfo(try await musicKitDirectLookup(request.kind, catalogID))
             SonosLog.debug(
                 .playbackLink,
-                "Playback artwork resolver \(urlString == nil ? "miss" : "hit") stage=musicKit_direct " +
-                    "url=\(SonosLog.playbackLinkValue(urlString, maxLength: 240))")
-            return urlString
+                "Playback artwork resolver \(artworkInfo == nil ? "miss" : "hit") stage=musicKit_direct " +
+                    "url=\(SonosLog.playbackLinkValue(artworkInfo?.artworkURLString, maxLength: 240)) " +
+                    "colors=\(artworkInfo?.themeColors == nil ? "nil" : "yes")")
+            return artworkInfo
         } catch {
             SonosLog.debug(.playbackLink, "Playback artwork resolver failed stage=musicKit_direct error=\(error)")
             return nil
         }
     }
 
-    private func musicKitSearchArtworkURL(_ request: PlaybackArtworkRequest) async -> String? {
-        do {
-            let urlString = try await musicKitSearchLookup(request)
-                .flatMap(normalizedPublicArtworkURLString)
+    private func musicKitThemeColorsForResolvedArtwork(
+        _ request: PlaybackArtworkRequest,
+        stage: String
+    ) async -> ArtworkThemeColors? {
+        guard musicKitIsAuthorized() else {
             SonosLog.debug(
                 .playbackLink,
-                "Playback artwork resolver \(urlString == nil ? "miss" : "hit") stage=musicKit_search " +
-                    "url=\(SonosLog.playbackLinkValue(urlString, maxLength: 240))")
-            return urlString
+                "Playback artwork resolver skip stage=\(stage) reason=unauthorized_or_not_determined")
+            return nil
+        }
+        guard let catalogID = nonEmpty(request.catalogID) else {
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork resolver skip stage=\(stage) reason=missing_catalog_id")
+            return nil
+        }
+
+        do {
+            let themeColors = try await musicKitDirectLookup(request.kind, catalogID)?.themeColors
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork resolver \(themeColors == nil ? "miss" : "hit") " +
+                    "stage=\(stage) colors=\(themeColors == nil ? "nil" : "yes")")
+            return themeColors
+        } catch {
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork resolver failed stage=\(stage) error=\(error)")
+            return nil
+        }
+    }
+
+    private func musicKitSearchArtworkURL(_ request: PlaybackArtworkRequest) async -> AppleMusicArtworkInfo? {
+        do {
+            let artworkInfo = normalizedArtworkInfo(try await musicKitSearchLookup(request))
+            SonosLog.debug(
+                .playbackLink,
+                "Playback artwork resolver \(artworkInfo == nil ? "miss" : "hit") stage=musicKit_search " +
+                    "url=\(SonosLog.playbackLinkValue(artworkInfo?.artworkURLString, maxLength: 240)) " +
+                    "colors=\(artworkInfo?.themeColors == nil ? "nil" : "yes")")
+            return artworkInfo
         } catch {
             SonosLog.debug(.playbackLink, "Playback artwork resolver failed stage=musicKit_search error=\(error)")
             return nil
@@ -290,6 +350,18 @@ struct AppleMusicPlaybackArtworkResolver {
             return nil
         }
         return normalized
+    }
+
+    private func normalizedArtworkInfo(_ info: AppleMusicArtworkInfo?) -> AppleMusicArtworkInfo? {
+        guard let info,
+              let urlString = normalizedPublicArtworkURLString(info.artworkURLString) else {
+            return nil
+        }
+
+        return AppleMusicArtworkInfo(
+            artworkURLString: urlString,
+            themeColors: info.themeColors
+        )
     }
 
     private func artworkState(_ value: String?) -> String {

@@ -1,6 +1,122 @@
 import Foundation
 import SwiftUI
 import ActivityKit
+import UIKit
+
+struct HueXYColor: Equatable, Sendable {
+    var x: Double
+    var y: Double
+}
+
+struct HueRGBColor: Codable, Equatable, Hashable, Sendable {
+    var r: Double
+    var g: Double
+    var b: Double
+
+    var brightness: Double {
+        max(r, g, b)
+    }
+
+    var xy: HueXYColor {
+        let red = gammaCorrect(r)
+        let green = gammaCorrect(g)
+        let blue = gammaCorrect(b)
+
+        let x = red * 0.664511 + green * 0.154324 + blue * 0.162028
+        let y = red * 0.283881 + green * 0.668433 + blue * 0.047685
+        let z = red * 0.000088 + green * 0.072310 + blue * 0.986039
+        let total = x + y + z
+
+        guard total > 0 else {
+            return HueXYColor(x: 0.3127, y: 0.3290)
+        }
+
+        return HueXYColor(
+            x: min(max(x / total, 0), 1),
+            y: min(max(y / total, 0), 1)
+        )
+    }
+
+    func gammaCorrect(_ value: Double) -> Double {
+        let clamped = min(max(value, 0), 1)
+        if clamped > 0.04045 {
+            return pow((clamped + 0.055) / 1.055, 2.4)
+        }
+        return clamped / 12.92
+    }
+
+    init(r: Double, g: Double, b: Double) {
+        self.r = r
+        self.g = g
+        self.b = b
+    }
+
+    init?(hexString: String) {
+        var trimmed = hexString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("#") {
+            trimmed.removeFirst()
+        }
+        guard trimmed.count == 6,
+              let raw = UInt32(trimmed, radix: 16) else {
+            return nil
+        }
+
+        self.init(
+            r: Double((raw >> 16) & 0xFF) / 255.0,
+            g: Double((raw >> 8) & 0xFF) / 255.0,
+            b: Double(raw & 0xFF) / 255.0
+        )
+    }
+
+    init?(cgColor: CGColor) {
+        let color = UIColor(cgColor: cgColor)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+
+        self.init(r: Double(red), g: Double(green), b: Double(blue))
+    }
+
+    var hexSignature: String {
+        String(
+            format: "%02X%02X%02X",
+            Int((min(max(r, 0), 1) * 255).rounded()),
+            Int((min(max(g, 0), 1) * 255).rounded()),
+            Int((min(max(b, 0), 1) * 255).rounded())
+        )
+    }
+}
+
+struct ArtworkThemeColors: Codable, Equatable, Sendable {
+    var background: HueRGBColor?
+    var textColors: [HueRGBColor]
+
+    init(background: HueRGBColor?, textColors: [HueRGBColor]) {
+        self.background = background
+        self.textColors = textColors
+    }
+
+    init?(backgroundHex: String?, textColorHexes: [String?]) {
+        let background = backgroundHex.flatMap(HueRGBColor.init(hexString:))
+        let textColors = textColorHexes.compactMap { $0.flatMap(HueRGBColor.init(hexString:)) }
+        guard background != nil || !textColors.isEmpty else {
+            return nil
+        }
+
+        self.init(background: background, textColors: textColors)
+    }
+
+    var signature: String {
+        let backgroundSignature = background?.hexSignature ?? "nil"
+        let textSignature = textColors.map(\.hexSignature).joined(separator: ",")
+        return "\(backgroundSignature)|\(textSignature)"
+    }
+}
 
 // MARK: - Repeat Mode
 
@@ -255,6 +371,10 @@ struct TrackInfo: Codable, Equatable, Sendable {
     /// Decoded TV audio-input format from `DeviceProperties.GetZoneInfo`'s
     /// `HTAudioIn` field. Populated only when `source == .tv`.
     var tvFormat: TVAudioFormat?
+    /// Apple Music/MusicKit artwork colors, when available. These are UI
+    /// artwork colors rather than locally sampled cover colors, so Hue ambience
+    /// can prefer the quieter Apple background color before local extraction.
+    var artworkThemeColors: ArtworkThemeColors?
 
     var durationSeconds: TimeInterval { SonosTime.parse(duration ?? "") }
     var positionSeconds: TimeInterval { SonosTime.parse(position ?? "") }

@@ -144,13 +144,23 @@ final class MusicAmbienceManager {
             return
         }
 
-        let trackKey = [snapshot.trackTitle, snapshot.artist, snapshot.albumArtURL]
+        let trackKey = [
+            snapshot.trackTitle,
+            snapshot.artist,
+            snapshot.albumArtURL,
+            snapshot.artworkThemeColors?.signature
+        ]
             .compactMap { $0 }
             .joined(separator: "|")
         if trackKey != lastTrackKey || lastPalette.isEmpty {
             lastTrackKey = trackKey
-            if let data = snapshot.albumArtImage, let image = UIImage(data: data) {
+            let image = snapshot.albumArtImage.flatMap(UIImage.init(data:))
+            if let colors = snapshot.artworkThemeColors {
+                lastPalette = AlbumPaletteExtractor.palette(from: colors, fallbackImage: image)
+            } else if let image {
                 lastPalette = AlbumPaletteExtractor.palette(from: image)
+            } else {
+                lastPalette = []
             }
         }
 

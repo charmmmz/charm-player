@@ -18,6 +18,7 @@ nonisolated enum PlaybackArtworkResolutionSource: String, Codable, Sendable {
 nonisolated struct PlaybackArtworkResolution: Equatable, Sendable {
     let urlString: String
     let source: PlaybackArtworkResolutionSource
+    var artworkThemeColors: ArtworkThemeColors? = nil
 
     func sizedURLString(shortSidePixels: Int) -> String {
         PlaybackArtworkImageSize.urlString(from: urlString, shortSidePixels: shortSidePixels)
