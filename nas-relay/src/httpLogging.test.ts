@@ -21,3 +21,11 @@ test('ignores frequent artwork proxy requests from HTTP auto logging', () => {
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork?url=https%3A%2F%2Fexample.com%2Fcover.jpg' }), true);
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork-hints' }), false);
 });
+
+test('ignores frequent sync and registration endpoints from HTTP auto logging', () => {
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/register-activity' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/register-push-to-start' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/hue-ambience/status' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/hue-ambience/config' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-command' }), false);
+});

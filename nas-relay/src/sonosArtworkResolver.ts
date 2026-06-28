@@ -239,9 +239,7 @@ function logITunesArtworkProbe(
 
   const level = result.status === 'error'
     ? 'warn'
-    : message === 'iTunes artwork shadow probe'
-      ? 'debug'
-      : 'info';
+    : 'debug';
   logger[level]({
     source: 'relay',
     action: 'itunes-artwork-shadow-probe',

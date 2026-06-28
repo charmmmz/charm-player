@@ -272,6 +272,8 @@ function liveActivityAlbumArtLogLevel(
   if (
     status === 'cache-hit'
     || status === 'missing-uri'
+    || status === 'resolved'
+    || status === 'fallback-resolved'
     || status === 'unsupported-uri'
   ) {
     return 'debug';

@@ -155,6 +155,44 @@ test('Sonos artwork resolver uses iTunes artwork for Apple Music live radio stat
   assert.equal(logs[0]?.method, 'search');
 });
 
+test('Sonos artwork resolver logs successful iTunes live radio probes at debug level', async () => {
+  const infoLogs: Array<Record<string, unknown>> = [];
+  const debugLogs: Array<Record<string, unknown>> = [];
+  const resolver = createSonosArtworkResolver({
+    logger: {
+      debug: (fields: Record<string, unknown>, message: string) => {
+        debugLogs.push({ ...fields, message });
+      },
+      info: (fields: Record<string, unknown>, message: string) => {
+        infoLogs.push({ ...fields, message });
+      },
+      warn: (fields: Record<string, unknown>, message: string) => {
+        infoLogs.push({ ...fields, message });
+      },
+    },
+    itunes: {
+      lookupArtworkURLString: async () => null,
+      searchArtworkURLString: async () =>
+        'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/secret/600x600bb.jpg',
+    },
+  });
+
+  await resolver.resolve({
+    groupId: '192.168.50.249',
+    trigger: 'sonos-change',
+    title: 'Secret Language',
+    artist: 'Ryan Beatty',
+    album: 'Sweet Fortune',
+    trackUri: 'x-sonosapi-hls:hls:ra.978194965?sid=204&flags=8232&sn=2',
+    albumArtUri: 'http://192.168.50.249:1400/getaa?s=1&u=x-sonosapi-hls%3ahls%3ara.978194965%3fsid%3d204%26flags%3d8232%26sn%3d2',
+    playbackSourceRaw: 'appleMusic',
+  });
+
+  assert.equal(infoLogs.length, 0);
+  assert.equal(debugLogs[0]?.message, 'iTunes artwork probe');
+  assert.equal(debugLogs[0]?.status, 'hit');
+});
+
 test('iTunes shadow probe falls through to search after catalog lookup miss', async () => {
   const calls: string[] = [];
   const result = await probeITunesArtwork({

@@ -674,6 +674,26 @@ test('bridge synthesizes getaa artwork for live radio when Sonos omits album art
   );
 });
 
+test('bridge logs live radio metadata diagnostics at debug level', async () => {
+  const { logger, lines } = captureLogger();
+  const bridge = new SonosBridge(logger, {
+    localControl: null,
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  }, liveRadioPositionInfo('TYPE=SNG|TITLE Secret Language|ARTIST Ryan Beatty|ALBUM Sweet Fortune'));
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const line = lines.find(entry => entry.includes('"msg":"live radio metadata resolved"'));
+  assert.ok(line);
+  assert.equal(JSON.parse(line).level, 20);
+});
+
 test('bridge prefers speaker getaa artwork over public artwork metadata', async () => {
   const bridge = testBridge();
   const device = playbackDevice({
@@ -801,6 +821,32 @@ test('bridge logs iTunes artwork shadow probe without replacing getaa artwork', 
     && line.includes('"groupId":"192.168.50.25"')
     && line.includes('"catalogID":"1839352407"')
   ), true);
+});
+
+test('bridge logs snapshot artwork resolver replacements at debug level', async () => {
+  const { logger, lines } = captureLogger();
+  const bridge = new SonosBridge(logger, {
+    localControl: null,
+    artworkITunes: {
+      lookupArtworkURLString: async () => null,
+      searchArtworkURLString: async () =>
+        'https://is1-ssl.mzstatic.com/image/thumb/Music211/v4/secret/600x600bb.jpg',
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_804AF2200FD601400',
+  }, liveRadioPositionInfo('TYPE=SNG|TITLE Secret Language|ARTIST Ryan Beatty|ALBUM Sweet Fortune'));
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+  await waitForLine(lines, '"msg":"snapshot album art resolver applied"');
+  const line = lines.find(entry => entry.includes('"msg":"snapshot album art resolver applied"'));
+
+  assert.ok(line);
+  assert.equal(JSON.parse(line).level, 20);
 });
 
 test('local Control API playback metadata maps lossless and immersive quality labels', () => {

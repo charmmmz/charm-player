@@ -621,7 +621,7 @@ export class SonosBridge extends EventEmitter {
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
         if (artworkResolution.url && artworkResolution.url !== albumArtUri) {
-          this.log.info(
+          this.log.debug(
             {
               groupId: resolvedGroupId,
               trigger,
@@ -660,7 +660,7 @@ export class SonosBridge extends EventEmitter {
         }
       }
       if (liveStream) {
-        this.log.info(
+        this.log.debug(
           {
             groupId: resolvedGroupId,
             trigger,

@@ -77,6 +77,21 @@ test('Live Activity content state carries an artwork trace id through album art 
   assert.equal(albumArtLog?.thumbnailBase64Length, state.albumArtThumbnail?.length);
 });
 
+test('Live Activity album art success diagnostics stay at debug level', async () => {
+  const { logger, lines } = captureLogger();
+  const albumArtUri = 'http://192.168.50.25:1400/getaa?s=debug';
+
+  await buildLiveActivityContentState(snapshot({ albumArtUri }), {
+    logger,
+    logContext: { trigger: 'sonos-change' },
+    fetchAlbumArt: async () => makeSolidPng(96, 96),
+  });
+
+  const albumArtLog = lines.map(parseLogLine).find(entry => entry?.action === 'album-art');
+  assert.equal(albumArtLog?.status, 'resolved');
+  assert.equal(albumArtLog?.level, 20);
+});
+
 test('Live Activity album art fetches getaa once for the same song', async () => {
   let fetchCalls = 0;
   const dependencies = {
