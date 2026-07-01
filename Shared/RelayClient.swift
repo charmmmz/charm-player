@@ -112,6 +112,7 @@ enum RelayClient {
             let runtimeActive: Bool?
             let renderMode: HueAmbienceRelayRenderMode?
             let activeTargetIds: [String]?
+            let activeGroups: [HueAmbienceActiveSyncGroup]?
             let entertainmentTargetActive: Bool?
             let entertainmentMetadataComplete: Bool?
             let lastFrameAt: String?
@@ -123,6 +124,7 @@ enum RelayClient {
                 case runtimeActive
                 case renderMode
                 case activeTargetIds
+                case activeGroups
                 case entertainmentTargetActive
                 case entertainmentMetadataComplete
                 case lastFrameAt
@@ -138,6 +140,7 @@ enum RelayClient {
                     .decodeIfPresent(String.self, forKey: .renderMode)
                     .flatMap(HueAmbienceRelayRenderMode.init(rawValue:))
                 activeTargetIds = try container.decodeIfPresent([String].self, forKey: .activeTargetIds)
+                activeGroups = try container.decodeIfPresent([HueAmbienceActiveSyncGroup].self, forKey: .activeGroups)
                 entertainmentTargetActive = try container.decodeIfPresent(Bool.self, forKey: .entertainmentTargetActive)
                 entertainmentMetadataComplete = try container.decodeIfPresent(Bool.self, forKey: .entertainmentMetadataComplete)
                 lastFrameAt = try container.decodeIfPresent(String.self, forKey: .lastFrameAt)
@@ -222,6 +225,181 @@ enum RelayClient {
         let (data, response) = try await noProxySession.data(for: request)
         try validate(response)
         return data
+    }
+
+    // MARK: - Animated artwork
+
+    struct AnimatedArtworkResponse: Decodable, Equatable, Sendable {
+        enum Status: String, Decodable, Sendable {
+            case hit
+            case miss
+            case negativeCache = "negative-cache"
+            case rateLimited = "rate-limited"
+            case disabled
+            case error
+            case unknown
+
+            init(from decoder: Decoder) throws {
+                let rawValue = try decoder.singleValueContainer().decode(String.self)
+                self = Status(rawValue: rawValue) ?? .unknown
+            }
+        }
+
+        let ok: Bool
+        let status: Status
+        let artist: String?
+        let album: String?
+        let appleMusicURLString: String?
+        let squareURLString: String?
+        let squareWidth: Int?
+        let squareHeight: Int?
+        let squareAspectRatio: Double?
+        let tallURLString: String?
+        let tallWidth: Int?
+        let tallHeight: Int?
+        let tallAspectRatio: Double?
+        let source: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case ok
+            case status
+            case artist
+            case album
+            case appleMusicURLString = "appleMusicUrl"
+            case squareURLString = "squareUrl"
+            case squareWidth
+            case squareHeight
+            case squareAspectRatio
+            case tallURLString = "tallUrl"
+            case tallWidth
+            case tallHeight
+            case tallAspectRatio
+            case source
+        }
+
+        init(
+            ok: Bool,
+            status: Status,
+            artist: String?,
+            album: String?,
+            appleMusicURLString: String?,
+            squareURLString: String?,
+            squareWidth: Int? = nil,
+            squareHeight: Int? = nil,
+            squareAspectRatio: Double? = nil,
+            tallURLString: String?,
+            tallWidth: Int? = nil,
+            tallHeight: Int? = nil,
+            tallAspectRatio: Double? = nil,
+            source: String?
+        ) {
+            self.ok = ok
+            self.status = status
+            self.artist = artist
+            self.album = album
+            self.appleMusicURLString = appleMusicURLString
+            self.squareURLString = squareURLString
+            self.squareWidth = squareWidth
+            self.squareHeight = squareHeight
+            self.squareAspectRatio = squareAspectRatio
+            self.tallURLString = tallURLString
+            self.tallWidth = tallWidth
+            self.tallHeight = tallHeight
+            self.tallAspectRatio = tallAspectRatio
+            self.source = source
+        }
+
+        var bestPlayerArtworkURL: URL? {
+            let candidates: [String?] = [squareURLString, tallURLString]
+            return candidates.compactMap { value -> URL? in
+                guard let value else { return nil }
+                return URL(string: value)
+            }.first
+        }
+    }
+
+    static func animatedArtworkURL(
+        baseURL: URL,
+        albumURL: URL,
+        countryCode: String? = nil
+    ) -> URL? {
+        let endpoint = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("animated-artwork")
+            .appendingPathComponent("url")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "url", value: albumURL.absoluteString),
+            countryCode.map { URLQueryItem(name: "country", value: $0) }
+        ].compactMap { $0 }
+        return components.url
+    }
+
+    static func animatedArtworkSearchURL(
+        baseURL: URL,
+        artist: String,
+        album: String,
+        countryCode: String? = nil
+    ) -> URL? {
+        let trimmedArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedArtist.isEmpty, !trimmedAlbum.isEmpty else { return nil }
+
+        let endpoint = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("animated-artwork")
+            .appendingPathComponent("search")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "artist", value: trimmedArtist),
+            URLQueryItem(name: "album", value: trimmedAlbum),
+            countryCode.map { URLQueryItem(name: "country", value: $0) }
+        ].compactMap { $0 }
+        return components.url
+    }
+
+    static func animatedArtworkByURL(
+        baseURL: URL,
+        albumURL: URL,
+        countryCode: String? = nil
+    ) async throws -> AnimatedArtworkResponse {
+        guard let url = animatedArtworkURL(
+            baseURL: baseURL,
+            albumURL: albumURL,
+            countryCode: countryCode
+        ) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 4)
+        request.httpMethod = "GET"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(AnimatedArtworkResponse.self, from: data)
+    }
+
+    static func animatedArtworkSearch(
+        baseURL: URL,
+        artist: String,
+        album: String,
+        countryCode: String? = nil
+    ) async throws -> AnimatedArtworkResponse {
+        guard let url = animatedArtworkSearchURL(
+            baseURL: baseURL,
+            artist: artist,
+            album: album,
+            countryCode: countryCode
+        ) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "GET"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(AnimatedArtworkResponse.self, from: data)
     }
 
     // MARK: - Cached playback state

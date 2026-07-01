@@ -11,6 +11,8 @@ import { HueAmbienceConfigStore } from './hueConfigStore.js';
 import { HueAmbienceService } from './hueAmbienceService.js';
 import { createHueAmbienceRouter } from './hueRoutes.js';
 import { createHueMusicAmbienceRenderer } from './hueMusicAmbienceRenderer.js';
+import { AnimatedAppleMusicArtworkResolver } from './animatedAppleMusicArtwork.js';
+import { createAnimatedArtworkRouter } from './animatedArtworkRoutes.js';
 import { createPlaybackStateRouter } from './playbackStateRoutes.js';
 import { DeviceLogService } from './deviceLogs.js';
 import { createDeviceLogRouter } from './deviceLogRoutes.js';
@@ -74,6 +76,10 @@ async function main(): Promise<void> {
   );
   await hueAmbience.load();
   const deviceLogs = new DeviceLogService();
+  const animatedArtwork = new AnimatedAppleMusicArtworkResolver({
+    dataDir: DATA_DIR,
+    enabled: (process.env.ANIMATED_ARTWORK_ENABLED ?? 'true') !== 'false',
+  });
 
   const apns = await ApnsClient.create(
     {
@@ -307,6 +313,10 @@ async function main(): Promise<void> {
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createDeviceLogRouter(deviceLogs, log.child({ module: 'device-logs' })));
+  app.use('/api', createAnimatedArtworkRouter(
+    log.child({ module: 'animated-artwork' }),
+    animatedArtwork,
+  ));
 
   app.get('/api/health', async (_req, res) => {
     const hueAmbienceStatus = hueAmbience.status();

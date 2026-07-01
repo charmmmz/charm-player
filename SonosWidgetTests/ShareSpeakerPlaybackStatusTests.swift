@@ -39,6 +39,23 @@ final class ShareSpeakerPlaybackStatusTests: XCTestCase {
         XCTAssertLessThanOrEqual(SharePlaybackWaveformLayout.activeHeights.max() ?? 0, 20)
     }
 
+    func testShareSpeakerListExpandsToFitEverySpeakerCard() {
+        XCTAssertEqual(ShareSpeakerListLayout.cardHeight, 82)
+        XCTAssertEqual(ShareSpeakerListLayout.cardSpacing, 10)
+        XCTAssertEqual(
+            ShareSpeakerListLayout.listHeight(for: 4),
+            ShareSpeakerListLayout.cardHeight * 4 + ShareSpeakerListLayout.cardSpacing * 3
+        )
+        XCTAssertEqual(
+            ShareSpeakerListLayout.listHeight(for: 5),
+            ShareSpeakerListLayout.cardHeight * 5 + ShareSpeakerListLayout.cardSpacing * 4
+        )
+        XCTAssertGreaterThan(
+            ShareSpeakerListLayout.preferredContentHeight(for: 5),
+            ShareSpeakerListLayout.preferredContentHeight(for: 4)
+        )
+    }
+
     func testArtworkLoadPolicyAllowsSlowerSonosArtworkWithRetry() {
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.requestTimeoutMilliseconds, 2_500)
         XCTAssertEqual(ShareSpeakerArtworkLoadPolicy.maxAttempts, 2)

@@ -27,6 +27,7 @@ struct HueAmbienceRelayConfig: Encodable, Sendable {
     let stopBehavior: HueAmbienceStopBehavior
     let motionStyle: HueAmbienceMotionStyle
     let flowIntervalSeconds: Double
+    let toneControl: HueAmbienceToneControl
 
     @MainActor
     init(
@@ -64,6 +65,7 @@ struct HueAmbienceRelayConfig: Encodable, Sendable {
         self.stopBehavior = store.stopBehavior
         self.motionStyle = store.motionStyle
         self.flowIntervalSeconds = flowIntervalSeconds ?? store.flowSpeed.intervalSeconds
+        self.toneControl = store.toneControl
     }
 }
 
@@ -144,6 +146,7 @@ extension RelayClient {
             let activeGroupId: String?
             let renderMode: HueAmbienceRelayRenderMode?
             let activeTargetIds: [String]?
+            let activeGroups: [HueAmbienceActiveSyncGroup]?
             let entertainmentTargetActive: Bool?
             let entertainmentMetadataComplete: Bool?
             let lastFrameAt: String?
@@ -160,6 +163,7 @@ extension RelayClient {
                 case activeGroupId
                 case renderMode
                 case activeTargetIds
+                case activeGroups
                 case entertainmentTargetActive
                 case entertainmentMetadataComplete
                 case lastFrameAt
@@ -180,6 +184,7 @@ extension RelayClient {
                     .decodeIfPresent(String.self, forKey: .renderMode)
                     .flatMap(HueAmbienceRelayRenderMode.init(rawValue:))
                 activeTargetIds = try container.decodeIfPresent([String].self, forKey: .activeTargetIds)
+                activeGroups = try container.decodeIfPresent([HueAmbienceActiveSyncGroup].self, forKey: .activeGroups)
                 entertainmentTargetActive = try container.decodeIfPresent(Bool.self, forKey: .entertainmentTargetActive)
                 entertainmentMetadataComplete = try container.decodeIfPresent(Bool.self, forKey: .entertainmentMetadataComplete)
                 lastFrameAt = try container.decodeIfPresent(String.self, forKey: .lastFrameAt)
@@ -276,6 +281,7 @@ extension RelayManager {
                 renderMode: response.status.renderMode,
                 runtimeActive: response.status.runtimeActive,
                 activeTargetIds: response.status.activeTargetIds,
+                activeGroups: response.status.activeGroups,
                 entertainmentTargetActive: response.status.entertainmentTargetActive,
                 entertainmentMetadataComplete: response.status.entertainmentMetadataComplete,
                 lastFrameAt: response.status.lastFrameAt,

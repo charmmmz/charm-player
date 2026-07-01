@@ -59,6 +59,157 @@ final class MiniPlayerLayoutMetricsTests: XCTestCase {
             16
         )
     }
+
+    func testSystemAccessoryContentInsetClearsMiniPlayerHeightAndGap() {
+        XCTAssertEqual(
+            MiniPlayerLayoutMetrics.systemAccessoryContentBottomInset(
+                isMiniPlayerVisible: true
+            ),
+            52
+        )
+    }
+
+    func testSystemAccessoryContentInsetCollapsesWhenMiniPlayerIsHidden() {
+        XCTAssertEqual(
+            MiniPlayerLayoutMetrics.systemAccessoryContentBottomInset(
+                isMiniPlayerVisible: false
+            ),
+            0
+        )
+    }
+
+    func testHomeActionTrayOnlyAppearsWhileDraggingSpeakerGroup() {
+        XCTAssertTrue(
+            HomeActionTrayPresentation.isVisible(isSpeakerGroupDragActive: true)
+        )
+        XCTAssertFalse(
+            HomeActionTrayPresentation.isVisible(isSpeakerGroupDragActive: false)
+        )
+    }
+
+    func testHomeActionTrayAppearsWhenDragSourceStartsBeforePreviewLifecycle() {
+        XCTAssertTrue(
+            HomeActionTrayPresentation.isVisible(
+                hasActiveDragSource: true,
+                isDragPreviewVisible: false
+            )
+        )
+        XCTAssertFalse(
+            HomeActionTrayPresentation.isVisible(
+                hasActiveDragSource: false,
+                isDragPreviewVisible: false
+            )
+        )
+    }
+
+    func testHomeActionTrayMountsAsOverlayWithoutChangingScrollSafeArea() {
+        XCTAssertEqual(
+            HomeActionTrayPresentation.mountMode,
+            .overlay
+        )
+    }
+
+    func testSettingsDetailContentInsetClearsSystemAccessoryMiniPlayer() {
+        XCTAssertEqual(
+            SettingsDetailFormLayout.bottomContentInset(
+                isMiniPlayerVisible: true,
+                usesSystemAccessory: true
+            ),
+            52
+        )
+    }
+
+    func testSettingsDetailContentInsetIsZeroForLegacyMiniPlayerPath() {
+        XCTAssertEqual(
+            SettingsDetailFormLayout.bottomContentInset(
+                isMiniPlayerVisible: true,
+                usesSystemAccessory: false
+            ),
+            0
+        )
+    }
+}
+
+final class NowPlayingOverlayPresentationTests: XCTestCase {
+    func testFullPlayerCardDisablesRootCardCornerRadiusForDragPerformanceProbe() {
+        XCTAssertEqual(NowPlayingOverlayPresentation.restingTopCornerRadius, 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.maximumBottomCornerRadius, 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.topCornerRadius(forDragOffset: 0), 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.topCornerRadius(forDragOffset: 120), 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.bottomCornerRadius(forDragOffset: 0), 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.bottomCornerRadius(forDragOffset: 120), 0)
+    }
+
+    func testBottomActionsStayConnectedToFullPlayerBottomSafeArea() {
+        XCTAssertEqual(
+            NowPlayingOverlayPresentation.bottomActionsBottomPadding(bottomSafeAreaInset: 34),
+            44
+        )
+        XCTAssertEqual(
+            NowPlayingOverlayPresentation.bottomActionsBottomPadding(bottomSafeAreaInset: 0),
+            22
+        )
+    }
+
+    func testRestingFullPlayerClipUsesZeroRadiiForPerformanceProbe() {
+        XCTAssertEqual(
+            NowPlayingOverlayPresentation.clipCornerRadii(forDragOffset: 0),
+            NowPlayingOverlayCornerRadii(
+                topLeading: 0,
+                bottomLeading: 0,
+                bottomTrailing: 0,
+                topTrailing: 0
+            )
+        )
+    }
+
+    func testDraggedFullPlayerClipShapeKeepsZeroRadiiForPerformanceProbe() {
+        XCTAssertEqual(
+            NowPlayingOverlayPresentation.clipCornerRadii(forDragOffset: 10),
+            NowPlayingOverlayCornerRadii(
+                topLeading: 0,
+                bottomLeading: 0,
+                bottomTrailing: 0,
+                topTrailing: 0
+            )
+        )
+        XCTAssertEqual(
+            NowPlayingOverlayPresentation.clipCornerRadii(forDragOffset: 80),
+            NowPlayingOverlayCornerRadii(
+                topLeading: 0,
+                bottomLeading: 0,
+                bottomTrailing: 0,
+                topTrailing: 0
+            )
+        )
+    }
+}
+
+final class MiniPlayerMountPolicyTests: XCTestCase {
+    func testKeepsMiniPlayerMountedWhileFullPlayerIsVisible() {
+        XCTAssertTrue(
+            MiniPlayerMountPolicy.shouldMount(
+                isConfigured: true,
+                isKeyboardVisible: false
+            )
+        )
+        XCTAssertFalse(
+            MiniPlayerMountPolicy.isVisible(
+                isConfigured: true,
+                isFullPlayerVisible: true,
+                isKeyboardVisible: false
+            )
+        )
+    }
+
+    func testMiniPlayerUnmountsWhenKeyboardIsVisible() {
+        XCTAssertFalse(
+            MiniPlayerMountPolicy.shouldMount(
+                isConfigured: true,
+                isKeyboardVisible: true
+            )
+        )
+    }
 }
 
 final class PlaybackControlPresentationTests: XCTestCase {

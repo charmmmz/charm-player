@@ -249,6 +249,49 @@ test('decorative overhead lights stay chromatic for pale album palettes instead 
   );
 });
 
+test('tone control dims and desaturates spatial frames without allowing harsh output', () => {
+  const defaultFrame = spatialFrame('flowing');
+  const dimmedFrame = buildHueAmbienceFrame({
+    targets: [spatialRoomTarget()],
+    snapshot: snapshot({ positionSeconds: 42, durationSeconds: 180 }),
+    palette: [
+      { r: 1, g: 0, b: 0 },
+      { r: 0, g: 0.92, b: 1 },
+      { r: 1, g: 0.82, b: 0 },
+    ],
+    reason: 'steady',
+    phase: 0.5,
+    transitionSeconds: 8,
+    motionStyle: 'flowing',
+    toneControl: { brightness: 0.55, saturation: 0.55 },
+    now,
+  });
+  const pushedFrame = buildHueAmbienceFrame({
+    targets: [spatialRoomTarget()],
+    snapshot: snapshot({ positionSeconds: 42, durationSeconds: 180 }),
+    palette: [
+      { r: 1, g: 0, b: 0 },
+      { r: 0, g: 0.92, b: 1 },
+      { r: 1, g: 0.82, b: 0 },
+    ],
+    reason: 'steady',
+    phase: 0.5,
+    transitionSeconds: 8,
+    motionStyle: 'flowing',
+    toneControl: { brightness: 9, saturation: 9 },
+    now,
+  });
+
+  const defaultAccent = defaultFrame.targets[0]!.lights.find(light => light.light.id === 'floor-light')!.colors[0]!;
+  const dimmedAccent = dimmedFrame.targets[0]!.lights.find(light => light.light.id === 'floor-light')!.colors[0]!;
+  const pushedAccent = pushedFrame.targets[0]!.lights.find(light => light.light.id === 'floor-light')!.colors[0]!;
+
+  assert.ok(maxComponent(dimmedAccent) < maxComponent(defaultAccent));
+  assert.ok(saturation(dimmedAccent) < saturation(defaultAccent));
+  assert.ok(maxComponent(pushedAccent) <= 0.53, `pushed output too bright: ${JSON.stringify(pushedAccent)}`);
+  assert.ok(saturation(pushedAccent) <= 0.54, `pushed output too saturated: ${JSON.stringify(pushedAccent)}`);
+});
+
 test('frame engine emits one entertainment frame per gradient channel', () => {
   const frame = buildHueAmbienceFrame({
     targets: [

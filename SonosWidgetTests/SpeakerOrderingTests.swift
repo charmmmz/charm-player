@@ -115,6 +115,50 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(next[0].volume, 14)
     }
 
+    func testHomeSpeakerRefreshDropsInvisibleCoordinatorGroups() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let subMini = makePlayer(
+            id: "sub-mini",
+            name: "Sub Mini",
+            groupId: "sub-mini-group",
+            isInvisible: true
+        )
+
+        let next = SonosManager.homeSpeakerStatusesAfterRefresh(
+            existing: [],
+            incoming: [
+                makeStatus(player: subMini),
+                makeStatus(player: playroom)
+            ],
+            preferredOrder: []
+        )
+
+        XCTAssertEqual(next.map(\.id), ["playroom-group"])
+    }
+
+    func testHomeSpeakerCoordinatorCandidatesExcludeInvisibleCoordinators() {
+        let playroom = makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        let subMini = makePlayer(
+            id: "sub-mini",
+            name: "Sub Mini",
+            groupId: "sub-mini-group",
+            isInvisible: true
+        )
+        let visibleMember = SonosPlayer(
+            id: "member",
+            name: "Member",
+            ipAddress: "192.168.1.77",
+            isCoordinator: false,
+            groupId: "playroom-group"
+        )
+
+        let candidates = SonosManager.homeSpeakerCoordinatorCandidates(
+            in: [subMini, visibleMember, playroom]
+        )
+
+        XCTAssertEqual(candidates.map(\.id), ["playroom"])
+    }
+
     func testHomeSpeakerCardsBlockingLoaderOnlyShowsBeforeFirstLoad() {
         XCTAssertTrue(
             HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(

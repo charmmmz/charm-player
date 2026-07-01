@@ -11,6 +11,7 @@ import type {
   HueAmbienceFrameReason,
   HueAmbienceMotionStyle,
   HueAmbienceRenderMode,
+  HueAmbienceToneControl,
   HueAreaResource,
   HueEntertainmentChannelResource,
   HueLightResource,
@@ -71,6 +72,7 @@ export interface BuildHueAmbienceFrameInput {
   now?: Date;
   effect?: HueAmbienceFrameEffect;
   motionStyle?: HueAmbienceMotionStyle;
+  toneControl?: HueAmbienceToneControl;
 }
 
 interface LightFrameSource {
@@ -99,6 +101,7 @@ export function buildHueAmbienceFrame(input: BuildHueAmbienceFrameInput): HueAmb
           palette,
           input.phase + progressOffset + targetIndex + source.offsetIndex,
           input.motionStyle,
+          input.toneControl,
           source.channelID,
           source.position,
           source.segmentPositions,
@@ -231,6 +234,7 @@ function buildLightFrame(
   palette: HueRGBColor[],
   offset: number,
   motionStyle?: HueAmbienceMotionStyle,
+  toneControl?: HueAmbienceToneControl,
   channelIDOverride?: string | null,
   position?: HueSpatialPosition | null,
   segmentPositions?: HueSpatialPosition[],
@@ -244,6 +248,7 @@ function buildLightFrame(
       motionStyle,
       position,
       segmentPositions: channelIDOverride ? undefined : segmentPositions,
+      toneControl,
     })
     : rotatePalette(palette, offset).slice(0, light.supportsGradient ? 5 : 1);
   const channelID = channelIDOverride ?? area.entertainmentChannels?.find(channel => channel.lightID === light.id)?.id;

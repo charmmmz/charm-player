@@ -21,6 +21,36 @@ test('default stop grace buffers Sonos track-change transport gaps', () => {
   assert.equal(DEFAULT_STOP_GRACE_MS, 4_000);
 });
 
+test('saving config immediately reapplies the latest playing Hue ambience snapshot', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(config);
+    const client = new RecordingHueLightClient();
+    const service = new HueAmbienceService(
+      store,
+      pino({ enabled: false }),
+      () => client,
+      () => [{ r: 1, g: 0, b: 0 }],
+    );
+    await service.load();
+
+    service.receiveSnapshot(snapshot('/art-one.jpg'));
+    await waitFor(() => client.updates.length === 1);
+
+    await service.saveConfig({
+      ...config,
+      toneControl: { brightness: 0.55, saturation: 0.55 },
+    });
+    await waitFor(() => client.updates.length === 2);
+
+    assert.equal(service.status().runtimeActive, true);
+    assert.notDeepEqual(client.updates[0]!.body, client.updates[1]!.body);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('album art URI participates in Hue ambience track changes when metadata is empty', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
   try {
@@ -209,6 +239,102 @@ test('idle snapshots from other Sonos groups do not stop the active Hue ambience
 
     assert.equal(client.updates.length, 1);
     assert.equal(service.status().runtimeActive, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('service keeps separate Hue ambience sessions active for different Sonos groups', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(multiGroupConfig());
+    const client = new RecordingHueLightClient();
+    const service = new HueAmbienceService(
+      store,
+      pino({ enabled: false }),
+      () => client,
+      snapshot => snapshot.groupId === '192.168.50.99'
+        ? [{ r: 0, g: 0, b: 1 }]
+        : [{ r: 1, g: 0, b: 0 }],
+      1,
+    );
+    await service.load();
+
+    service.receiveSnapshot(snapshot('/playroom-art.jpg'));
+    await waitFor(() => client.updates.length === 1);
+
+    service.receiveSnapshot({
+      ...snapshot('/home-theater-art.jpg'),
+      groupId: '192.168.50.99',
+      speakerName: 'Home Theater',
+    });
+    await waitFor(() => client.updates.length === 2);
+
+    const status = service.status() as ReturnType<HueAmbienceService['status']> & {
+      activeGroups?: Array<{
+        groupId: string;
+        speakerName?: string | null;
+        activeTargetIds: string[];
+      }>;
+    };
+
+    assert.deepEqual(client.updates.map(update => update.id), ['light-1', 'light-2']);
+    assert.equal(status.runtimeActive, true);
+    assert.deepEqual(
+      status.activeGroups?.map(group => ({
+        groupId: group.groupId,
+        speakerName: group.speakerName,
+        activeTargetIds: group.activeTargetIds,
+      })),
+      [
+        { groupId: '192.168.50.25', speakerName: 'Office', activeTargetIds: ['room-1'] },
+        { groupId: '192.168.50.99', speakerName: 'Home Theater', activeTargetIds: ['room-2'] },
+      ],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('stopping one Sonos group leaves other Hue ambience sessions running', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(multiGroupConfig({ stopBehavior: 'turnOff' }));
+    const client = new RecordingHueLightClient();
+    const service = new HueAmbienceService(
+      store,
+      pino({ enabled: false }),
+      () => client,
+      () => [{ r: 1, g: 0, b: 0 }],
+      1,
+    );
+    await service.load();
+
+    service.receiveSnapshot(snapshot('/playroom-art.jpg'));
+    service.receiveSnapshot({
+      ...snapshot('/home-theater-art.jpg'),
+      groupId: '192.168.50.99',
+      speakerName: 'Home Theater',
+    });
+    await waitFor(() => client.updates.length === 2);
+
+    service.receiveSnapshot({ ...snapshot('/playroom-art.jpg'), isPlaying: false });
+    await waitFor(() => client.updates.some(update => update.id === 'light-1' && isLightOffBody(update.body)));
+
+    const status = service.status() as ReturnType<HueAmbienceService['status']> & {
+      activeGroups?: Array<{ groupId: string; activeTargetIds: string[] }>;
+    };
+
+    assert.deepEqual(
+      status.activeGroups?.map(group => ({
+        groupId: group.groupId,
+        activeTargetIds: group.activeTargetIds,
+      })),
+      [{ groupId: '192.168.50.99', activeTargetIds: ['room-2'] }],
+    );
+    assert.equal(status.runtimeActive, true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -791,6 +917,51 @@ function twoLightConfig(
         },
       ],
     },
+  };
+}
+
+function multiGroupConfig(
+  overrides: Partial<HueAmbienceRuntimeConfig> = {},
+): HueAmbienceRuntimeConfig {
+  return {
+    ...config,
+    ...overrides,
+    resources: {
+      lights: [
+        ...config.resources.lights,
+        {
+          id: 'light-2',
+          name: 'Lamp 2',
+          supportsColor: true,
+          supportsGradient: false,
+          supportsEntertainment: true,
+          function: 'decorative',
+          functionMetadataResolved: true,
+        },
+      ],
+      areas: [
+        ...config.resources.areas,
+        {
+          id: 'room-2',
+          name: 'Home Theater',
+          kind: 'room',
+          childLightIDs: ['light-2'],
+        },
+      ],
+    },
+    mappings: [
+      ...config.mappings,
+      {
+        sonosID: 'home-theater',
+        sonosName: 'Home Theater',
+        relayGroupID: '192.168.50.99',
+        preferredTarget: { kind: 'room', id: 'room-2' },
+        fallbackTarget: null,
+        includedLightIDs: [],
+        excludedLightIDs: [],
+        capability: 'basic',
+      },
+    ],
   };
 }
 

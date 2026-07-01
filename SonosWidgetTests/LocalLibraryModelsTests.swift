@@ -165,6 +165,75 @@ final class LocalLibraryModelsTests: XCTestCase {
                 source: .button))
     }
 
+    func testHomeCachePolicyOnlyHydratesInitialLoads() {
+        XCTAssertTrue(
+            LocalLibraryHomeCachePolicy.shouldHydrateCachedContent(
+                source: .initial,
+                hasCachedContent: true))
+
+        XCTAssertFalse(
+            LocalLibraryHomeCachePolicy.shouldHydrateCachedContent(
+                source: .pullToRefresh,
+                hasCachedContent: true))
+
+        XCTAssertFalse(
+            LocalLibraryHomeCachePolicy.shouldHydrateCachedContent(
+                source: .initial,
+                hasCachedContent: false))
+    }
+
+    func testHomeCachePolicyRefreshesNetworkAfterHydratingInitialCache() {
+        XCTAssertTrue(
+            LocalLibraryHomeCachePolicy.shouldRefreshNetworkAfterHydratingCache(
+                source: .initial))
+
+        XCTAssertFalse(
+            LocalLibraryHomeCachePolicy.shouldRefreshNetworkAfterHydratingCache(
+                source: .pullToRefresh))
+
+        XCTAssertFalse(
+            LocalLibraryHomeCachePolicy.shouldRefreshNetworkAfterHydratingCache(
+                source: .button))
+    }
+
+    func testHomeRefreshPolicyLimitsSnapshotToVisibleHomeWindow() {
+        XCTAssertEqual(
+            LocalLibraryHomeRefreshPolicy.snapshotLimit(for: .initial),
+            LocalMusicRecentlyAddedSelection.displayLimit)
+        XCTAssertEqual(
+            LocalLibraryHomeRefreshPolicy.snapshotLimit(for: .pullToRefresh),
+            LocalMusicRecentlyAddedSelection.displayLimit)
+        XCTAssertEqual(
+            LocalLibraryHomeRefreshPolicy.snapshotLimit(for: .button),
+            LocalMusicRecentlyAddedSelection.displayLimit)
+    }
+
+    func testCachedHomeContentApplicationSkipsExpensiveMainThreadWork() {
+        XCTAssertFalse(LocalLibraryHomeContentApplicationOptions.cachedRestore.rebuildsRecentlyAddedContent)
+        XCTAssertFalse(LocalLibraryHomeContentApplicationOptions.cachedRestore.schedulesCatalogArtworkLookup)
+        XCTAssertTrue(LocalLibraryHomeContentApplicationOptions.liveRefresh.rebuildsRecentlyAddedContent)
+        XCTAssertTrue(LocalLibraryHomeContentApplicationOptions.liveRefresh.schedulesCatalogArtworkLookup)
+    }
+
+    func testHomeContentCachePersistsEntry() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-library-home-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let entry = LocalLibraryHomeContentCacheEntry(
+            content: LocalMusicHomeContent(),
+            cachedAt: Date(timeIntervalSince1970: 1_000))
+
+        LocalLibraryHomeContentCache.save(entry, to: url)
+
+        let loaded = try XCTUnwrap(LocalLibraryHomeContentCache.load(from: url))
+        XCTAssertEqual(
+            loaded.cachedAt.timeIntervalSince1970,
+            entry.cachedAt.timeIntervalSince1970,
+            accuracy: 0.001)
+        XCTAssertTrue(loaded.content.isEmpty)
+        XCTAssertEqual(loaded.content.recommendationsLoadStatus, .loaded)
+    }
+
     func testPullRefreshPolicyTriggersOnlyPastThresholdWhenLoadedAndIdle() {
         XCTAssertEqual(LocalLibraryPullRefreshPolicy.triggerDistance, 128)
 

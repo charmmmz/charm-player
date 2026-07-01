@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+private struct AnimatedArtworkPlaybackSuspendedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isAnimatedArtworkPlaybackSuspended: Bool {
+        get { self[AnimatedArtworkPlaybackSuspendedKey.self] }
+        set { self[AnimatedArtworkPlaybackSuspendedKey.self] = newValue }
+    }
+}
+
 enum AlbumFavoriteKind: Equatable, Hashable, Sendable {
     case sonos
     case appleMusic
@@ -40,6 +51,49 @@ enum AlbumOverflowActionPolicy {
     static let albumActions: [AlbumOverflowAction] = [.playNext, .addToQueue]
 }
 
+enum AlbumPlaybackItemPolicy {
+    static func playbackItem(from item: BrowseItem, resolvedAlbumID: String?) -> BrowseItem {
+        guard item.cloudType?.localizedCaseInsensitiveCompare("ALBUM") == .orderedSame,
+              let resolvedAlbumID = meaningfulAlbumID(resolvedAlbumID),
+              resolvedAlbumID != item.id else {
+            return item
+        }
+
+        return BrowseItem(
+            id: resolvedAlbumID,
+            title: item.title,
+            artist: item.artist,
+            album: item.album,
+            albumArtURL: item.albumArtURL,
+            detailArtworkURL: item.detailArtworkURL,
+            uri: playbackURI(from: item.uri, resolvedAlbumID: resolvedAlbumID),
+            metaXML: item.metaXML,
+            duration: item.duration,
+            resMD: nil,
+            isContainer: item.isContainer,
+            serviceId: item.serviceId,
+            cloudType: item.cloudType,
+            includeAlbumArtInCloudMetadata: item.includeAlbumArtInCloudMetadata,
+            cloudFavoriteId: item.cloudFavoriteId
+        )
+    }
+
+    private static func playbackURI(from uri: String?, resolvedAlbumID: String) -> String? {
+        guard let uri,
+              let queryStart = uri.firstIndex(of: "?") else {
+            return uri
+        }
+
+        let encodedObjectID = SonosPlayableURIBuilder.encodedObjectID("1004206c\(resolvedAlbumID)")
+        return "x-rincon-cpcontainer:\(encodedObjectID)\(uri[queryStart...])"
+    }
+
+    private static func meaningfulAlbumID(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 enum AlbumTrackMenuActionPolicy {
     static func actions(
         favoriteKind: AlbumFavoriteKind,
@@ -52,6 +106,21 @@ enum AlbumTrackMenuActionPolicy {
         }
         actions.append(.favorite(favoriteKind, isActive: isFavoriteActive))
         return actions
+    }
+
+    static func songActions(
+        isSonosFavoriteActive: Bool,
+        isAppleMusicFavoriteActive: Bool,
+        isQueueable: Bool,
+        isAppleMusicFavoriteAvailable: Bool = true
+    ) -> [MusicResourceMenuAction] {
+        MusicResourceActionPolicy.actions(
+            kind: .song,
+            isQueueable: isQueueable,
+            isSonosFavoriteActive: isSonosFavoriteActive,
+            isAppleMusicFavoriteActive: isAppleMusicFavoriteActive,
+            isAppleMusicFavoriteAvailable: isAppleMusicFavoriteAvailable
+        )
     }
 }
 
@@ -78,6 +147,107 @@ enum EditorialDescriptionPolicy {
                 return trimmed?.isEmpty == false ? trimmed : nil
             }
             .first
+    }
+}
+
+enum AlbumAnimatedArtworkPresentation {
+    static func headerURL(
+        info: AnimatedArtworkInfo?,
+        isEnabled: Bool
+    ) -> URL? {
+        headerURL(
+            info: info,
+            isEnabled: isEnabled,
+            isImmersiveLayoutActive: false
+        )
+    }
+
+    static func headerURL(
+        info: AnimatedArtworkInfo?,
+        isEnabled: Bool,
+        isImmersiveLayoutActive: Bool
+    ) -> URL? {
+        guard isEnabled,
+              !isImmersiveLayoutActive,
+              fullScreenBackgroundURL(info: info, isEnabled: isEnabled) == nil else {
+            return nil
+        }
+        return info?.playerURL
+    }
+
+    static func fullScreenBackgroundURL(
+        info: AnimatedArtworkInfo?,
+        isEnabled: Bool
+    ) -> URL? {
+        guard isEnabled else { return nil }
+        return info?.tallArtworkURL
+    }
+
+    static func shouldUseImmersiveLayout(
+        backgroundURL: URL?,
+        readyURL: URL?
+    ) -> Bool {
+        guard let backgroundURL else { return false }
+        return readyURL == backgroundURL
+    }
+
+    static func shouldResetReadyState(
+        current: AnimatedArtworkInfo?,
+        next: AnimatedArtworkInfo?
+    ) -> Bool {
+        !hasSameRenderableArtwork(current, next)
+    }
+
+    private static func hasSameRenderableArtwork(
+        _ lhs: AnimatedArtworkInfo?,
+        _ rhs: AnimatedArtworkInfo?
+    ) -> Bool {
+        lhs?.playerURL == rhs?.playerURL &&
+        lhs?.tallArtworkURL == rhs?.tallArtworkURL
+    }
+
+    static func shouldPlayVideo(
+        isEnabled: Bool,
+        isBackgroundPlaybackSuspended: Bool
+    ) -> Bool {
+        isEnabled && !isBackgroundPlaybackSuspended
+    }
+
+    static func immersiveHeaderSpacerHeight(
+        containerWidth: CGFloat,
+        viewportHeight: CGFloat,
+        videoAspectRatio: CGFloat?
+    ) -> CGFloat {
+        let width = max(0, containerWidth)
+        guard width > 0 else { return 0 }
+
+        let aspectRatio = max(0.35, videoAspectRatio ?? 0.75)
+        let foregroundHeight = width / aspectRatio
+        let naturalHeight = max(260, foregroundHeight - 118)
+        let viewportAlignedHeight = viewportHeight > 0
+            ? min(320, max(300, viewportHeight * 0.35))
+            : 300
+        return min(naturalHeight, viewportAlignedHeight)
+    }
+
+    static func contentBackdropTopPadding(isImmersive: Bool) -> CGFloat {
+        isImmersive ? -144 : 0
+    }
+
+    static func contentBackdropTopOpacity(isImmersive: Bool) -> CGFloat {
+        isImmersive ? 0 : 0
+    }
+
+    static func contentBackdropStrongFadeLocation(isImmersive: Bool) -> CGFloat {
+        isImmersive ? 0.58 : 1
+    }
+
+    static func contentBackdropMinimumHeight(
+        isImmersive: Bool,
+        viewportHeight: CGFloat
+    ) -> CGFloat {
+        guard isImmersive else { return 0 }
+        return max(0, viewportHeight)
     }
 }
 

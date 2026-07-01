@@ -41,7 +41,7 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
     case playNext
     case addToQueue
     case startStation
-    case favorite(AlbumFavoriteKind, isActive: Bool)
+    case favorite(AlbumFavoriteKind, isActive: Bool, isEnabled: Bool = true)
 
     var id: String {
         switch self {
@@ -49,7 +49,7 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "play-next"
         case .addToQueue: return "add-to-queue"
         case .startStation: return "start-station"
-        case .favorite(let kind, let isActive):
+        case .favorite(let kind, let isActive, _):
             return "favorite-\(kind)-\(isActive)"
         }
     }
@@ -60,13 +60,13 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "Play Next"
         case .addToQueue: return "Add to Queue"
         case .startStation: return "Start Station"
-        case .favorite(.sonos, false):
+        case .favorite(.sonos, false, _):
             return "Add to Sonos Favorites"
-        case .favorite(.sonos, true):
+        case .favorite(.sonos, true, _):
             return "Remove from Sonos Favorites"
-        case .favorite(.appleMusic, false):
+        case .favorite(.appleMusic, false, _):
             return "Add to Apple Music Favorites"
-        case .favorite(.appleMusic, true):
+        case .favorite(.appleMusic, true, _):
             return "Remove from Apple Music Favorites"
         }
     }
@@ -77,8 +77,17 @@ enum MusicResourceMenuAction: Equatable, Hashable, Identifiable, Sendable {
         case .playNext: return "text.line.first.and.arrowtriangle.forward"
         case .addToQueue: return "text.badge.plus"
         case .startStation: return "antenna.radiowaves.left.and.right"
-        case .favorite(_, false): return "heart"
-        case .favorite(_, true): return "heart.slash"
+        case .favorite(_, false, _): return "heart"
+        case .favorite(_, true, _): return "heart.slash"
+        }
+    }
+
+    var isEnabled: Bool {
+        switch self {
+        case .playNow, .playNext, .addToQueue, .startStation:
+            return true
+        case .favorite(_, _, let isEnabled):
+            return isEnabled
         }
     }
 }
@@ -87,10 +96,26 @@ enum MusicResourceActionPolicy {
     static func actions(
         kind: MusicResourceKind,
         isQueueable: Bool,
-        supportsStation: Bool = false
+        supportsStation: Bool = false,
+        isSonosFavoriteActive: Bool = false,
+        isAppleMusicFavoriteActive: Bool = false,
+        isAppleMusicFavoriteAvailable: Bool = true
     ) -> [MusicResourceMenuAction] {
         if kind == .artist, supportsStation {
             return [.startStation]
+        }
+
+        if kind == .song {
+            var actions: [MusicResourceMenuAction] = [.playNow]
+            if isQueueable {
+                actions.append(contentsOf: [.playNext, .addToQueue])
+            }
+            actions.append(contentsOf: songFavoriteActions(
+                isSonosFavoriteActive: isSonosFavoriteActive,
+                isAppleMusicFavoriteActive: isAppleMusicFavoriteActive,
+                isAppleMusicFavoriteAvailable: isAppleMusicFavoriteAvailable
+            ))
+            return actions
         }
 
         guard isQueueable else {
@@ -98,6 +123,21 @@ enum MusicResourceActionPolicy {
         }
 
         return [.playNow, .playNext, .addToQueue]
+    }
+
+    static func songFavoriteActions(
+        isSonosFavoriteActive: Bool,
+        isAppleMusicFavoriteActive: Bool,
+        isAppleMusicFavoriteAvailable: Bool = true
+    ) -> [MusicResourceMenuAction] {
+        [
+            .favorite(.sonos, isActive: isSonosFavoriteActive),
+            .favorite(
+                .appleMusic,
+                isActive: isAppleMusicFavoriteActive,
+                isEnabled: isAppleMusicFavoriteAvailable
+            )
+        ]
     }
 }
 

@@ -524,7 +524,24 @@ final class LocalServiceInteractionTests: XCTestCase {
     func testMusicResourceActionPolicyExposesQueueActionsForQueueableSongs() {
         XCTAssertEqual(
             MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
-            [.playNow, .playNext, .addToQueue]
+            [
+                .playNow,
+                .playNext,
+                .addToQueue,
+                .favorite(.sonos, isActive: false),
+                .favorite(.appleMusic, isActive: false)
+            ]
+        )
+    }
+
+    func testMusicResourceActionPolicyKeepsBothFavoriteActionsForUnqueueableSongs() {
+        XCTAssertEqual(
+            MusicResourceActionPolicy.actions(kind: .song, isQueueable: false),
+            [
+                .playNow,
+                .favorite(.sonos, isActive: false),
+                .favorite(.appleMusic, isActive: false)
+            ]
         )
     }
 

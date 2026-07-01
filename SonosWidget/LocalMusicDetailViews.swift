@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import MusicKit
 import SwiftUI
@@ -44,6 +45,7 @@ struct LocalMusicAlbumDetailView: View {
     let store: LocalLibraryStore
     @Bindable var manager: SonosManager
     @Bindable var searchManager: SearchManager
+    @Environment(\.isAnimatedArtworkPlaybackSuspended) private var isAnimatedArtworkPlaybackSuspended
 
     @State private var detailedAlbum: Album?
     @State private var completeCatalogAlbum: Album?
@@ -56,6 +58,16 @@ struct LocalMusicAlbumDetailView: View {
     @State private var isAppleMusicFavoriteBusy = false
     @State private var appleMusicFavoritedTrackIDs: Set<String> = []
     @State private var catalogAppleMusicURL: URL?
+    @State private var animatedArtworkInfo: AnimatedArtworkInfo?
+    @State private var animatedArtworkReadyURL: URL?
+    @State private var animatedArtworkBackgroundReadyURL: URL?
+
+    private var shouldPlayAnimatedArtworkVideo: Bool {
+        AlbumAnimatedArtworkPresentation.shouldPlayVideo(
+            isEnabled: AnimatedArtworkFeature.isEnabled,
+            isBackgroundPlaybackSuspended: isAnimatedArtworkPlaybackSuspended
+        )
+    }
 
     private var displayAlbum: Album { detailedAlbum ?? album }
     private var coverURL: URL? {
@@ -92,13 +104,40 @@ struct LocalMusicAlbumDetailView: View {
     }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
-            existingURL: displayAlbum.url,
-            catalogURL: catalogAppleMusicURL,
+            existingURL: nil,
+            catalogURL: catalogAppleMusicURL ?? completeCatalogAlbum?.url ?? displayAlbum.url,
             kind: .album,
             requiresCatalogURL: true)
     }
     private var appleMusicURLLookupID: String {
-        "\(displayAlbum.id.rawValue)|\(displayAlbum.title)|\(displayAlbum.artistName)"
+        LocalMusicAlbumDetailPresentation.animatedArtworkLookupID(
+            currentAlbumID: displayAlbum.id.rawValue,
+            title: displayAlbum.title,
+            artist: displayAlbum.artistName,
+            completeCatalogAlbumID: completeCatalogAlbum?.id.rawValue)
+    }
+    private var animatedArtworkHeaderURL: URL? {
+        LocalMusicAlbumDetailPresentation.animatedArtworkHeaderURL(
+            info: animatedArtworkInfo,
+            isEnabled: AnimatedArtworkFeature.isEnabled,
+            isImmersiveLayoutActive: usesImmersiveAnimatedArtwork
+        )
+    }
+    private var animatedArtworkBackgroundURL: URL? {
+        LocalMusicAlbumDetailPresentation.animatedArtworkBackgroundURL(
+            info: animatedArtworkInfo,
+            isEnabled: AnimatedArtworkFeature.isEnabled
+        )
+    }
+    private var animatedArtworkBackgroundAspectRatio: CGFloat? {
+        guard let value = animatedArtworkInfo?.tallAspectRatio else { return nil }
+        return CGFloat(value)
+    }
+    private var usesImmersiveAnimatedArtwork: Bool {
+        AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+            backgroundURL: animatedArtworkBackgroundURL,
+            readyURL: animatedArtworkBackgroundReadyURL
+        )
     }
     private var tracks: [Track] {
         guard let tracks = detailedAlbum?.tracks else { return [] }
@@ -124,19 +163,12 @@ struct LocalMusicAlbumDetailView: View {
         ScrollView {
             VStack(spacing: 0) {
                 header
-                actionBar
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                editorialDescriptionSection(
-                    text: albumDescription,
-                    title: displayAlbum.title
-                )
-                trackList
-                completeAlbumFooter
+                albumScrollableContent
             }
-            .padding(.bottom, 24)
         }
-        .background(detailBackground.ignoresSafeArea())
+        .background {
+            detailBackground
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -151,6 +183,7 @@ struct LocalMusicAlbumDetailView: View {
         .task(id: appleMusicURLLookupID) {
             catalogAppleMusicURL = nil
             await resolveAppleMusicURLIfNeeded()
+            await refreshAnimatedArtworkUntilAvailable()
         }
         .task(id: albumFavoriteResource?.id ?? "") {
             await loadAppleMusicFavoriteState()
@@ -161,6 +194,33 @@ struct LocalMusicAlbumDetailView: View {
     }
 
     private var detailBackground: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                staticDetailBackground
+
+                if let url = animatedArtworkBackgroundURL {
+                    albumAnimatedArtworkBackground(
+                        url: url,
+                        size: size
+                    )
+                    .frame(width: size.width, height: size.height, alignment: .top)
+                    .opacity(animatedArtworkBackgroundReadyURL == url ? 1 : 0)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                }
+
+                albumBackgroundScrim
+                    .frame(width: size.width, height: size.height)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: size.width, height: size.height, alignment: .top)
+        }
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.28), value: animatedArtworkBackgroundReadyURL)
+    }
+
+    private var staticDetailBackground: some View {
         SonosArtworkBackground(
             image: coverImage ?? manager.albumArtImage,
             fallbackColor: themeColor ?? manager.albumArtDominantColor
@@ -169,20 +229,203 @@ struct LocalMusicAlbumDetailView: View {
         .animation(.easeInOut(duration: 0.8), value: themeColor)
     }
 
+    @ViewBuilder
+    private func albumAnimatedArtworkBackground(
+        url: URL,
+        size: CGSize
+    ) -> some View {
+        let containerAspectRatio = size.height > 0 ? size.width / size.height : 0
+        let videoAspectRatio = animatedArtworkBackgroundAspectRatio
+        let usesBlurFill = AnimatedArtworkFeature.shouldUseBlurFillForFullScreenArtwork(
+            videoAspectRatio: videoAspectRatio,
+            containerAspectRatio: containerAspectRatio
+        )
+
+        if usesBlurFill {
+            albumAnimatedArtworkBlurFill(
+                url: url,
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+        } else {
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
+                videoGravity: .resizeAspectFill,
+                onReadyForDisplay: {
+                    markAnimatedArtworkBackgroundReady(url)
+                }
+            )
+        }
+    }
+
+    private func albumAnimatedArtworkBlurFill(
+        url: URL,
+        size: CGSize,
+        videoAspectRatio: CGFloat?
+    ) -> some View {
+        let foregroundSize = AnimatedArtworkFeature.fullScreenBlurFillForegroundSize(
+            containerSize: size,
+            videoAspectRatio: videoAspectRatio
+        )
+        let foregroundTopOffset = AnimatedArtworkFeature.fullScreenBlurFillForegroundTopOffset(
+            containerSize: size
+        )
+
+        return ZStack(alignment: .top) {
+            FullScreenAnimatedArtworkExtensionBackdrop(
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
+                videoGravity: .resizeAspect,
+                onReadyForDisplay: {
+                    markAnimatedArtworkBackgroundReady(url)
+                }
+            )
+            .frame(width: foregroundSize.width, height: foregroundSize.height, alignment: .top)
+            .clipped()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.54),
+                        .init(color: .black.opacity(0.6), location: 0.72),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .offset(y: foregroundTopOffset)
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .clipped()
+    }
+
+    private func markAnimatedArtworkBackgroundReady(_ url: URL) {
+        if animatedArtworkBackgroundURL == url {
+            animatedArtworkBackgroundReadyURL = url
+        }
+    }
+
+    @ViewBuilder
+    private var albumBackgroundScrim: some View {
+        if usesImmersiveAnimatedArtwork {
+            ZStack {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.08), location: 0.0),
+                        .init(color: .black.opacity(0.08), location: 0.36),
+                        .init(color: .black.opacity(0.48), location: 0.58),
+                        .init(color: .black.opacity(0.88), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.32)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.34),
+                                .init(color: .black.opacity(0.35), location: 0.58),
+                                .init(color: .black, location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    private var albumScrollableContent: some View {
+        VStack(spacing: 0) {
+            actionBar
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+            editorialDescriptionSection(
+                text: albumDescription,
+                title: displayAlbum.title
+            )
+            trackList
+            completeAlbumFooter
+        }
+        .padding(.bottom, 24)
+        .background(alignment: .top) {
+            if usesImmersiveAnimatedArtwork {
+                immersiveScrollableContentBackdrop
+                    .padding(
+                        .top,
+                        AlbumAnimatedArtworkPresentation.contentBackdropTopPadding(
+                            isImmersive: usesImmersiveAnimatedArtwork
+                        )
+                    )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var immersiveScrollableContentBackdrop: some View {
+        let topOpacity = AlbumAnimatedArtworkPresentation.contentBackdropTopOpacity(
+            isImmersive: usesImmersiveAnimatedArtwork
+        )
+        let strongFadeLocation = AlbumAnimatedArtworkPresentation.contentBackdropStrongFadeLocation(
+            isImmersive: usesImmersiveAnimatedArtwork
+        )
+        let minimumHeight = AlbumAnimatedArtworkPresentation.contentBackdropMinimumHeight(
+            isImmersive: usesImmersiveAnimatedArtwork,
+            viewportHeight: UIScreen.main.bounds.height
+        )
+
+        ZStack(alignment: .top) {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(topOpacity), location: 0),
+                    .init(color: .black.opacity(0.14), location: 0.22),
+                    .init(color: .black.opacity(0.62), location: strongFadeLocation),
+                    .init(color: .black.opacity(0.94), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.42)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .clear, location: 0.24),
+                            .init(color: .black.opacity(0.42), location: 0.52),
+                            .init(color: .black, location: 0.88)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .top)
+        .ignoresSafeArea(edges: .horizontal)
+        .allowsHitTesting(false)
+    }
+
     private var header: some View {
         VStack(spacing: 12) {
-            Button {
-                openAppleMusicFromArtwork()
-            } label: {
-                LocalMusicDetailArtwork(
-                    artwork: displayAlbum.artwork,
-                    artworkURL: coverURL,
-                    fallbackSystemImage: "square.stack",
-                    size: 280
-                )
+            if usesImmersiveAnimatedArtwork {
+                immersiveAnimatedArtworkHeaderSpacer
+            } else {
+                headerArtwork
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open \(displayAlbum.title) in Apple Music")
 
             VStack(spacing: 5) {
                 Text(displayAlbum.title)
@@ -204,7 +447,57 @@ struct LocalMusicAlbumDetailView: View {
             }
             .padding(.horizontal)
         }
-        .padding(.top, 20)
+        .padding(.top, usesImmersiveAnimatedArtwork ? 0 : 20)
+    }
+
+    private var immersiveAnimatedArtworkHeaderSpacer: some View {
+        Color.clear
+            .frame(
+                height: AlbumAnimatedArtworkPresentation.immersiveHeaderSpacerHeight(
+                    containerWidth: UIScreen.main.bounds.width,
+                    viewportHeight: UIScreen.main.bounds.height,
+                    videoAspectRatio: animatedArtworkBackgroundAspectRatio
+                )
+            )
+            .accessibilityHidden(true)
+    }
+
+    private var headerArtwork: some View {
+        Button {
+            openAppleMusicFromArtwork()
+        } label: {
+            headerArtworkImage
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(displayAlbum.title) in Apple Music")
+    }
+
+    private var headerArtworkImage: some View {
+        ZStack {
+            LocalMusicDetailArtwork(
+                artwork: displayAlbum.artwork,
+                artworkURL: coverURL,
+                fallbackSystemImage: "square.stack",
+                size: 280
+            )
+
+            if let url = animatedArtworkHeaderURL {
+                AnimatedArtworkPlayerView(
+                    url: url,
+                    isPlaying: shouldPlayAnimatedArtworkVideo,
+                    videoGravity: .resizeAspectFill
+                ) {
+                    if animatedArtworkHeaderURL == url {
+                        animatedArtworkReadyURL = url
+                    }
+                }
+                .frame(width: 280, height: 280)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .opacity(animatedArtworkReadyURL == url ? 1 : 0)
+                .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.28), value: animatedArtworkReadyURL)
     }
 
     private var albumDescription: String? {
@@ -374,10 +667,11 @@ struct LocalMusicAlbumDetailView: View {
         let isFavoriteActive = appleMusicFavoritedTrackIDs.contains(track.id.rawValue)
 
         return MusicResourceContextMenu(
-            actions: AlbumTrackMenuActionPolicy.actions(
-                favoriteKind: .appleMusic,
-                isFavoriteActive: isFavoriteActive,
-                isQueueable: true
+            actions: AlbumTrackMenuActionPolicy.songActions(
+                isSonosFavoriteActive: false,
+                isAppleMusicFavoriteActive: isFavoriteActive,
+                isQueueable: true,
+                isAppleMusicFavoriteAvailable: favoriteResource(for: track) != nil
             )
         ) { action in
             performLocalAlbumTrackMenuAction(action, track: track)
@@ -404,9 +698,21 @@ struct LocalMusicAlbumDetailView: View {
                     manager: manager,
                     searchManager: searchManager)
             }
-        case .favorite(.appleMusic, _):
+        case .favorite(.sonos, _, _):
+            Task {
+                await store.toggleSonosFavorite(
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    displayID: track.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite(.appleMusic, _, _):
             toggleAppleMusicTrackFavorite(track)
-        case .favorite(.sonos, _), .startStation:
+        case .startStation:
             break
         }
     }
@@ -650,8 +956,10 @@ struct LocalMusicAlbumDetailView: View {
     private func resolveAppleMusicURLIfNeeded() async -> URL? {
         if let appleMusicURL { return appleMusicURL }
 
-        if let playable = albumPlayable,
-           let catalogID = LocalMusicAppleMusicURL.publicCatalogID(from: playable.catalogID, kind: .album) {
+        if let catalogID = LocalMusicAlbumDetailPresentation.preferredAnimatedArtworkCatalogID(
+            currentPlayableCatalogID: albumPlayable?.catalogID,
+            completeCatalogAlbumID: completeCatalogAlbum?.id.rawValue
+        ) {
             do {
                 let urlString = try await AppleMusicCatalogSearchClient.shared.appleMusicURLString(
                     kind: LocalMusicAppleMusicURL.Kind.album,
@@ -695,7 +1003,7 @@ struct LocalMusicAlbumDetailView: View {
                 title: displayAlbum.title,
                 artist: displayAlbum.artistName,
                 album: displayAlbum.title,
-                allowGeneratedFallback: false)
+                allowGeneratedFallback: true)
             guard !Task.isCancelled,
                   let urlString,
                   let url = URL(string: urlString),
@@ -717,6 +1025,114 @@ struct LocalMusicAlbumDetailView: View {
             guard !Task.isCancelled else { return nil }
             SonosLog.debug(.localService, "Album Apple Music link lookup failed title='\(displayAlbum.title)' error=\(error)")
             return nil
+        }
+    }
+
+    @MainActor
+    private func refreshAnimatedArtworkUntilAvailable() async {
+        if LocalMusicAlbumDetailPresentation.shouldClearAnimatedArtworkBeforeLookup(
+            isEnabled: AnimatedArtworkFeature.isEnabled
+        ) {
+            setAnimatedArtworkInfo(nil)
+        }
+
+        var failedAttempt = 0
+        while !Task.isCancelled {
+            let isEligible = await refreshAnimatedArtworkAttempt()
+            guard isEligible else { return }
+            if animatedArtworkInfo != nil { return }
+
+            guard let delay = LocalMusicAlbumDetailPresentation.animatedArtworkRetryDelayNanoseconds(
+                afterFailedAttempt: failedAttempt,
+                hasAnimatedArtwork: animatedArtworkInfo != nil
+            ) else {
+                return
+            }
+
+            failedAttempt += 1
+            SonosLog.debug(
+                .albumDetail,
+                "Local Music animated album artwork retry scheduled " +
+                    "title='\(displayAlbum.title)' artist='\(displayAlbum.artistName)' attempt=\(failedAttempt)")
+
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshAnimatedArtworkAttempt() async -> Bool {
+        let albumURL = appleMusicURL
+        guard LocalMusicAlbumDetailPresentation.shouldResolveAnimatedArtwork(
+                albumURL: albumURL,
+                title: displayAlbum.title,
+                artist: displayAlbum.artistName,
+                isEnabled: AnimatedArtworkFeature.isEnabled
+              ) else {
+            return false
+        }
+
+        await prewarmAnimatedArtwork(albumURL: albumURL)
+        return true
+    }
+
+    @MainActor
+    private func prewarmAnimatedArtwork(albumURL: URL?) async {
+        guard AnimatedArtworkFeature.isEnabled,
+              let relayBaseURL = RelayManager.shared.url else {
+            applyCachedAnimatedArtwork(appleMusicURLString: albumURL?.absoluteString)
+            return
+        }
+
+        applyCachedAnimatedArtwork(appleMusicURLString: albumURL?.absoluteString)
+        if animatedArtworkInfo != nil { return }
+
+        let resolver = LocalMusicAlbumAnimatedArtworkResolver(
+            relayBaseURL: relayBaseURL,
+            registry: .shared
+        )
+        if let info = await resolver.resolve(
+            albumURL: albumURL,
+            title: displayAlbum.title,
+            artist: displayAlbum.artistName
+        ) {
+            setAnimatedArtworkInfo(info)
+        }
+    }
+
+    @MainActor
+    private func applyCachedAnimatedArtwork(appleMusicURLString: String?) {
+        guard AnimatedArtworkFeature.isEnabled else {
+            setAnimatedArtworkInfo(nil)
+            return
+        }
+
+        let cached = AnimatedArtworkRegistry.shared.artwork(
+            appleMusicURLString: appleMusicURLString,
+            artist: displayAlbum.artistName,
+            album: displayAlbum.title
+        )
+        let next = LocalMusicAlbumDetailPresentation.animatedArtworkInfoAfterCacheLookup(
+            current: animatedArtworkInfo,
+            cached: cached,
+            isEnabled: AnimatedArtworkFeature.isEnabled
+        )
+        setAnimatedArtworkInfo(next)
+    }
+
+    private func setAnimatedArtworkInfo(_ next: AnimatedArtworkInfo?) {
+        let shouldResetReadyState = AlbumAnimatedArtworkPresentation.shouldResetReadyState(
+            current: animatedArtworkInfo,
+            next: next
+        )
+        guard animatedArtworkInfo != next else { return }
+        animatedArtworkInfo = next
+        if shouldResetReadyState {
+            animatedArtworkReadyURL = nil
+            animatedArtworkBackgroundReadyURL = nil
         }
     }
 
@@ -964,10 +1380,11 @@ struct LocalMusicPlaylistDetailView: View {
                         fallbackArtworkURL: nil,
                         numberStyle: .listPosition,
                         isPlaying: store.isStartingPlayback && store.activePlaybackItemID == track.id.rawValue,
-                        contextMenuActions: AlbumTrackMenuActionPolicy.actions(
-                            favoriteKind: .appleMusic,
-                            isFavoriteActive: appleMusicFavoritedTrackIDs.contains(track.id.rawValue),
-                            isQueueable: true
+                        contextMenuActions: AlbumTrackMenuActionPolicy.songActions(
+                            isSonosFavoriteActive: false,
+                            isAppleMusicFavoriteActive: appleMusicFavoritedTrackIDs.contains(track.id.rawValue),
+                            isQueueable: true,
+                            isAppleMusicFavoriteAvailable: favoriteResource(for: track) != nil
                         ),
                         menuAction: { action in
                             performPlaylistTrackMenuAction(action, track: track)
@@ -1169,9 +1586,21 @@ struct LocalMusicPlaylistDetailView: View {
                     manager: manager,
                     searchManager: searchManager)
             }
-        case .favorite(.appleMusic, _):
+        case .favorite(.sonos, _, _):
+            Task {
+                await store.toggleSonosFavorite(
+                    playable: LocalServiceAppleMusicPlayable.make(track: track),
+                    displayID: track.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: track.title,
+                    fallbackArtist: track.artistName,
+                    fallbackAlbum: track.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite(.appleMusic, _, _):
             toggleAppleMusicTrackFavorite(track)
-        case .favorite(.sonos, _), .startStation:
+        case .startStation:
             break
         }
     }
@@ -2411,6 +2840,7 @@ private struct LocalMusicArtistTopSongsRows: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                let playable = LocalServiceAppleMusicPlayable.make(song: song)
                 LocalMusicSongRow(
                     song: song,
                     index: index,
@@ -2419,13 +2849,17 @@ private struct LocalMusicArtistTopSongsRows: View {
                     artworkURL: store.catalogArtworkURL(for: song),
                     showsArtwork: true,
                     isPlaying: store.isStartingPlayback && store.activePlaybackItemID == song.id.rawValue,
-                    contextMenuActions: MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
+                    contextMenuActions: MusicResourceActionPolicy.actions(
+                        kind: .song,
+                        isQueueable: true,
+                        isAppleMusicFavoriteAvailable: AppleMusicFavoriteResource.fromLocalServicePlayable(playable) != nil
+                    ),
                     menuAction: { action in
                         performMenuAction(action, song: song)
                     }
                 ) {
                     await store.playOnSonos(
-                        playable: LocalServiceAppleMusicPlayable.make(song: song),
+                        playable: playable,
                         displayID: song.id.rawValue,
                         fallbackKind: .song,
                         fallbackTitle: song.title,
@@ -2472,9 +2906,32 @@ private struct LocalMusicArtistTopSongsRows: View {
                     manager: manager,
                     searchManager: searchManager)
             }
-        case .favorite, .startStation:
+        case .favorite(.sonos, _, _):
+            Task { await toggleSongSonosFavorite(song) }
+        case .favorite(.appleMusic, _, _):
+            Task { await toggleSongAppleMusicFavorite(song) }
+        case .startStation:
             break
         }
+    }
+
+    private func toggleSongSonosFavorite(_ song: Song) async {
+        await store.toggleSonosFavorite(
+            playable: LocalServiceAppleMusicPlayable.make(song: song),
+            displayID: song.id.rawValue,
+            fallbackKind: .song,
+            fallbackTitle: song.title,
+            fallbackArtist: song.artistName,
+            fallbackAlbum: song.albumTitle,
+            manager: manager,
+            searchManager: searchManager)
+    }
+
+    private func toggleSongAppleMusicFavorite(_ song: Song) async {
+        guard let resource = AppleMusicFavoriteResource.fromLocalServicePlayable(
+            LocalServiceAppleMusicPlayable.make(song: song)
+        ) else { return }
+        _ = await searchManager.toggleAppleMusicFavorites(resource: resource)
     }
 }
 
@@ -2580,28 +3037,22 @@ private struct LocalMusicArtistAlbumSongsView: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                    let playable = LocalServiceAppleMusicPlayable.make(song: song)
                     LocalMusicSongRow(
                         song: song,
                         index: index,
                         isPlaying: store.isStartingPlayback && store.activePlaybackItemID == song.id.rawValue,
-                        contextMenuActions: MusicResourceActionPolicy.actions(kind: .song, isQueueable: true),
+                        contextMenuActions: MusicResourceActionPolicy.actions(
+                            kind: .song,
+                            isQueueable: true,
+                            isAppleMusicFavoriteAvailable: AppleMusicFavoriteResource.fromLocalServicePlayable(playable) != nil
+                        ),
                         menuAction: { action in
-                            Task {
-                                await store.performSonosQueueAction(
-                                    action,
-                                    playable: LocalServiceAppleMusicPlayable.make(song: song),
-                                    displayID: song.id.rawValue,
-                                    fallbackKind: .song,
-                                    fallbackTitle: song.title,
-                                    fallbackArtist: song.artistName,
-                                    fallbackAlbum: song.albumTitle,
-                                    manager: manager,
-                                    searchManager: searchManager)
-                            }
+                            performMenuAction(action, song: song)
                         }
                     ) {
                         await store.playOnSonos(
-                            playable: LocalServiceAppleMusicPlayable.make(song: song),
+                            playable: playable,
                             displayID: song.id.rawValue,
                             fallbackKind: .song,
                             fallbackTitle: song.title,
@@ -2612,6 +3063,45 @@ private struct LocalMusicArtistAlbumSongsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func performMenuAction(_ action: MusicResourceMenuAction, song: Song) {
+        switch action {
+        case .playNow, .playNext, .addToQueue:
+            Task {
+                await store.performSonosQueueAction(
+                    action,
+                    playable: LocalServiceAppleMusicPlayable.make(song: song),
+                    displayID: song.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: song.title,
+                    fallbackArtist: song.artistName,
+                    fallbackAlbum: song.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite(.sonos, _, _):
+            Task {
+                await store.toggleSonosFavorite(
+                    playable: LocalServiceAppleMusicPlayable.make(song: song),
+                    displayID: song.id.rawValue,
+                    fallbackKind: .song,
+                    fallbackTitle: song.title,
+                    fallbackArtist: song.artistName,
+                    fallbackAlbum: song.albumTitle,
+                    manager: manager,
+                    searchManager: searchManager)
+            }
+        case .favorite(.appleMusic, _, _):
+            Task {
+                guard let resource = AppleMusicFavoriteResource.fromLocalServicePlayable(
+                    LocalServiceAppleMusicPlayable.make(song: song)
+                ) else { return }
+                _ = await searchManager.toggleAppleMusicFavorites(resource: resource)
+            }
+        case .startStation:
+            break
         }
     }
 

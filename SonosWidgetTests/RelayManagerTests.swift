@@ -383,6 +383,41 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertEqual(response.hueAmbience?.activeTargetIds, ["area-1", "light-2"])
     }
 
+    func testHealthResponseDecodesHueAmbienceActiveGroups() throws {
+        let data = Data("""
+        {
+          "ok": true,
+          "groups": [],
+          "hueAmbience": {
+            "configured": true,
+            "enabled": true,
+            "runtimeActive": true,
+            "activeGroups": [
+              {
+                "groupId": "192.168.50.25",
+                "speakerName": "Playroom",
+                "activeTargetIds": ["room-1"],
+                "renderMode": "clipFallback",
+                "lastFrameAt": "2026-06-29T01:00:00.000Z"
+              },
+              {
+                "groupId": "192.168.50.99",
+                "speakerName": "Home Theater",
+                "activeTargetIds": ["room-2"],
+                "renderMode": "clipFallback",
+                "lastFrameAt": "2026-06-29T01:00:01.000Z"
+              }
+            ]
+          }
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RelayClient.HealthResponse.self, from: data)
+
+        XCTAssertEqual(response.hueAmbience?.activeGroups?.map(\.speakerName), ["Playroom", "Home Theater"])
+        XCTAssertEqual(response.hueAmbience?.activeGroups?.map(\.activeTargetIds), [["room-1"], ["room-2"]])
+    }
+
     func testHealthResponseDecodesEntertainmentStatus() throws {
         let data = Data("""
         {
@@ -473,6 +508,38 @@ final class RelayManagerTests: XCTestCase {
         let response = try JSONDecoder().decode(RelayClient.HueAmbienceStatusResponse.self, from: data)
 
         XCTAssertNil(response.status.renderMode)
+    }
+
+    func testHueAmbienceStatusResponseDecodesActiveGroups() throws {
+        let data = Data("""
+        {
+          "ok": true,
+          "status": {
+            "configured": true,
+            "enabled": true,
+            "runtimeActive": true,
+            "activeGroups": [
+              {
+                "groupId": "192.168.50.25",
+                "speakerName": "Playroom",
+                "activeTargetIds": ["room-1"],
+                "renderMode": "clipFallback"
+              },
+              {
+                "groupId": "192.168.50.99",
+                "speakerName": "Home Theater",
+                "activeTargetIds": ["room-2"],
+                "renderMode": "clipFallback"
+              }
+            ]
+          }
+        }
+        """.utf8)
+
+        let response = try JSONDecoder().decode(RelayClient.HueAmbienceStatusResponse.self, from: data)
+
+        XCTAssertEqual(response.status.activeGroups?.map(\.speakerName), ["Playroom", "Home Theater"])
+        XCTAssertEqual(response.status.activeGroups?.map(\.activeTargetIds), [["room-1"], ["room-2"]])
     }
 
     func testDisabledHueAmbienceConfigStillReportsSynced() async {

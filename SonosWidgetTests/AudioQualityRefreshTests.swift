@@ -145,6 +145,55 @@ final class AudioQualityRefreshTests: XCTestCase {
         XCTAssertEqual(enriched.audioQuality, existing)
     }
 
+    func testPlaybackMetadataWithGenericTechnicalQualityNeedsBadgeRetry() throws {
+        let json = """
+        {
+          "_objectType": "metadataStatus",
+          "currentItem": {
+            "track": {
+              "name": "Tiao",
+              "artist": { "name": "Yi" },
+              "album": { "name": "Tiao - Single" },
+              "service": { "name": "Apple Music" },
+              "quality": {
+                "_objectType": "trackQuality",
+                "codec": "audio",
+                "bitDepth": 16,
+                "sampleRate": 48000,
+                "lossless": false,
+                "immersive": false
+              }
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let metadata = try SonosLocalControlAPI.decodePlaybackMetadata(json)
+
+        XCTAssertTrue(SonosManager.playbackMetadataQualityNeedsRetry(metadata))
+    }
+
+    func testDelayedBadgeRetryOnlyNeededForTechnicalFallbackQuality() {
+        let technical = AudioQuality(
+            codec: "Audio",
+            sampleRate: 48_000,
+            bitDepth: 16,
+            channels: nil,
+            lossless: false,
+            immersive: false
+        )
+        let lossless = AudioQuality(
+            codec: "ALAC",
+            sampleRate: 44_100,
+            bitDepth: 16,
+            channels: nil,
+            lossless: true,
+            immersive: false
+        )
+
+        XCTAssertTrue(SonosManager.audioQualityNeedsDelayedBadgeRetry(technical))
+        XCTAssertFalse(SonosManager.audioQualityNeedsDelayedBadgeRetry(lossless))
+    }
+
     func testPlaybackMetadataContainerFallbackEnrichesAppleMusicLiveStation() throws {
         let incoming = TrackInfo(
             title: "Unknown",

@@ -3933,6 +3933,33 @@ final class SearchManager {
         try await AppleMusicFavoritesClient.shared.removeFromFavorites(resource)
     }
 
+    func toggleAppleMusicFavorites(resource: AppleMusicFavoriteResource) async -> Bool {
+        do {
+            let isFavorited = (try? await appleMusicFavoriteStatus(for: resource)) ?? false
+            if isFavorited {
+                try await removeFromAppleMusicFavorites(resource: resource)
+            } else {
+                try await addToAppleMusicFavorites(resource: resource)
+            }
+            SonosLog.info(
+                .favorites,
+                "Apple Music Favorites updated resource='\(resource.id)' isFavorited=\(!isFavorited)")
+            return true
+        } catch {
+            SonosLog.error(.favorites, "Apple Music Favorites update failed: \(error)")
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func toggleAppleMusicFavorites(for item: BrowseItem) async -> Bool {
+        guard let resource = appleMusicFavoriteResource(for: item) else {
+            SonosLog.info(.favorites, "Apple Music Favorites unavailable for '\(item.title)'")
+            return false
+        }
+        return await toggleAppleMusicFavorites(resource: resource)
+    }
+
     private func isAppleMusicItem(_ item: BrowseItem) -> Bool {
         guard AppleMusicFavoriteResourceType(cloudType: item.cloudType) != nil else {
             return false

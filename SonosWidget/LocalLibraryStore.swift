@@ -21,6 +21,118 @@ enum LocalLibraryRefreshExecutionPolicy {
     }
 }
 
+enum LocalLibraryHomeCachePolicy {
+    static func shouldHydrateCachedContent(
+        source: LocalLibraryRefreshSource,
+        hasCachedContent: Bool
+    ) -> Bool {
+        source == .initial && hasCachedContent
+    }
+
+    static func shouldRefreshNetworkAfterHydratingCache(
+        source: LocalLibraryRefreshSource
+    ) -> Bool {
+        source == .initial
+    }
+}
+
+enum LocalLibraryHomeRefreshPolicy {
+    static func snapshotLimit(for source: LocalLibraryRefreshSource) -> Int? {
+        LocalMusicRecentlyAddedSelection.displayLimit
+    }
+}
+
+struct LocalLibraryHomeContentCacheEntry: Codable {
+    var content: LocalMusicHomeContent
+    var recentlyAddedContent: LocalMusicRecentlyAddedContent
+    var cachedAt: Date
+
+    init(
+        content: LocalMusicHomeContent,
+        cachedAt: Date,
+        recentlyAddedContent: LocalMusicRecentlyAddedContent = LocalMusicRecentlyAddedContent()
+    ) {
+        self.content = content
+        self.recentlyAddedContent = recentlyAddedContent
+        self.cachedAt = cachedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case content
+        case recentlyAddedContent
+        case cachedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try container.decode(LocalMusicHomeContent.self, forKey: .content)
+        recentlyAddedContent = try container.decodeIfPresent(
+            LocalMusicRecentlyAddedContent.self,
+            forKey: .recentlyAddedContent
+        ) ?? LocalMusicRecentlyAddedContent()
+        cachedAt = try container.decode(Date.self, forKey: .cachedAt)
+    }
+}
+
+enum LocalLibraryHomeContentCache {
+    private static let fileName = "local-library-home-content-cache-v2.json"
+
+    static var defaultURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent(fileName)
+    }
+
+    static func load(from url: URL? = defaultURL) -> LocalLibraryHomeContentCacheEntry? {
+        guard let url,
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+
+        do {
+            return try JSONDecoder().decode(LocalLibraryHomeContentCacheEntry.self, from: data)
+        } catch {
+            SonosLog.debug(
+                .localService,
+                "Local library home cache decode failed url='\(url.path)' error=\(error)")
+            return nil
+        }
+    }
+
+    static func save(
+        _ entry: LocalLibraryHomeContentCacheEntry,
+        to url: URL? = defaultURL
+    ) {
+        guard let url else { return }
+
+        do {
+            let data = try JSONEncoder().encode(entry)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            SonosLog.debug(
+                .localService,
+                "Local library home cache save failed url='\(url.path)' error=\(error)")
+        }
+    }
+}
+
+struct LocalLibraryHomeContentApplicationOptions {
+    let rebuildsRecentlyAddedContent: Bool
+    let schedulesCatalogArtworkLookup: Bool
+
+    static let liveRefresh = LocalLibraryHomeContentApplicationOptions(
+        rebuildsRecentlyAddedContent: true,
+        schedulesCatalogArtworkLookup: true
+    )
+    static let cachedRestore = LocalLibraryHomeContentApplicationOptions(
+        rebuildsRecentlyAddedContent: false,
+        schedulesCatalogArtworkLookup: false
+    )
+}
+
 enum LocalLibraryPullRefreshPolicy {
     static let triggerDistance = 128.0
     static let resetDistance = 18.0
@@ -54,6 +166,7 @@ final class LocalLibraryStore {
     private let client: LocalMusicLibraryClient
     private let catalogSearchClient: AppleMusicCatalogSearchClient
     private let catalogArtworkCache: LocalMusicCatalogArtworkCache
+    private static var cachedHomeContent = LocalLibraryHomeContentCache.load()
 
     var authorizationStatus = MusicAuthorization.currentStatus
     var snapshot = LocalMusicLibrarySnapshot()
@@ -69,10 +182,17 @@ final class LocalLibraryStore {
     var errorMessage: String?
     var hasLoaded = false
     var catalogArtworkURLStrings: [String: String] = [:]
+    var loadingCategories: Set<LocalLibraryCategory> = []
 
     @ObservationIgnored private var artworkLookupTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var catalogArtworkMissIDs: Set<String> = []
     @ObservationIgnored private var catalogArtworkInFlightIDs: Set<String> = []
+    @ObservationIgnored private var loadedFullCategories: Set<LocalLibraryCategory> = []
+
+    private struct AppliedHomeContent {
+        var content: LocalMusicHomeContent
+        var recentlyAddedContent: LocalMusicRecentlyAddedContent
+    }
 
     convenience init() {
         self.init(
@@ -107,6 +227,10 @@ final class LocalLibraryStore {
         summary.count(for: category) == 0
     }
 
+    func isLoadingCategory(_ category: LocalLibraryCategory) -> Bool {
+        loadingCategories.contains(category)
+    }
+
     func loadIfNeeded() async {
         guard !hasLoaded else { return }
         await refresh(source: .initial)
@@ -129,46 +253,52 @@ final class LocalLibraryStore {
     }
 
     private func performReload(source: LocalLibraryRefreshSource) async {
+        let canRestoreCachedHomeContent = MusicAuthorization.currentStatus == .authorized
+        var didHydrateCachedContent = false
+        if let cached = Self.cachedHomeContent,
+           LocalLibraryHomeCachePolicy.shouldHydrateCachedContent(
+                source: source,
+                hasCachedContent: canRestoreCachedHomeContent && !cached.content.isEmpty
+           ) {
+            applyHomeContent(
+                cached.content,
+                source: source,
+                options: .cachedRestore,
+                cachedRecentlyAddedContent: cached.recentlyAddedContent)
+            didHydrateCachedContent = true
+            if !LocalLibraryHomeCachePolicy.shouldRefreshNetworkAfterHydratingCache(source: source) {
+                return
+            }
+        }
+
+        if didHydrateCachedContent {
+            await Task.yield()
+        }
+
         cancelCatalogArtworkLookupTasks()
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
         do {
-            let previousRecommendationCount = recommendations.count
             SonosLog.info(
                 .localService,
-                "Local library refresh start source=\(source.rawValue) existingRecommendations=\(previousRecommendationCount)")
+                "Local library refresh start source=\(source.rawValue) existingRecommendations=\(recommendations.count)")
 
             authorizationStatus = try await client.authorize()
-            let content = try await client.loadHomeContent()
-            let shouldReplaceRecommendations = LocalLibraryRecommendationRefreshPolicy.shouldReplace(
-                existingCount: recommendations.count,
-                didLoadRecommendations: content.recommendationsLoaded)
-            let nextRecommendations = shouldReplaceRecommendations
-                ? content.recommendations
-                : recommendations
-            var artworkContent = content
-            artworkContent.recommendations = nextRecommendations
-
-            if !shouldReplaceRecommendations {
-                SonosLog.info(
-                    .localService,
-                    "Keeping \(recommendations.count) existing recommendation sections after refresh skipped recommendations " +
-                        "source=\(source.rawValue) status=\(content.recommendationsLoadStatus.diagnosticDescription)")
-            }
-
-            snapshot = content.snapshot
-            recentlyAddedContent = LocalMusicRecentlyAddedContent(snapshot: content.snapshot)
-            recentlyPlayed = content.recentlyPlayed
-            recommendations = nextRecommendations
-            searchSnapshot = nil
-            catalogSearchResults = LocalServiceCatalogSearchResults()
-            catalogArtworkURLStrings = [:]
-            catalogArtworkMissIDs = []
-            catalogArtworkInFlightIDs = []
-            hasLoaded = true
-            scheduleCatalogArtworkLookup(for: artworkContent)
+            let content = try await client.loadHomeContent(
+                snapshotLimit: LocalLibraryHomeRefreshPolicy.snapshotLimit(for: source))
+            let appliedHomeContent = applyHomeContent(
+                content,
+                source: source,
+                options: .liveRefresh)
+            let cacheEntry = LocalLibraryHomeContentCacheEntry(
+                content: appliedHomeContent.content,
+                cachedAt: Date(),
+                recentlyAddedContent: appliedHomeContent.recentlyAddedContent)
+            Self.cachedHomeContent = cacheEntry
+            LocalLibraryHomeContentCache.save(cacheEntry)
+            loadedFullCategories = []
             SonosLog.info(
                 .localService,
                 "Local library refresh resolved source=\(source.rawValue) " +
@@ -183,6 +313,91 @@ final class LocalLibraryStore {
             SonosLog.error(
                 .localService,
                 "Local library refresh failed source=\(source.rawValue) error=\(type(of: error)): \(error)")
+        }
+    }
+
+    func loadCategoryIfNeeded(_ category: LocalLibraryCategory) async {
+        guard !loadedFullCategories.contains(category),
+              !loadingCategories.contains(category) else {
+            return
+        }
+
+        loadingCategories.insert(category)
+        defer { loadingCategories.remove(category) }
+
+        do {
+            authorizationStatus = try await client.authorize()
+            let categorySnapshot = try await client.loadCategorySnapshot(category)
+            applyCategorySnapshot(categorySnapshot, for: category)
+            loadedFullCategories.insert(category)
+        } catch {
+            authorizationStatus = MusicAuthorization.currentStatus
+            errorMessage = displayMessage(for: error)
+            SonosLog.error(
+                .localService,
+                "Local library category load failed category=\(category.rawValue) error=\(type(of: error)): \(error)")
+        }
+    }
+
+    @discardableResult
+    private func applyHomeContent(
+        _ content: LocalMusicHomeContent,
+        source: LocalLibraryRefreshSource,
+        options: LocalLibraryHomeContentApplicationOptions,
+        cachedRecentlyAddedContent: LocalMusicRecentlyAddedContent? = nil
+    ) -> AppliedHomeContent {
+        let shouldReplaceRecommendations = LocalLibraryRecommendationRefreshPolicy.shouldReplace(
+            existingCount: recommendations.count,
+            didLoadRecommendations: content.recommendationsLoaded)
+        let nextRecommendations = shouldReplaceRecommendations
+            ? content.recommendations
+            : recommendations
+        var appliedContent = content
+        appliedContent.recommendations = nextRecommendations
+        let nextRecentlyAddedContent = options.rebuildsRecentlyAddedContent
+            ? LocalMusicRecentlyAddedContent(snapshot: content.snapshot)
+            : cachedRecentlyAddedContent ?? LocalMusicRecentlyAddedContent()
+
+        if !shouldReplaceRecommendations {
+            SonosLog.info(
+                .localService,
+                "Keeping \(recommendations.count) existing recommendation sections after refresh skipped recommendations " +
+                    "source=\(source.rawValue) status=\(content.recommendationsLoadStatus.diagnosticDescription)")
+        }
+
+        snapshot = content.snapshot
+        recentlyAddedContent = nextRecentlyAddedContent
+        recentlyPlayed = content.recentlyPlayed
+        recommendations = nextRecommendations
+        searchSnapshot = nil
+        catalogSearchResults = LocalServiceCatalogSearchResults()
+        catalogArtworkURLStrings = [:]
+        catalogArtworkMissIDs = []
+        catalogArtworkInFlightIDs = []
+        hasLoaded = true
+        if options.schedulesCatalogArtworkLookup {
+            scheduleCatalogArtworkLookup(
+                for: appliedContent,
+                recentlyAddedContent: nextRecentlyAddedContent)
+        }
+        return AppliedHomeContent(
+            content: appliedContent,
+            recentlyAddedContent: nextRecentlyAddedContent)
+    }
+
+    private func applyCategorySnapshot(
+        _ categorySnapshot: LocalMusicLibrarySnapshot,
+        for category: LocalLibraryCategory
+    ) {
+        switch category {
+        case .songs:
+            snapshot.songs = categorySnapshot.songs
+        case .albums:
+            snapshot.albums = categorySnapshot.albums
+        case .artists:
+            snapshot.artists = categorySnapshot.artists
+        case .playlists:
+            snapshot.playlists = categorySnapshot.playlists
         }
     }
 
@@ -412,7 +627,7 @@ final class LocalLibraryStore {
                     fallbackAlbum: fallbackAlbum,
                     manager: manager,
                     searchManager: searchManager)
-            case .favorite:
+            case .favorite(_, _, _):
                 return
             case .playNext, .addToQueue:
                 let playableKind = playable?.kind.cloudType ?? "nil"
@@ -442,7 +657,7 @@ final class LocalLibraryStore {
                     didQueue = await searchManager.playNext(item: item, manager: manager)
                 case .addToQueue:
                     didQueue = await searchManager.addToQueue(item: item, manager: manager)
-                case .playNow, .startStation, .favorite:
+                case .playNow, .startStation, .favorite(_, _, _):
                     didQueue = false
                 }
 
@@ -450,6 +665,42 @@ final class LocalLibraryStore {
                     throw LocalServiceSonosPlaybackError.playbackFailed(
                         searchManager.errorMessage ?? manager.errorMessage)
                 }
+            }
+        }
+    }
+
+    func toggleSonosFavorite(
+        playable: LocalServiceAppleMusicPlayable?,
+        displayID: String,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind? = nil,
+        fallbackTitle: String? = nil,
+        fallbackArtist: String? = nil,
+        fallbackAlbum: String? = nil,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async {
+        await runPlayback(id: displayID) {
+            let item = try await resolveQueueBrowseItem(
+                playable: playable,
+                fallbackKind: fallbackKind,
+                fallbackTitle: fallbackTitle,
+                fallbackArtist: fallbackArtist,
+                fallbackAlbum: fallbackAlbum,
+                manager: manager,
+                searchManager: searchManager)
+
+            searchManager.errorMessage = nil
+            manager.errorMessage = nil
+            let didUpdate: Bool
+            if searchManager.isFavorited(item) {
+                didUpdate = await searchManager.removeFromFavorites(item: item, manager: manager)
+            } else {
+                didUpdate = await searchManager.addToFavorites(item: item, manager: manager)
+            }
+
+            guard didUpdate else {
+                throw LocalServiceSonosPlaybackError.playbackFailed(
+                    searchManager.errorMessage ?? manager.errorMessage)
             }
         }
     }
@@ -720,8 +971,11 @@ final class LocalLibraryStore {
             .flatMap(URL.init(string:))
     }
 
-    private func scheduleCatalogArtworkLookup(for content: LocalMusicHomeContent) {
-        var items = Self.artworkLookupItems(for: content.snapshot)
+    private func scheduleCatalogArtworkLookup(
+        for content: LocalMusicHomeContent,
+        recentlyAddedContent: LocalMusicRecentlyAddedContent
+    ) {
+        var items = Self.artworkLookupItems(for: recentlyAddedContent)
         items.append(contentsOf: content.recentlyPlayed.compactMap(Self.artworkLookupItem(for:)))
         for recommendation in content.recommendations {
             items.append(contentsOf: recommendation.items.compactMap(Self.artworkLookupItem(for:)))
@@ -737,28 +991,8 @@ final class LocalLibraryStore {
 
     private static func artworkLookupItems(for snapshot: LocalMusicLibrarySnapshot) -> [LocalMusicCatalogArtworkLookupItem] {
         var items: [LocalMusicCatalogArtworkLookupItem] = []
-        items.append(contentsOf: snapshot.songs.map {
-            let directArtworkURLString = Self.directArtworkURLString($0.artwork)
-            return LocalMusicCatalogArtworkLookupItem(
-                id: $0.id.rawValue,
-                kind: .song,
-                title: $0.title,
-                artist: $0.artistName,
-                album: $0.albumTitle,
-                hasMusicKitArtwork: directArtworkURLString != nil,
-                directArtworkURLString: directArtworkURLString)
-        })
-        items.append(contentsOf: snapshot.albums.map {
-            let directArtworkURLString = Self.directArtworkURLString($0.artwork)
-            return LocalMusicCatalogArtworkLookupItem(
-                id: $0.id.rawValue,
-                kind: .album,
-                title: $0.title,
-                artist: $0.artistName,
-                album: $0.title,
-                hasMusicKitArtwork: directArtworkURLString != nil,
-                directArtworkURLString: directArtworkURLString)
-        })
+        items.append(contentsOf: snapshot.songs.map(Self.artworkLookupItem(for:)))
+        items.append(contentsOf: snapshot.albums.map { Self.artworkLookupItem(for: $0) })
         items.append(contentsOf: snapshot.artists.map {
             let directArtworkURLString = Self.directArtworkURLString($0.artwork)
             return LocalMusicCatalogArtworkLookupItem(
@@ -770,21 +1004,39 @@ final class LocalLibraryStore {
                 hasMusicKitArtwork: directArtworkURLString != nil,
                 directArtworkURLString: directArtworkURLString)
         })
-        items.append(contentsOf: snapshot.playlists.map {
-            let directArtworkURLString = Self.directArtworkURLString($0.artwork)
-            return LocalMusicCatalogArtworkLookupItem(
-                id: $0.id.rawValue,
-                kind: .playlist,
-                catalogID: LocalMusicCatalogIDExtractor.playlistCatalogID(
-                    rawID: $0.id.rawValue,
-                    urlString: $0.url?.absoluteString),
-                title: $0.name,
-                artist: $0.curatorName,
-                album: nil,
-                hasMusicKitArtwork: directArtworkURLString != nil,
-                directArtworkURLString: directArtworkURLString)
-        })
+        items.append(contentsOf: snapshot.playlists.map { Self.artworkLookupItem(for: $0) })
         return items
+    }
+
+    private static func artworkLookupItems(
+        for recentlyAddedContent: LocalMusicRecentlyAddedContent
+    ) -> [LocalMusicCatalogArtworkLookupItem] {
+        recentlyAddedContent.items.map(Self.artworkLookupItem(for:))
+    }
+
+    private static func artworkLookupItem(
+        for item: LocalMusicRecentlyAddedItem
+    ) -> LocalMusicCatalogArtworkLookupItem {
+        switch item {
+        case .album(let album):
+            return artworkLookupItem(for: album)
+        case .playlist(let playlist):
+            return artworkLookupItem(for: playlist)
+        case .song(let song):
+            return artworkLookupItem(for: song)
+        }
+    }
+
+    private static func artworkLookupItem(for song: Song) -> LocalMusicCatalogArtworkLookupItem {
+        let directArtworkURLString = Self.directArtworkURLString(song.artwork)
+        return LocalMusicCatalogArtworkLookupItem(
+            id: song.id.rawValue,
+            kind: .song,
+            title: song.title,
+            artist: song.artistName,
+            album: song.albumTitle,
+            hasMusicKitArtwork: directArtworkURLString != nil,
+            directArtworkURLString: directArtworkURLString)
     }
 
     private static func artworkLookupItem(for item: RecentlyPlayedMusicItem) -> LocalMusicCatalogArtworkLookupItem? {

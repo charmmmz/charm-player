@@ -116,6 +116,7 @@ struct MusicResourceContextMenu: View {
             } label: {
                 Label(action.title, systemImage: action.systemImage)
             }
+            .disabled(!action.isEnabled)
         }
     }
 }

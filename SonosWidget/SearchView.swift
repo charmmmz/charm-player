@@ -237,6 +237,10 @@ struct SearchView: View {
         }
     }
 
+    private func toggleAppleMusicFavorite(_ item: BrowseItem) async {
+        _ = await searchManager.toggleAppleMusicFavorites(for: item)
+    }
+
     // MARK: - Browse Content
 
     private var browseContent: some View {
@@ -1256,6 +1260,7 @@ struct SearchView: View {
     private func itemContextMenu(_ item: BrowseItem) -> some View {
         let favorited = searchManager.isFavorited(item)
         let appleMusicResource = searchManager.appleMusicFavoriteResource(for: item)
+        let kind = MusicResourceKind(cloudType: item.cloudType)
 
         if item.isArtist {
             Button {
@@ -1277,8 +1282,11 @@ struct SearchView: View {
         } else if item.playbackDescriptor.hasActionSurface {
             MusicResourceContextMenu(
                 actions: MusicResourceActionPolicy.actions(
-                    kind: MusicResourceKind(cloudType: item.cloudType),
-                    isQueueable: item.playbackDescriptor.isQueueable
+                    kind: kind,
+                    isQueueable: item.playbackDescriptor.isQueueable,
+                    isSonosFavoriteActive: favorited,
+                    isAppleMusicFavoriteActive: false,
+                    isAppleMusicFavoriteAvailable: appleMusicResource != nil
                 )
             ) { action in
                 switch action {
@@ -1290,12 +1298,14 @@ struct SearchView: View {
                     Task { await searchManager.addToQueue(item: item, manager: manager) }
                 case .startStation:
                     startStationForItem(item)
-                case .favorite:
-                    handleFavoriteAction(item)
+                case .favorite(.sonos, _, _):
+                    Task { await toggleSonosFavorite(item) }
+                case .favorite(.appleMusic, _, _):
+                    Task { await toggleAppleMusicFavorite(item) }
                 }
             }
 
-            if item.playbackDescriptor.isPlayable {
+            if item.playbackDescriptor.isPlayable, kind != .song {
                 Divider()
 
                 Button {
@@ -1838,10 +1848,15 @@ struct FavoriteCategoryDetailView: View {
         }
     }
 
+    private func toggleAppleMusicFavorite(_ item: BrowseItem) async {
+        _ = await searchManager.toggleAppleMusicFavorites(for: item)
+    }
+
     @ViewBuilder
     private func contextMenu(_ item: BrowseItem) -> some View {
         let favorited = searchManager.isFavorited(item)
         let appleMusicResource = searchManager.appleMusicFavoriteResource(for: item)
+        let kind = MusicResourceKind(cloudType: item.cloudType)
 
         if item.isArtist {
             Button {
@@ -1868,8 +1883,11 @@ struct FavoriteCategoryDetailView: View {
         } else if item.playbackDescriptor.hasActionSurface {
             MusicResourceContextMenu(
                 actions: MusicResourceActionPolicy.actions(
-                    kind: MusicResourceKind(cloudType: item.cloudType),
-                    isQueueable: item.playbackDescriptor.isQueueable
+                    kind: kind,
+                    isQueueable: item.playbackDescriptor.isQueueable,
+                    isSonosFavoriteActive: favorited,
+                    isAppleMusicFavoriteActive: false,
+                    isAppleMusicFavoriteAvailable: appleMusicResource != nil
                 )
             ) { action in
                 switch action {
@@ -1886,12 +1904,14 @@ struct FavoriteCategoryDetailView: View {
                         await searchManager.startStation(item: item, manager: manager)
                         withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
                     }
-                case .favorite:
-                    handleFavoriteAction(item)
+                case .favorite(.sonos, _, _):
+                    Task { await toggleSonosFavorite(item) }
+                case .favorite(.appleMusic, _, _):
+                    Task { await toggleAppleMusicFavorite(item) }
                 }
             }
 
-            if item.playbackDescriptor.isPlayable {
+            if item.playbackDescriptor.isPlayable, kind != .song {
                 Divider()
 
                 Button {

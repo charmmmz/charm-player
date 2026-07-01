@@ -4,6 +4,8 @@ export type HttpAutoLogRequest = {
 
 const HEALTH_PATH = '/api/health';
 const ARTWORK_PATH = '/api/artwork';
+const ANIMATED_ARTWORK_URL_PATH = '/api/animated-artwork/url';
+const ANIMATED_ARTWORK_SEARCH_PATH = '/api/animated-artwork/search';
 const HUE_AMBIENCE_CONFIG_PATH = '/api/hue-ambience/config';
 const HUE_AMBIENCE_STATUS_PATH = '/api/hue-ambience/status';
 const LIVE_ACTIVITY_PREFERENCES_PATH = '/api/live-activity-preferences';
@@ -17,6 +19,8 @@ export function shouldIgnoreHttpAutoLog(req: HttpAutoLogRequest): boolean {
   const path = pathFromUrl(req.url);
   return path === HEALTH_PATH
     || path === ARTWORK_PATH
+    || path === ANIMATED_ARTWORK_URL_PATH
+    || path === ANIMATED_ARTWORK_SEARCH_PATH
     || path === HUE_AMBIENCE_CONFIG_PATH
     || path === HUE_AMBIENCE_STATUS_PATH
     || path === LIVE_ACTIVITY_PREFERENCES_PATH

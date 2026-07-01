@@ -14,6 +14,27 @@ enum SharePlaybackWaveformLayout {
     static let activeHeights: [CGFloat] = [10, 18, 13, 20, 9]
 }
 
+enum ShareSpeakerListLayout {
+    static let cardHeight: CGFloat = 82
+    static let cardSpacing: CGFloat = 10
+    static let defaultPreferredContentHeight: CGFloat = 560
+    static let nonListPreferredContentHeight: CGFloat = 156
+
+    static func listHeight(for cardCount: Int) -> CGFloat {
+        guard cardCount > 0 else { return 0 }
+        return cardHeight * CGFloat(cardCount)
+            + cardSpacing * CGFloat(cardCount - 1)
+    }
+
+    static func preferredContentHeight(for cardCount: Int) -> CGFloat {
+        guard cardCount > 0 else { return defaultPreferredContentHeight }
+        return max(
+            defaultPreferredContentHeight,
+            nonListPreferredContentHeight + listHeight(for: cardCount)
+        )
+    }
+}
+
 enum SharePlaybackVisualIndicator: Equatable, Sendable {
     case none
     case speakerSelection

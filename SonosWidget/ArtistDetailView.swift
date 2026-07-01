@@ -1,5 +1,67 @@
 import SwiftUI
 
+enum ArtistDetailArtistIDResolutionPolicy {
+    struct Candidate: Equatable {
+        let name: String
+        let objectId: String
+        let isLibraryScoped: Bool
+    }
+
+    static func shouldResolveCatalogArtist(rawArtistId: String, isAppleMusic: Bool) -> Bool {
+        isAppleMusic && !hasTrustedArtistCatalogId(rawArtistId)
+    }
+
+    static func browseArtistId(from rawId: String) -> String {
+        let decodedId = rawId.removingPercentEncoding ?? rawId
+        let base = decodedId.firstIndex(of: "#").map { String(decodedId[..<$0]) } ?? decodedId
+        let parts = base.components(separatedBy: ":")
+        guard let artistIndex = parts.firstIndex(where: { $0.caseInsensitiveCompare("artist") == .orderedSame }),
+              artistIndex < parts.index(before: parts.endIndex) else { return base }
+        return parts[artistIndex...].joined(separator: ":")
+    }
+
+    static func preferredArtistResource(candidates: [Candidate], targetName: String) -> Candidate? {
+        let targetName = normalizedArtistName(targetName)
+        let exactMatches = candidates.filter {
+            normalizedArtistName($0.name) == targetName && !$0.objectId.isEmpty
+        }
+
+        return exactMatches.first { !$0.isLibraryScoped } ?? exactMatches.first
+    }
+
+    static func isLibraryScopedArtistId(_ id: String?) -> Bool {
+        id?.lowercased().contains("library") == true
+    }
+
+    private static func hasTrustedArtistCatalogId(_ rawId: String) -> Bool {
+        let artistId = browseArtistId(from: rawId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !artistId.isEmpty,
+              !isLibraryScopedArtistId(artistId) else {
+            return false
+        }
+
+        if artistId.allSatisfy(\.isNumber) {
+            return true
+        }
+
+        let parts = artistId.split(separator: ":").map(String.init)
+        guard parts.count >= 2,
+              parts.dropLast().last?.caseInsensitiveCompare("artist") == .orderedSame,
+              let suffix = parts.last,
+              !suffix.isEmpty else {
+            return false
+        }
+
+        return suffix.allSatisfy(\.isNumber)
+    }
+
+    private static func normalizedArtistName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
 struct ArtistDetailView: View {
     let artistItem: BrowseItem
     let searchManager: SearchManager
@@ -499,8 +561,12 @@ struct ArtistDetailView: View {
 
     private func initialArtistId(token: String, householdId: String,
                                  serviceId: String, accountId: String) async throws -> String {
-        guard shouldResolveCatalogArtist(serviceId: serviceId) else {
-            return browseArtistId(from: artistItem.id)
+        let isAppleMusic = isAppleMusicCatalogArtistService(serviceId: serviceId)
+        guard ArtistDetailArtistIDResolutionPolicy.shouldResolveCatalogArtist(
+            rawArtistId: artistItem.id,
+            isAppleMusic: isAppleMusic
+        ) else {
+            return ArtistDetailArtistIDResolutionPolicy.browseArtistId(from: artistItem.id)
         }
 
         do {
@@ -510,8 +576,10 @@ struct ArtistDetailView: View {
                 term: artistItem.title, count: 20)
             guard let artistResource = preferredArtistResource(in: searchResult),
                   let rawResolvedId = artistResource.id?.objectId,
-                  !rawResolvedId.isEmpty else { return browseArtistId(from: artistItem.id) }
-            let resolvedId = browseArtistId(from: rawResolvedId)
+                  !rawResolvedId.isEmpty else {
+                return ArtistDetailArtistIDResolutionPolicy.browseArtistId(from: artistItem.id)
+            }
+            let resolvedId = ArtistDetailArtistIDResolutionPolicy.browseArtistId(from: rawResolvedId)
             resolvedArtistImageURL = artistResource.images?.first?.url
             logArtworkSelection(trigger: "artistIdResolution")
 
@@ -523,11 +591,11 @@ struct ArtistDetailView: View {
             throw CancellationError()
         } catch {
             SonosLog.debug(.artistDetail, "Artist id resolution failed: \(error)")
-            return browseArtistId(from: artistItem.id)
+            return ArtistDetailArtistIDResolutionPolicy.browseArtistId(from: artistItem.id)
         }
     }
 
-    private func shouldResolveCatalogArtist(serviceId: String) -> Bool {
+    private func isAppleMusicCatalogArtistService(serviceId: String) -> Bool {
         if let account = searchManager.linkedAccounts.first(where: { $0.serviceId == serviceId }),
            PlaybackSource.from(serviceName: account.displayName) == .appleMusic {
             return true
@@ -551,32 +619,27 @@ struct ArtistDetailView: View {
     }
 
     private func preferredArtistResource(in result: SonosCloudAPI.ServiceSearchResponse) -> SonosCloudAPI.CloudResource? {
-        let artists = result.allResources.filter { $0.type == "ARTIST" }
-        let targetName = normalizedArtistName(artistItem.title)
-        let exactMatches = artists.filter { normalizedArtistName($0.name ?? "") == targetName }
+        let artistResources = result.allResources.filter { $0.type == "ARTIST" }
+        let candidates = artistResources.compactMap { resource -> ArtistDetailArtistIDResolutionPolicy.Candidate? in
+            guard let objectId = resource.id?.objectId else { return nil }
+            return ArtistDetailArtistIDResolutionPolicy.Candidate(
+                name: resource.name ?? "",
+                objectId: objectId,
+                isLibraryScoped: ArtistDetailArtistIDResolutionPolicy.isLibraryScopedArtistId(objectId)
+            )
+        }
 
-        return exactMatches.first { !isLibraryScopedArtistId($0.id?.objectId) }
-            ?? exactMatches.first
-            ?? artists.first { !isLibraryScopedArtistId($0.id?.objectId) }
-            ?? artists.first
-    }
-
-    private func normalizedArtistName(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    }
-
-    private func isLibraryScopedArtistId(_ id: String?) -> Bool {
-        id?.lowercased().contains("library") == true
-    }
-
-    private func browseArtistId(from rawId: String) -> String {
-        let decodedId = rawId.removingPercentEncoding ?? rawId
-        let base = decodedId.firstIndex(of: "#").map { String(decodedId[..<$0]) } ?? decodedId
-        let parts = base.components(separatedBy: ":")
-        guard let artistIndex = parts.firstIndex(where: { $0.caseInsensitiveCompare("artist") == .orderedSame }),
-              artistIndex < parts.index(before: parts.endIndex) else { return base }
-        return parts[artistIndex...].joined(separator: ":")
+        guard let selected = ArtistDetailArtistIDResolutionPolicy.preferredArtistResource(
+            candidates: candidates,
+            targetName: artistItem.title
+        ) else {
+            return nil
+        }
+        return artistResources.first {
+            $0.id?.objectId == selected.objectId && ($0.name ?? "") == selected.name
+        } ?? artistResources.first {
+            $0.id?.objectId == selected.objectId
+        }
     }
 
     private func searchFallback(token: String, householdId: String,
@@ -600,7 +663,7 @@ struct ArtistDetailView: View {
                 useDiscographyFallback(albumsByArtist)
                 return
             }
-            let correctId = browseArtistId(from: rawCorrectId)
+            let correctId = ArtistDetailArtistIDResolutionPolicy.browseArtistId(from: rawCorrectId)
             resolvedArtistImageURL = artistResource.images?.first?.url
             logArtworkSelection(trigger: "searchFallbackArtistResource")
 

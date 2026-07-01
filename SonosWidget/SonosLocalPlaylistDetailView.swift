@@ -303,46 +303,53 @@ struct SonosLocalPlaylistDetailView: View {
     @ViewBuilder
     private func trackContextMenu(_ track: BrowseItem) -> some View {
         let trackFavorited = searchManager.isFavorited(track)
+        let appleMusicResource = searchManager.appleMusicFavoriteResource(for: track)
 
-        Button { playTrack(track) } label: {
-            Label("Play Now", systemImage: "play.fill")
+        MusicResourceContextMenu(
+            actions: MusicResourceActionPolicy.actions(
+                kind: .song,
+                isQueueable: track.uri != nil,
+                isSonosFavoriteActive: trackFavorited,
+                isAppleMusicFavoriteActive: false,
+                isAppleMusicFavoriteAvailable: appleMusicResource != nil
+            )
+        ) { action in
+            performTrackMenuAction(action, track: track)
         }
+    }
 
-        if track.uri != nil {
-            Button {
-                Task {
-                    await searchManager.playNext(item: track, manager: manager)
-                    showToast("Playing next")
-                }
-            } label: {
-                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+    private func performTrackMenuAction(_ action: MusicResourceMenuAction, track: BrowseItem) {
+        switch action {
+        case .playNow:
+            playTrack(track)
+        case .playNext:
+            Task {
+                await searchManager.playNext(item: track, manager: manager)
+                showToast("Playing next")
             }
-
-            Button {
-                Task {
-                    await searchManager.addToQueue(item: track, manager: manager)
-                    showToast("Added to queue")
-                }
-            } label: {
-                Label("Add to Queue", systemImage: "text.badge.plus")
+        case .addToQueue:
+            Task {
+                await searchManager.addToQueue(item: track, manager: manager)
+                showToast("Added to queue")
             }
-
-            Divider()
-
-            Button {
-                Task {
-                    if trackFavorited {
-                        let ok = await searchManager.removeFromFavorites(item: track, manager: manager)
-                        showToast(ok ? "Removed from Favorites" : "Failed to remove")
-                    } else {
-                        let ok = await searchManager.addToFavorites(item: track, manager: manager)
-                        showToast(ok ? "Added to Favorites" : "Failed to add")
-                    }
+        case .favorite(.sonos, _, _):
+            Task {
+                let trackFavorited = searchManager.isFavorited(track)
+                if trackFavorited {
+                    let ok = await searchManager.removeFromFavorites(item: track, manager: manager)
+                    showToast(ok ? "Removed from Favorites" : "Failed to remove")
+                } else {
+                    let ok = await searchManager.addToFavorites(item: track, manager: manager)
+                    showToast(ok ? "Added to Favorites" : "Failed to add")
                 }
-            } label: {
-                Label(trackFavorited ? "Remove from Sonos Favorites" : "Add to Sonos Favorites",
-                      systemImage: trackFavorited ? "heart.slash" : "heart")
             }
+        case .favorite(.appleMusic, _, _):
+            Task {
+                let ok = await searchManager.toggleAppleMusicFavorites(for: track)
+                showToast(ok ? "Updated Apple Music Favorites" : "Failed to update Apple Music")
+            }
+        case .startStation:
+            break
         }
     }
 

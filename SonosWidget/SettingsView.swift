@@ -1,4 +1,117 @@
 import SwiftUI
+import UIKit
+
+enum SettingsDetailFormLayout {
+    static func bottomContentInset(
+        isMiniPlayerVisible: Bool,
+        usesSystemAccessory: Bool
+    ) -> CGFloat {
+        guard usesSystemAccessory else { return 0 }
+        return MiniPlayerLayoutMetrics.systemAccessoryContentBottomInset(
+            isMiniPlayerVisible: isMiniPlayerVisible
+        )
+    }
+}
+
+enum LiveActivitySettingsPresentation {
+    static let sectionTitle = "Live Activity"
+    static let footer = "Choose how playback controls appear on the Lock Screen."
+}
+
+enum HueLightingRelayPresentation {
+    static let sectionTitle = "NAS Relay"
+    static let footer = "Leave the URL blank to auto-discover NAS Relay. Hue Ambience owns lighting setup updates."
+
+    static func statusRows(
+        relayStatus: RelayManager.Status,
+        syncStatus: RelayManager.HueAmbienceSyncStatus,
+        hasBridge: Bool,
+        assignmentCount: Int
+    ) -> [HueAmbienceStatusChip] {
+        [
+            connectionRow(relayStatus),
+            lightingSetupRow(syncStatus: syncStatus, hasBridge: hasBridge, assignmentCount: assignmentCount),
+        ]
+    }
+
+    private static func connectionRow(_ status: RelayManager.Status) -> HueAmbienceStatusChip {
+        switch status {
+        case .disabled:
+            return HueAmbienceStatusChip(
+                title: "Connection",
+                value: "Not Set",
+                tone: .neutral,
+                detail: "Enter a relay URL or leave it blank for auto-discovery."
+            )
+        case .probing:
+            return HueAmbienceStatusChip(title: "Connection", value: "Checking", tone: .working, detail: nil)
+        case .connected:
+            return HueAmbienceStatusChip(title: "Connection", value: "Connected", tone: .ready, detail: nil)
+        case .unreachable(let reason):
+            return HueAmbienceStatusChip(title: "Connection", value: "Offline", tone: .critical, detail: reason)
+        }
+    }
+}
+
+enum HueLightingRelayAutoSyncPolicy {
+    static func shouldSyncAfterConnection(
+        relayStatus: RelayManager.Status,
+        hasBridge: Bool,
+        assignmentCount: Int,
+        syncStatus: RelayManager.HueAmbienceSyncStatus
+    ) -> Bool {
+        guard case .connected = relayStatus,
+              hasBridge,
+              assignmentCount > 0,
+              syncStatus != .syncing else {
+            return false
+        }
+
+        return true
+    }
+}
+
+private extension HueLightingRelayPresentation {
+    private static func lightingSetupRow(
+        syncStatus: RelayManager.HueAmbienceSyncStatus,
+        hasBridge: Bool,
+        assignmentCount: Int
+    ) -> HueAmbienceStatusChip {
+        guard hasBridge else {
+            return HueAmbienceStatusChip(
+                title: "Lighting Setup",
+                value: "Needs Bridge",
+                tone: .neutral,
+                detail: "Pair a Hue Bridge before updating the relay."
+            )
+        }
+
+        guard assignmentCount > 0 else {
+            return HueAmbienceStatusChip(
+                title: "Lighting Setup",
+                value: "Needs Rooms",
+                tone: .neutral,
+                detail: "Choose which Hue rooms follow each speaker first."
+            )
+        }
+
+        switch syncStatus {
+        case .idle:
+            return HueAmbienceStatusChip(title: "Lighting Setup", value: "Not Updated", tone: .neutral, detail: nil)
+        case .syncing:
+            return HueAmbienceStatusChip(title: "Lighting Setup", value: "Updating", tone: .working, detail: nil)
+        case .synced:
+            return HueAmbienceStatusChip(title: "Lighting Setup", value: "Updated", tone: .ready, detail: nil)
+        case .failed(let reason):
+            return HueAmbienceStatusChip(
+                title: "Lighting Setup",
+                value: "Could Not Update",
+                tone: .critical,
+                detail: reason
+            )
+        }
+    }
+}
 
 /// Consolidated Settings tab. Groups Sonos account, speakers, external
 /// connections, feature settings, diagnostics, and about-app rows into one
@@ -25,6 +138,7 @@ struct SettingsView: View {
     @State private var musicAmbienceSetupPresentation = MusicAmbienceSetupPresentationState()
     @State private var settingsPath: [SettingsHubDestination] = []
     @State private var liveActivityStyle: LiveActivityStyle = SharedStorage.liveActivityStyle
+    @State private var lastHueRelayAutoSyncKey: String?
 
     var body: some View {
         NavigationStack(path: $settingsPath) {
@@ -46,8 +160,14 @@ struct SettingsView: View {
             .onAppear {
                 relayURLDraft = relay.urlString
                 liveActivityStyle = SharedStorage.liveActivityStyle
-                Task { await relay.probeNow() }
+                Task {
+                    await relay.probeNow()
+                    await autoSyncHueLightingSetupIfNeeded()
+                }
                 musicAmbience.refreshStatus()
+            }
+            .onChange(of: relay.status) { _, _ in
+                Task { await autoSyncHueLightingSetupIfNeeded() }
             }
         }
         .toolbar {
@@ -97,15 +217,16 @@ struct SettingsView: View {
                     store: hueStore,
                     manager: musicAmbience,
                     sonosSpeakers: displayedSpeakers,
+                    playbackSnapshot: manager.musicAmbienceSnapshot(),
                     presentSetup: {
-                        settingsPath.append(.externalConnection)
+                        musicAmbienceSetupPresentation.present()
                     }
                 )
             }
         case .externalConnection:
             settingsDetailForm(title: destination.title) {
-                hueBridgeSetupSection
                 liveActivitySection
+                hueLightingRelaySection
             }
         case .diagnostics:
             settingsDetailForm(title: destination.title) {
@@ -128,6 +249,7 @@ struct SettingsView: View {
         .background {
             backgroundLayer.ignoresSafeArea()
         }
+        .settingsDetailMiniPlayerContentInset(manager: manager)
         .preferredColorScheme(.dark)
     }
 
@@ -136,9 +258,9 @@ struct SettingsView: View {
         case .sonos:
             return "\(sonosAccountStatusSummary) · \(speakersStatusSummary)"
         case .hueAmbience:
-            return musicAmbienceStatusSummary
+            return hueAmbienceHubStatusSummary
         case .externalConnection:
-            return "\(hueBridgeStatusSummary) · Activity \(liveActivityStyle.displayName) · Relay \(relayStatusTitle)"
+            return "Activity \(liveActivityStyle.displayName) · Relay \(relayStatusTitle)"
         case .diagnostics:
             return "Local logs · category filters"
         }
@@ -169,22 +291,21 @@ struct SettingsView: View {
         }
     }
 
-    private var musicAmbienceStatusSummary: String {
-        guard hueStore.bridge != nil else {
-            return musicAmbience.status.title
+    private var hueAmbienceHubStatusSummary: String {
+        guard let bridge = hueStore.bridge else {
+            return "Bridge not paired · Lighting \(hueAmbienceLightingStatusValue)"
         }
 
         let assignmentCount = hueStore.mappings.count
         let assignments = assignmentCount == 1 ? "1 assignment" : "\(assignmentCount) assignments"
-        return "\(musicAmbience.status.title) · \(assignments)"
+        return "Lighting \(hueAmbienceLightingStatusValue) · \(bridge.name) · \(assignments)"
     }
 
-    private var hueBridgeStatusSummary: String {
-        guard let bridge = hueStore.bridge else {
-            return "Bridge not paired"
-        }
-
-        return "\(bridge.name) · \(hueStore.mappings.count) assignment\(hueStore.mappings.count == 1 ? "" : "s")"
+    private var hueAmbienceLightingStatusValue: String {
+        HueAmbienceStatusPresentation.lightingStatusValue(
+            musicAmbience.status,
+            relayActiveGroups: relay.hueAmbienceActiveGroups
+        )
     }
 
     private var musicAmbienceSetupBinding: Binding<Bool> {
@@ -516,50 +637,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - External Connection
-
-    @ViewBuilder
-    private var hueBridgeSetupSection: some View {
-        Section {
-            if let bridge = hueStore.bridge {
-                LabeledContent("Bridge", value: "\(bridge.name) · \(bridge.ipAddress)")
-                LabeledContent("Assignments", value: "\(hueStore.mappings.count)")
-            } else {
-                Label("No Hue Bridge paired", systemImage: "lightbulb.slash")
-                    .foregroundStyle(.secondary)
-            }
-
-            Button {
-                musicAmbienceSetupPresentation.present()
-            } label: {
-                Label(
-                    hueStore.bridge == nil ? "Set Up Hue Bridge" : "Manage Hue Bridge",
-                    systemImage: "link.badge.plus"
-                )
-            }
-        } header: {
-            Text("Hue Bridge")
-        } footer: {
-            Text("Pair, refresh, remove, or re-pair your Hue Bridge here. Music ambience uses Hue CLIP v2 color updates.")
-        }
-    }
-
-    private func syncHueConfigAfterHubChange() {
-        guard relay.url != nil, hueStore.bridge != nil else {
-            return
-        }
-        guard !hueStore.mappings.isEmpty else {
-            return
-        }
-        Task {
-            await relay.pushHueAmbienceConfig(
-                store: hueStore,
-                sonosSpeakers: displayedSpeakers
-            )
-        }
-    }
-
-    // MARK: - Live Activity
+    // MARK: - Live Activity & Relay
 
     private var liveActivityStyleBinding: Binding<LiveActivityStyle> {
         Binding {
@@ -599,6 +677,16 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
 
+        } header: {
+            Text(LiveActivitySettingsPresentation.sectionTitle)
+        } footer: {
+            Text(LiveActivitySettingsPresentation.footer)
+        }
+    }
+
+    @ViewBuilder
+    private var hueLightingRelaySection: some View {
+        Section {
             TextField("Auto-discover, or enter http://192.168.50.10:8787", text: $relayURLDraft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -622,15 +710,83 @@ struct SettingsView: View {
             } label: {
                 Label("Test Connection", systemImage: "antenna.radiowaves.left.and.right")
             }
+
+            ForEach(hueLightingRelayRows) { row in
+                HueLightingRelayStatusRow(row: row)
+            }
         } header: {
-            Text("Live Activity")
+            Text(HueLightingRelayPresentation.sectionTitle)
         } footer: {
-            Text("""
-                 Rich style uses the music card for music and switches to the \
-                 TV remote when the source is live TV. Leave the relay URL blank \
-                 to auto-discover `nas-relay/`; enter a URL only when Bonjour is \
-                 unavailable, the relay is on another subnet, or you use a tunnel.
-                 """)
+            Text(HueLightingRelayPresentation.footer)
+        }
+    }
+
+    private var hueLightingRelayRows: [HueAmbienceStatusChip] {
+        HueLightingRelayPresentation.statusRows(
+            relayStatus: relay.status,
+            syncStatus: relay.hueAmbienceSyncStatus,
+            hasBridge: hueStore.bridge != nil,
+            assignmentCount: hueStore.mappings.count
+        )
+    }
+
+    private var hueRelayAutoSyncKey: String? {
+        guard let relayURL = relay.url?.absoluteString,
+              let bridgeID = hueStore.bridge?.id,
+              !hueStore.mappings.isEmpty else {
+            return nil
+        }
+
+        let mappingsKey = hueStore.mappings
+            .map { mapping in
+                [
+                    mapping.sonosID,
+                    mapping.preferredTarget?.stableKey ?? "none",
+                    mapping.fallbackTarget?.stableKey ?? "none",
+                    mapping.includedLightIDs.sorted().joined(separator: ","),
+                    mapping.excludedLightIDs.sorted().joined(separator: ","),
+                    mapping.capability.rawValue,
+                ].joined(separator: ":")
+            }
+            .sorted()
+            .joined(separator: "|")
+
+        return [
+            relayURL,
+            bridgeID,
+            String(hueStore.isEnabled),
+            hueStore.groupStrategy.rawValue,
+            hueStore.stopBehavior.rawValue,
+            hueStore.motionStyle.rawValue,
+            hueStore.flowSpeed.rawValue,
+            String(hueStore.brightnessLevel),
+            String(hueStore.saturationLevel),
+            mappingsKey,
+            String(hueStore.hueAreas.count),
+            String(hueStore.hueLights.count),
+        ].joined(separator: "||")
+    }
+
+    private func autoSyncHueLightingSetupIfNeeded() async {
+        guard HueLightingRelayAutoSyncPolicy.shouldSyncAfterConnection(
+            relayStatus: relay.status,
+            hasBridge: hueStore.bridge != nil,
+            assignmentCount: hueStore.mappings.count,
+            syncStatus: relay.hueAmbienceSyncStatus
+        ),
+        let syncKey = hueRelayAutoSyncKey,
+        lastHueRelayAutoSyncKey != syncKey else {
+            return
+        }
+
+        lastHueRelayAutoSyncKey = syncKey
+        await relay.pushHueAmbienceConfig(
+            store: hueStore,
+            sonosSpeakers: displayedSpeakers
+        )
+
+        if case .failed = relay.hueAmbienceSyncStatus {
+            lastHueRelayAutoSyncKey = nil
         }
     }
 
@@ -765,6 +921,99 @@ struct SettingsView: View {
         let v = info?["CFBundleShortVersionString"] as? String ?? "—"
         let b = info?["CFBundleVersion"] as? String ?? "—"
         return "\(v) (\(b))"
+    }
+}
+
+private struct SettingsDetailMiniPlayerContentInset: ViewModifier {
+    @Bindable var manager: SonosManager
+    @State private var isKeyboardVisible = false
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: SettingsDetailFormLayout.bottomContentInset(
+                    isMiniPlayerVisible: manager.isConfigured
+                        && !manager.showFullPlayer
+                        && !isKeyboardVisible,
+                    usesSystemAccessory: true
+                ))
+                .allowsHitTesting(false)
+                .onReceive(NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardWillShowNotification)) { _ in
+                    isKeyboardVisible = true
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardWillHideNotification)) { _ in
+                    isKeyboardVisible = false
+                }
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func settingsDetailMiniPlayerContentInset(manager: SonosManager) -> some View {
+        if #available(iOS 26.0, *) {
+            modifier(SettingsDetailMiniPlayerContentInset(manager: manager))
+        } else {
+            self
+        }
+    }
+}
+
+private extension HueAmbienceTarget {
+    var stableKey: String {
+        switch self {
+        case .entertainmentArea(let id):
+            return "entertainmentArea:\(id)"
+        case .room(let id):
+            return "room:\(id)"
+        case .zone(let id):
+            return "zone:\(id)"
+        case .light(let id):
+            return "light:\(id)"
+        }
+    }
+}
+
+private struct HueLightingRelayStatusRow: View {
+    let row: HueAmbienceStatusChip
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(row.tone.color)
+                .frame(width: 10, height: 10)
+                .padding(.top, 5)
+                .overlay(alignment: .top) {
+                    if row.tone == .working {
+                        Circle()
+                            .stroke(row.tone.color.opacity(0.55), lineWidth: 1)
+                            .frame(width: 16, height: 16)
+                            .padding(.top, 2)
+                    }
+                }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(row.title)
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    Text(row.value)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let detail = row.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(row.title): \(row.value)")
     }
 }
 

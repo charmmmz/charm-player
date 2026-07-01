@@ -10,6 +10,8 @@ protocol HueAmbienceStorage: AnyObject {
     var stopBehaviorRaw: String? { get set }
     var motionStyleRaw: String? { get set }
     var flowSpeedRaw: String? { get set }
+    var brightnessLevel: Double? { get set }
+    var saturationLevel: Double? { get set }
     var statusText: String? { get set }
 }
 
@@ -148,6 +150,38 @@ final class HueAmbienceDefaults: HueAmbienceStorage {
         }
     }
 
+    var brightnessLevel: Double? {
+        get {
+            if let defaults {
+                return defaults.object(forKey: "hueBrightnessLevel") as? Double
+            }
+            return SharedStorage.hueBrightnessLevel
+        }
+        set {
+            if let defaults {
+                updateOptional(newValue, forKey: "hueBrightnessLevel", in: defaults)
+            } else {
+                SharedStorage.hueBrightnessLevel = newValue
+            }
+        }
+    }
+
+    var saturationLevel: Double? {
+        get {
+            if let defaults {
+                return defaults.object(forKey: "hueSaturationLevel") as? Double
+            }
+            return SharedStorage.hueSaturationLevel
+        }
+        set {
+            if let defaults {
+                updateOptional(newValue, forKey: "hueSaturationLevel", in: defaults)
+            } else {
+                SharedStorage.hueSaturationLevel = newValue
+            }
+        }
+    }
+
     var statusText: String? {
         get {
             if let defaults {
@@ -241,6 +275,30 @@ final class HueAmbienceStore {
         }
     }
 
+    var brightnessLevel: Double {
+        didSet {
+            let clamped = HueAmbienceToneControl.clampedBrightness(brightnessLevel)
+            if brightnessLevel != clamped {
+                brightnessLevel = clamped
+            }
+            storage.brightnessLevel = clamped
+        }
+    }
+
+    var saturationLevel: Double {
+        didSet {
+            let clamped = HueAmbienceToneControl.clampedSaturation(saturationLevel)
+            if saturationLevel != clamped {
+                saturationLevel = clamped
+            }
+            storage.saturationLevel = clamped
+        }
+    }
+
+    var toneControl: HueAmbienceToneControl {
+        HueAmbienceToneControl(brightness: brightnessLevel, saturation: saturationLevel)
+    }
+
     var statusText: String? {
         didSet {
             storage.statusText = statusText
@@ -269,6 +327,10 @@ final class HueAmbienceStore {
             .flatMap(HueAmbienceMotionStyle.init(rawValue:)) ?? .default
         self.flowSpeed = storage.flowSpeedRaw
             .flatMap(HueAmbienceFlowSpeed.init(rawValue:)) ?? .default
+        self.brightnessLevel = storage.brightnessLevel
+            .map(HueAmbienceToneControl.clampedBrightness) ?? HueAmbienceToneControl.defaultBrightness
+        self.saturationLevel = storage.saturationLevel
+            .map(HueAmbienceToneControl.clampedSaturation) ?? HueAmbienceToneControl.defaultSaturation
         self.statusText = storage.statusText
 
         if hueResources != (decodedResources ?? .empty) {

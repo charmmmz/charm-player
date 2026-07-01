@@ -16,6 +16,7 @@ private struct DefaultHueAmbienceResourceFetcher: HueAmbienceResourceFetching {
 @Observable
 final class MusicAmbienceManager {
     static let shared = MusicAmbienceManager()
+    static let relayControlStatusTitle = "NAS Relay controlling Hue Ambience"
 
     enum Status: Equatable {
         case disabled
@@ -83,7 +84,7 @@ final class MusicAmbienceManager {
             setStatus(.unconfigured)
         } else if shouldDeferLocalHueAmbience {
             resetRenderState()
-            setStatus(.syncing("NAS Relay controlling Hue Ambience"))
+            setStatus(.syncing(Self.relayControlStatusTitle))
         } else {
             refreshHueResourcesIfNeeded(for: store.mappings)
             setStatus(.idle)
@@ -123,7 +124,7 @@ final class MusicAmbienceManager {
         }
         guard !shouldDeferLocalHueAmbience else {
             resetRenderState()
-            setStatus(snapshot.isPlaying ? .syncing("NAS Relay controlling Hue Ambience") : .idle)
+            setStatus(snapshot.isPlaying ? .syncing(Self.relayControlStatusTitle) : .idle)
             return
         }
         guard snapshot.isPlaying else {

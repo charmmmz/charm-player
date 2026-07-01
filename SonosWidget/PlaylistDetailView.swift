@@ -1,5 +1,32 @@
 import SwiftUI
 
+enum PlaylistDetailTrackSlotKind: Equatable {
+    case loaded(trackIndex: Int)
+    case placeholder(rowNumber: Int)
+}
+
+enum PlaylistDetailTrackListPresentation {
+    static let initialSkeletonCount = 12
+
+    static func displayedSlotCount(
+        loadedTrackCount: Int,
+        reportedTotal: Int?,
+        allPagesLoaded: Bool
+    ) -> Int {
+        guard !allPagesLoaded, let reportedTotal else {
+            return loadedTrackCount
+        }
+        return max(loadedTrackCount, reportedTotal)
+    }
+
+    static func slotKind(at index: Int, loadedTrackCount: Int) -> PlaylistDetailTrackSlotKind {
+        if index < loadedTrackCount {
+            return .loaded(trackIndex: index)
+        }
+        return .placeholder(rowNumber: index + 1)
+    }
+}
+
 struct PlaylistDetailView: View {
     let playlistItem: BrowseItem
     let searchManager: SearchManager
@@ -40,6 +67,16 @@ struct PlaylistDetailView: View {
     private var tracks: [SonosCloudAPI.AlbumTrackItem] {
         let base = response?.tracks?.items ?? response?.section?.items ?? []
         return extraTracks.isEmpty ? base : base + extraTracks
+    }
+    private var reportedTrackTotal: Int? {
+        response?.tracks?.total ?? response?.section?.total
+    }
+    private var trackListSlotCount: Int {
+        PlaylistDetailTrackListPresentation.displayedSlotCount(
+            loadedTrackCount: tracks.count,
+            reportedTotal: reportedTrackTotal,
+            allPagesLoaded: allPagesLoaded
+        )
     }
     private var appleMusicArtworkResource: AppleMusicFavoriteResource? {
         AppleMusicDetailArtworkLink.resource(
@@ -195,7 +232,7 @@ struct PlaylistDetailView: View {
                     .padding(.top, subtitleText.count > 80 ? 4 : 0)
                 }
 
-                if let total = response?.tracks?.total ?? response?.section?.total {
+                if let total = reportedTrackTotal {
                     Text(playlistSubtitle(trackCount: total))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -308,25 +345,83 @@ struct PlaylistDetailView: View {
 
     @ViewBuilder
     private var trackList: some View {
-        if isLoading {
-            ProgressView()
-                .padding(.top, 40)
+        if isLoading && tracks.isEmpty {
+            LazyVStack(spacing: 0) {
+                ForEach(0..<PlaylistDetailTrackListPresentation.initialSkeletonCount, id: \.self) { idx in
+                    placeholderTrackRow(rowNumber: idx + 1, isLast: idx == PlaylistDetailTrackListPresentation.initialSkeletonCount - 1)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 32)
         } else if let err = errorText {
             ContentUnavailableView("Failed to Load",
                                    systemImage: "exclamationmark.triangle",
                                    description: Text(err))
         } else {
             LazyVStack(spacing: 0) {
-                ForEach(Array(tracks.enumerated()), id: \.offset) { idx, track in
-                    if track.isBrowsable {
-                        containerRow(track, isLast: idx == tracks.count - 1)
-                    } else {
-                        trackRow(track, index: idx + 1, isLast: idx == tracks.count - 1)
+                ForEach(0..<trackListSlotCount, id: \.self) { idx in
+                    switch PlaylistDetailTrackListPresentation.slotKind(at: idx, loadedTrackCount: tracks.count) {
+                    case .loaded(let trackIndex):
+                        if tracks.indices.contains(trackIndex) {
+                            let track = tracks[trackIndex]
+                            if track.isBrowsable {
+                                containerRow(track, isLast: idx == trackListSlotCount - 1)
+                            } else {
+                                trackRow(track, index: idx + 1, isLast: idx == trackListSlotCount - 1)
+                            }
+                        } else {
+                            placeholderTrackRow(rowNumber: idx + 1, isLast: idx == trackListSlotCount - 1)
+                        }
+                    case .placeholder(let rowNumber):
+                        placeholderTrackRow(rowNumber: rowNumber, isLast: idx == trackListSlotCount - 1)
                     }
                 }
             }
             .padding(.horizontal)
             .padding(.bottom, 32)
+        }
+    }
+
+    private func placeholderTrackRow(rowNumber: Int, isLast: Bool) -> some View {
+        let titleWidth: CGFloat = switch rowNumber % 4 {
+        case 0: 190
+        case 1: 230
+        case 2: 160
+        default: 210
+        }
+        let subtitleWidth: CGFloat = switch rowNumber % 3 {
+        case 0: 120
+        case 1: 155
+        default: 95
+        }
+
+        return HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(.tertiarySystemFill))
+                .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 7) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: titleWidth, height: 14)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(.tertiarySystemFill).opacity(0.75))
+                    .frame(width: subtitleWidth, height: 10)
+            }
+
+            Spacer()
+
+            Circle()
+                .fill(Color(.tertiarySystemFill).opacity(0.75))
+                .frame(width: 24, height: 24)
+        }
+        .padding(.vertical, 6)
+        .redacted(reason: .placeholder)
+        .accessibilityHidden(true)
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Divider().padding(.leading, 60)
+            }
         }
     }
 
@@ -474,29 +569,37 @@ struct PlaylistDetailView: View {
     private func trackContextMenu(_ track: SonosCloudAPI.AlbumTrackItem) -> some View {
         let item = browseItemFromTrack(track)
         let trackFavorited = searchManager.isFavorited(item)
+        let appleMusicResource = searchManager.appleMusicFavoriteResource(for: item)
 
-        Button { playTrack(track) } label: {
-            Label("Play Now", systemImage: "play.fill")
+        MusicResourceContextMenu(
+            actions: AlbumTrackMenuActionPolicy.songActions(
+                isSonosFavoriteActive: trackFavorited,
+                isAppleMusicFavoriteActive: false,
+                isQueueable: item.playbackDescriptor.isQueueable,
+                isAppleMusicFavoriteAvailable: appleMusicResource != nil
+            )
+        ) { action in
+            performTrackMenuAction(action, track: track, item: item)
         }
+    }
 
-        Button {
+    private func performTrackMenuAction(
+        _ action: MusicResourceMenuAction,
+        track: SonosCloudAPI.AlbumTrackItem,
+        item: BrowseItem
+    ) {
+        switch action {
+        case .playNow:
+            playTrack(track)
+        case .playNext:
             Task { await searchManager.playNext(item: item, manager: manager) }
             showToast("Playing next")
-        } label: {
-            Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-        }
-
-        Button {
+        case .addToQueue:
             Task { await searchManager.addToQueue(item: item, manager: manager) }
             showToast("Added to queue")
-        } label: {
-            Label("Add to Queue", systemImage: "text.badge.plus")
-        }
-
-        Divider()
-
-        Button {
+        case .favorite(.sonos, _, _):
             Task {
+                let trackFavorited = searchManager.isFavorited(item)
                 if trackFavorited {
                     let ok = await searchManager.removeFromFavorites(item: item, manager: manager)
                     showToast(ok ? "Removed from Favorites" : "Failed to remove")
@@ -505,9 +608,13 @@ struct PlaylistDetailView: View {
                     showToast(ok ? "Added to Favorites" : "Failed to add")
                 }
             }
-        } label: {
-            Label(trackFavorited ? "Remove from Sonos Favorites" : "Add to Sonos Favorites",
-                  systemImage: trackFavorited ? "heart.slash" : "heart")
+        case .favorite(.appleMusic, _, _):
+            Task {
+                let ok = await searchManager.toggleAppleMusicFavorites(for: item)
+                showToast(ok ? "Updated Apple Music Favorites" : "Failed to update Apple Music")
+            }
+        case .startStation:
+            break
         }
     }
 

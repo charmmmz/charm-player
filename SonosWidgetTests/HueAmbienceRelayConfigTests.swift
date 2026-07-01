@@ -11,6 +11,8 @@ final class HueAmbienceRelayConfigTests: XCTestCase {
         let store = HueAmbienceStore(storage: HueAmbienceDefaults(defaults: defaults))
         store.isEnabled = true
         store.flowSpeed = .fast
+        store.brightnessLevel = 0.7
+        store.saturationLevel = 0.6
         store.bridge = HueBridgeInfo(id: "bridge-1", ipAddress: "192.168.50.216", name: "Hue Bridge")
         store.updateResources(HueBridgeResources(
             lights: [
@@ -77,6 +79,9 @@ final class HueAmbienceRelayConfigTests: XCTestCase {
         XCTAssertEqual(preferredTarget["kind"] as? String, "entertainmentArea")
         XCTAssertEqual(preferredTarget["id"] as? String, "ent-1")
         XCTAssertEqual(object["flowIntervalSeconds"] as? Double, 4)
+        let toneControl = try XCTUnwrap(object["toneControl"] as? [String: Any])
+        XCTAssertEqual(toneControl["brightness"] as? Double, 0.7)
+        XCTAssertEqual(toneControl["saturation"] as? Double, 0.6)
 
         let resources = try XCTUnwrap(object["resources"] as? [String: Any])
         let areas = try XCTUnwrap(resources["areas"] as? [[String: Any]])

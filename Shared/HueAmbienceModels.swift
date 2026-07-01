@@ -145,6 +145,33 @@ enum HueAmbienceFlowSpeed: String, Codable, Equatable, Sendable, CaseIterable {
     }
 }
 
+struct HueAmbienceToneControl: Codable, Equatable, Sendable {
+    static let defaultBrightness = 1.0
+    static let defaultSaturation = 1.0
+    static let brightnessRange: ClosedRange<Double> = 0.55...1.2
+    static let saturationRange: ClosedRange<Double> = 0.55...1.12
+
+    let brightness: Double
+    let saturation: Double
+
+    init(brightness: Double, saturation: Double) {
+        self.brightness = Self.clampedBrightness(brightness)
+        self.saturation = Self.clampedSaturation(saturation)
+    }
+
+    static func clampedBrightness(_ value: Double) -> Double {
+        min(max(value, brightnessRange.lowerBound), brightnessRange.upperBound)
+    }
+
+    static func clampedSaturation(_ value: Double) -> Double {
+        min(max(value, saturationRange.lowerBound), saturationRange.upperBound)
+    }
+
+    static func percentLabel(for value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+}
+
 enum HueLiveEntertainmentRuntimeStatus: Equatable, Sendable {
     case unavailable
     case ready(String)
@@ -187,6 +214,75 @@ enum HueAmbienceRelayRenderMode: String, Codable, Equatable, Sendable {
     case clipFallback
     case streamingReady
     case entertainmentStreaming
+}
+
+struct HueAmbienceActiveSyncGroup: Codable, Equatable, Identifiable, Sendable {
+    var id: String { groupId }
+    var groupId: String
+    var speakerName: String?
+    var activeTargetIds: [String]
+    var renderMode: HueAmbienceRelayRenderMode?
+    var entertainmentTargetActive: Bool?
+    var entertainmentMetadataComplete: Bool?
+    var lastFrameAt: String?
+    var lastTrackKey: String?
+
+    init(
+        groupId: String,
+        speakerName: String? = nil,
+        activeTargetIds: [String] = [],
+        renderMode: HueAmbienceRelayRenderMode? = nil,
+        entertainmentTargetActive: Bool? = nil,
+        entertainmentMetadataComplete: Bool? = nil,
+        lastFrameAt: String? = nil,
+        lastTrackKey: String? = nil
+    ) {
+        self.groupId = groupId
+        self.speakerName = speakerName
+        self.activeTargetIds = activeTargetIds
+        self.renderMode = renderMode
+        self.entertainmentTargetActive = entertainmentTargetActive
+        self.entertainmentMetadataComplete = entertainmentMetadataComplete
+        self.lastFrameAt = lastFrameAt
+        self.lastTrackKey = lastTrackKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupId
+        case speakerName
+        case activeTargetIds
+        case renderMode
+        case entertainmentTargetActive
+        case entertainmentMetadataComplete
+        case lastFrameAt
+        case lastTrackKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        groupId = try container.decode(String.self, forKey: .groupId)
+        speakerName = try container.decodeIfPresent(String.self, forKey: .speakerName)
+        activeTargetIds = try container.decodeIfPresent([String].self, forKey: .activeTargetIds) ?? []
+        renderMode = try container
+            .decodeIfPresent(String.self, forKey: .renderMode)
+            .flatMap(HueAmbienceRelayRenderMode.init(rawValue:))
+        entertainmentTargetActive = try container.decodeIfPresent(Bool.self, forKey: .entertainmentTargetActive)
+        entertainmentMetadataComplete = try container.decodeIfPresent(Bool.self, forKey: .entertainmentMetadataComplete)
+        lastFrameAt = try container.decodeIfPresent(String.self, forKey: .lastFrameAt)
+        lastTrackKey = try container.decodeIfPresent(String.self, forKey: .lastTrackKey)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(groupId, forKey: .groupId)
+        try container.encodeIfPresent(speakerName, forKey: .speakerName)
+        try container.encode(activeTargetIds, forKey: .activeTargetIds)
+        try container.encodeIfPresent(renderMode?.rawValue, forKey: .renderMode)
+        try container.encodeIfPresent(entertainmentTargetActive, forKey: .entertainmentTargetActive)
+        try container.encodeIfPresent(entertainmentMetadataComplete, forKey: .entertainmentMetadataComplete)
+        try container.encodeIfPresent(lastFrameAt, forKey: .lastFrameAt)
+        try container.encodeIfPresent(lastTrackKey, forKey: .lastTrackKey)
+    }
 }
 
 struct HueSonosMapping: Codable, Equatable, Identifiable, Sendable {

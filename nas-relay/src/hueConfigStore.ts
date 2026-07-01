@@ -10,6 +10,7 @@ import type {
   HueLightResource,
   HueSonosMapping,
 } from './hueTypes.js';
+import { normalizeToneControl } from './hueToneControl.js';
 
 const DEFAULT_FILE_NAME = 'hue-ambience-config.json';
 
@@ -71,8 +72,10 @@ export class HueAmbienceConfigStore {
       areas: this.currentConfig.resources.areas.length,
       motionStyle: this.currentConfig.motionStyle,
       stopBehavior: this.currentConfig.stopBehavior,
+      toneControl: this.currentConfig.toneControl,
       renderMode: null,
       activeTargetIds: [],
+      activeGroups: [],
       entertainmentTargetActive: false,
       entertainmentMetadataComplete: false,
       lastFrameAt: null,
@@ -154,6 +157,7 @@ function normalizeConfig(config: HueAmbienceRuntimeConfig): HueAmbienceRuntimeCo
     stopBehavior: config.stopBehavior ?? 'leaveCurrent',
     motionStyle: config.motionStyle ?? 'flowing',
     flowIntervalSeconds: Math.max(flowIntervalSeconds, 1),
+    toneControl: normalizeToneControl(config.toneControl),
   };
 }
 

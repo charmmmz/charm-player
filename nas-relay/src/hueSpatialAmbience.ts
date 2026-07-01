@@ -1,5 +1,7 @@
 import { samplePalette } from './huePalette.js';
+import { normalizeToneControl } from './hueToneControl.js';
 import type {
+  HueAmbienceToneControl,
   HueAmbienceMotionStyle,
   HueEntertainmentChannelResource,
   HueLightResource,
@@ -16,6 +18,7 @@ export interface HueSpatialLightColorsInput {
   motionStyle: HueAmbienceMotionStyle;
   position?: HueSpatialPosition | null;
   segmentPositions?: HueSpatialPosition[];
+  toneControl?: HueAmbienceToneControl;
 }
 
 export interface HueSpatialPosition {
@@ -81,12 +84,13 @@ export function buildSpatialLightColors(input: HueSpatialLightColorsInput): HueR
 
   const role = classifySpatialLightRole(input.light);
   const positions = spatialSamplePositions(input);
+  const toneControl = normalizeToneControl(input.toneControl);
 
   return positions.map((position, index) => {
     const sampled = input.motionStyle === 'still'
       ? constellationColor(input.palette, role, input.offset, position, index)
       : driftColor(input.palette, role, input.phase, input.offset, position, index);
-    return toneForRole(sampled, role);
+    return toneForRole(sampled, role, toneControl);
   });
 }
 
@@ -200,16 +204,25 @@ function constellationColor(
     : mixRgb(base, accent, 0.24);
 }
 
-function toneForRole(color: HueRGBColor, role: HueSpatialLightRole): HueRGBColor {
+function toneForRole(
+  color: HueRGBColor,
+  role: HueSpatialLightRole,
+  toneControl: HueAmbienceToneControl,
+): HueRGBColor {
   const profile = TONE_PROFILES[role];
   const hsl = rgbToHsl(color);
+  const saturationMin = profile.minSaturation * Math.min(toneControl.saturation, 1);
+  const saturationMax = profile.maxSaturation * toneControl.saturation;
+  const lightnessMin = profile.minLightness * Math.min(toneControl.brightness, 1);
+  const lightnessMax = profile.maxLightness * toneControl.brightness;
   const shaped = hslToRgb(
     hsl.h,
-    clamp(hsl.s * profile.saturationScale, profile.minSaturation, profile.maxSaturation),
-    clamp(hsl.l * 0.62, profile.minLightness, profile.maxLightness),
+    clamp(hsl.s * profile.saturationScale * toneControl.saturation, saturationMin, saturationMax),
+    clamp(hsl.l * 0.62 * toneControl.brightness, lightnessMin, lightnessMax),
   );
   const darkened = mixRgb(shaped, DARK_NEUTRAL, profile.darkMix);
-  return capBrightness(darkened, profile.maxBrightness);
+  const saturationCapped = capRgbSaturation(darkened, saturationMax);
+  return capBrightness(saturationCapped, profile.maxBrightness * toneControl.brightness);
 }
 
 function virtualGradientPositions(count: number, basePosition: HueSpatialPosition | null | undefined): HueSpatialPosition[] {
@@ -240,6 +253,22 @@ function capBrightness(color: HueRGBColor, maxBrightness: number): HueRGBColor {
     r: clamp01(color.r * scale),
     g: clamp01(color.g * scale),
     b: clamp01(color.b * scale),
+  };
+}
+
+function capRgbSaturation(color: HueRGBColor, maxSaturation: number): HueRGBColor {
+  const max = Math.max(color.r, color.g, color.b);
+  const min = Math.min(color.r, color.g, color.b);
+  if (max <= 0) return color;
+
+  const saturation = (max - min) / max;
+  if (saturation <= maxSaturation) return color;
+
+  const scale = clamp01(maxSaturation / saturation);
+  return {
+    r: max - (max - color.r) * scale,
+    g: max - (max - color.g) * scale,
+    b: max - (max - color.b) * scale,
   };
 }
 

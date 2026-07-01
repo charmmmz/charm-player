@@ -451,6 +451,30 @@ final class AppleMusicCatalogSearchTests: XCTestCase {
         XCTAssertNil(urlString)
     }
 
+    func testAlbumWebURLFallbackCanGenerateAppleMusicURLFromCatalogID() {
+        let album = AppleMusicCatalogSearchItem(
+            id: "590431776",
+            type: .album,
+            title: "Hybrid Theory (Deluxe Edition)",
+            artist: "LINKIN PARK",
+            album: "Hybrid Theory (Deluxe Edition)",
+            artworkURLString: nil,
+            duration: nil,
+            urlString: nil)
+
+        let urlString = LocalMusicCatalogWebURLFallback.urlString(
+            in: [album],
+            kind: .album,
+            title: "Hybrid Theory (Deluxe Edition)",
+            artist: "LINKIN PARK",
+            album: "Hybrid Theory (Deluxe Edition)")
+
+        XCTAssertEqual(
+            urlString,
+            "https://music.apple.com/us/album/hybrid-theory-deluxe-edition/590431776"
+        )
+    }
+
     func testExternalLinkResolverSearchesCatalogForLiveRadioSongURLWithoutCatalogID() async throws {
         var searchedTerms: [String] = []
         let resolver = AppleMusicExternalLinkFallbackResolver(

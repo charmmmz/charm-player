@@ -203,6 +203,9 @@ final class SonosManager {
     private var loadingAlbumArtURL: String?
     private var displayedAlbumArtTrackIdentity: String?
     private var deferredMissingAlbumArtTrackIdentity: String?
+    private var delayedAudioQualityRetryTask: Task<Void, Never>?
+    private var delayedAudioQualityRetryTrackKey: String?
+    private var delayedAudioQualityRetryExhaustedTrackKey: String?
     private var lastWidgetTrackTitle: String?
     private var lastEnrichedTrackKey: String?
     private var lastCloudQualityAttempt: Date = .distantPast
@@ -212,6 +215,10 @@ final class SonosManager {
     /// burst of `nowplaying` requests.
     private static let cloudQualityRefreshCooldown: TimeInterval = 15
     private static let localPlaybackMetadataQualityRetryDelayNanoseconds: UInt64 = 350_000_000
+    private static let delayedAudioQualityRetryIntervalsNanoseconds: [UInt64] = [
+        1_500_000_000,
+        3_500_000_000
+    ]
     private static let albumArtColorTransitionDuration: TimeInterval = 0.45
     private static let fastRefreshIntervalSeconds = 3
     private static let lanEventWatchdogRefreshIntervalSeconds = 30
@@ -455,6 +462,12 @@ final class SonosManager {
         }
     }
 
+    nonisolated static func homeSpeakerCoordinatorCandidates(
+        in speakers: [SonosPlayer]
+    ) -> [SonosPlayer] {
+        speakers.filter { $0.isCoordinator && !$0.isInvisible }
+    }
+
     private nonisolated static func speakerOrderRank(
         for status: SpeakerGroupStatus,
         orderRanks: [String: Int]
@@ -567,15 +580,17 @@ final class SonosManager {
         incoming: [SpeakerGroupStatus],
         preferredOrder: [String] = SharedStorage.homeSpeakerGroupOrder
     ) -> [SpeakerGroupStatus] {
+        let displayableExisting = existing.filter(Self.isHomeSpeakerStatusDisplayable)
+        let displayableIncoming = incoming.filter(Self.isHomeSpeakerStatusDisplayable)
         let sortedIncoming = Self.sortedSpeakerGroups(
-            incoming,
+            displayableIncoming,
             preferredOrder: preferredOrder
         )
-        if sortedIncoming.isEmpty, !existing.isEmpty {
-            return existing
+        if sortedIncoming.isEmpty, !displayableExisting.isEmpty {
+            return displayableExisting
         }
         return sortedIncoming.map { incomingStatus in
-            guard let existingStatus = existing.first(where: {
+            guard let existingStatus = displayableExisting.first(where: {
                 Self.speakerGroupStatus($0, matches: incomingStatus.id)
                     || Self.speakerGroupStatus(incomingStatus, matches: $0.id)
             }) else {
@@ -623,6 +638,12 @@ final class SonosManager {
             && isPlaceholderTransportState(incoming.transportState)
     }
 
+    private nonisolated static func isHomeSpeakerStatusDisplayable(
+        _ status: SpeakerGroupStatus
+    ) -> Bool {
+        !status.coordinator.isInvisible
+    }
+
     private nonisolated static func homeSpeakerTrackHasUsefulMetadata(_ trackInfo: TrackInfo) -> Bool {
         homeSpeakerTrackHasDisplayTitle(trackInfo)
             || nonEmpty(trackInfo.albumArtURL) != nil
@@ -650,7 +671,7 @@ final class SonosManager {
 
     func loadSavedState() {
         allSpeakers = SharedStorage.savedSpeakers
-        speakers = allSpeakers.filter(\.isCoordinator)
+        speakers = Self.homeSpeakerCoordinatorCandidates(in: allSpeakers)
         if let ip = SharedStorage.speakerIP,
            let speaker = speakers.first(where: { $0.ipAddress == ip }) {
             selectedSpeaker = speaker
@@ -681,9 +702,11 @@ final class SonosManager {
         errorMessage = nil
         discovery.stopScan()
         allSpeakers = discovery.discoveredSpeakers
-        speakers = allSpeakers.filter(\.isCoordinator)
+        speakers = Self.homeSpeakerCoordinatorCandidates(in: allSpeakers)
         SharedStorage.savedSpeakers = allSpeakers
-        let target = speaker.isCoordinator ? speaker : speakers.first(where: { $0.groupId == speaker.groupId && $0.isCoordinator }) ?? speaker
+        let target = speaker.isCoordinator && !speaker.isInvisible
+            ? speaker
+            : speakers.first(where: { $0.groupId == speaker.groupId && $0.isCoordinator }) ?? speaker
         await selectSpeaker(target)
         await refreshAllGroupStatuses()
         isLoading = false
@@ -705,7 +728,7 @@ final class SonosManager {
             } else {
                 allSpeakers = discovered
             }
-            speakers = allSpeakers.filter(\.isCoordinator)
+            speakers = Self.homeSpeakerCoordinatorCandidates(in: allSpeakers)
             SharedStorage.savedSpeakers = allSpeakers
             let speaker = speakers.first(where: { $0.isCoordinator }) ?? speakers.first
             if let speaker { await selectSpeaker(speaker) }
@@ -818,6 +841,7 @@ final class SonosManager {
         // previous backend is usually still valid (same LAN, different
         // speaker on it), and clearing to `.unknown` would flash the
         // "Speaker unreachable" banner during speaker switches on LAN.
+        cancelDelayedAudioQualityBadgeRetry()
         cachedCloudQuality = nil
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
@@ -2137,11 +2161,11 @@ final class SonosManager {
         do {
             let fresh = try await SonosAPI.getZoneGroupState(ip: anyIP)
             allSpeakers = fresh
-            speakers = fresh.filter(\.isCoordinator)
+            speakers = Self.homeSpeakerCoordinatorCandidates(in: fresh)
             SharedStorage.savedSpeakers = fresh
 
             var statuses: [SpeakerGroupStatus] = []
-            let coordinators = fresh.filter(\.isCoordinator)
+            let coordinators = Self.homeSpeakerCoordinatorCandidates(in: fresh)
 
             for coord in coordinators {
                 let members = fresh.filter { $0.groupId == coord.groupId && !$0.isInvisible }
@@ -2411,7 +2435,7 @@ final class SonosManager {
 
     private func projectSkeletonGroupStatusesFromSavedSpeakers() {
         guard groupStatuses.isEmpty, !allSpeakers.isEmpty else { return }
-        let coordinators = allSpeakers.filter(\.isCoordinator)
+        let coordinators = Self.homeSpeakerCoordinatorCandidates(in: allSpeakers)
         let statuses = coordinators.map { coord in
             let members = allSpeakers.filter {
                 $0.groupId == coord.groupId && !$0.isInvisible
@@ -2467,7 +2491,7 @@ final class SonosManager {
         guard let anyIP = allSpeakers.first?.ipAddress ?? selectedSpeaker?.ipAddress else { return }
         if let fresh = try? await SonosAPI.getZoneGroupState(ip: anyIP) {
             allSpeakers = fresh
-            speakers = fresh.filter(\.isCoordinator)
+            speakers = Self.homeSpeakerCoordinatorCandidates(in: fresh)
             SharedStorage.savedSpeakers = fresh
         }
         await refreshAllGroupStatuses()
@@ -2610,6 +2634,7 @@ final class SonosManager {
             updateSharedCache()
             managePositionTimer()
             manageLiveActivity()
+            scheduleDelayedAudioQualityBadgeRetryIfNeeded(expectedSpeakerID: expectedSpeakerID)
             return selectedSpeaker?.id == expectedSpeakerID
         } catch {
             guard selectedSpeaker?.id == expectedSpeakerID else { return false }
@@ -2689,6 +2714,7 @@ final class SonosManager {
             updateSharedCache()
             managePositionTimer()
             manageLiveActivity()
+            scheduleDelayedAudioQualityBadgeRetryIfNeeded(expectedSpeakerID: expectedSpeakerID)
             return selectedSpeaker?.id == expectedSpeakerID
         } catch SonosCloudError.unauthorized {
             _ = await SonosAuth.shared.refreshAccessToken()
@@ -2784,6 +2810,7 @@ final class SonosManager {
             if queueLoaded { await loadQueue() }
             managePositionTimer()
             manageLiveActivity()
+            scheduleDelayedAudioQualityBadgeRetryIfNeeded(expectedSpeakerID: expectedSpeakerID)
         } catch {
             guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
             consecutiveFailures += 1
@@ -3389,16 +3416,23 @@ final class SonosManager {
         return playbackMetadataQualityNeedsRetry(quality)
     }
 
+    nonisolated static func audioQualityNeedsDelayedBadgeRetry(_ quality: AudioQuality?) -> Bool {
+        guard let quality else { return true }
+        if quality.lossless == true || quality.immersive == true { return false }
+        return quality.codec.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "audio"
+    }
+
     private nonisolated static func playbackMetadataQualityNeedsRetry(
         _ quality: SonosCloudAPI.CloudTrackQuality
     ) -> Bool {
         let codec = quality.codec?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let hasGenericCodec = codec.isEmpty || codec == "audio"
         let hasAudioParameters = quality.bitDepth != nil || quality.sampleRate != nil
-        return quality.lossless == nil
-            && quality.immersive != true
+        let mapsToTechnicalFallback = audioQualityNeedsDelayedBadgeRetry(AudioQuality.from(cloudQuality: quality))
+        return quality.immersive != true
             && hasGenericCodec
             && hasAudioParameters
+            && (quality.lossless == nil || (quality.lossless == false && mapsToTechnicalFallback))
     }
 
     private func localControlPlayerId(forPlaybackIP ip: String) -> String? {
@@ -3420,6 +3454,110 @@ final class SonosManager {
     private func cacheAudioQualityIfPresent(_ quality: AudioQuality?, for info: TrackInfo) {
         guard let quality, let trackKey = Self.cloudQualityTrackKey(for: info) else { return }
         cachedCloudQuality = (trackKey: trackKey, quality: quality)
+    }
+
+    private func cancelDelayedAudioQualityBadgeRetry() {
+        delayedAudioQualityRetryTask?.cancel()
+        delayedAudioQualityRetryTask = nil
+        delayedAudioQualityRetryTrackKey = nil
+        delayedAudioQualityRetryExhaustedTrackKey = nil
+    }
+
+    private func scheduleDelayedAudioQualityBadgeRetryIfNeeded(expectedSpeakerID: String) {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID),
+              transportState == .playing,
+              SonosAuth.shared.isLoggedIn,
+              let trackInfo,
+              isCloudQualityAuthoritative(trackInfo.source),
+              let trackKey = Self.cloudQualityTrackKey(for: trackInfo),
+              Self.audioQualityNeedsDelayedBadgeRetry(trackInfo.audioQuality) else {
+            if delayedAudioQualityRetryTask != nil,
+               delayedAudioQualityRetryTrackKey != Self.cloudQualityTrackKey(for: trackInfo) {
+                cancelDelayedAudioQualityBadgeRetry()
+            }
+            return
+        }
+
+        if delayedAudioQualityRetryExhaustedTrackKey == trackKey { return }
+        if delayedAudioQualityRetryTrackKey == trackKey,
+           delayedAudioQualityRetryTask != nil {
+            return
+        }
+
+        delayedAudioQualityRetryTask?.cancel()
+        delayedAudioQualityRetryTrackKey = trackKey
+        delayedAudioQualityRetryExhaustedTrackKey = nil
+        delayedAudioQualityRetryTask = Task { @MainActor [weak self] in
+            await self?.runDelayedAudioQualityBadgeRetries(
+                expectedSpeakerID: expectedSpeakerID,
+                trackKey: trackKey
+            )
+        }
+        logAudioQualityDiagnostic(action: "cloud-enrich-delayed-scheduled", extra: [
+            "trackKey=\(Self.liveActivityLogValue(trackKey))",
+            "currentQuality=\(Self.liveActivityLogValue(trackInfo.audioQuality?.label ?? "nil"))"
+        ])
+    }
+
+    private func runDelayedAudioQualityBadgeRetries(
+        expectedSpeakerID: String,
+        trackKey: String
+    ) async {
+        defer {
+            if delayedAudioQualityRetryTrackKey == trackKey {
+                delayedAudioQualityRetryTask = nil
+                delayedAudioQualityRetryTrackKey = nil
+            }
+        }
+
+        for (attemptIndex, delay) in Self.delayedAudioQualityRetryIntervalsNanoseconds.enumerated() {
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled,
+                  speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID),
+                  Self.cloudQualityTrackKey(for: trackInfo) == trackKey else {
+                return
+            }
+            guard Self.audioQualityNeedsDelayedBadgeRetry(trackInfo?.audioQuality) else {
+                delayedAudioQualityRetryExhaustedTrackKey = nil
+                return
+            }
+
+            logAudioQualityDiagnostic(action: "cloud-enrich-delayed-retry", extra: [
+                "attempt=\(attemptIndex + 1)",
+                "trackKey=\(Self.liveActivityLogValue(trackKey))",
+                "currentQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))"
+            ])
+            await enrichAudioQualityFromCloud(
+                expectedSpeakerID: expectedSpeakerID,
+                bypassCooldown: true
+            )
+
+            guard !Task.isCancelled,
+                  speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID),
+                  Self.cloudQualityTrackKey(for: trackInfo) == trackKey else {
+                return
+            }
+
+            syncCurrentGroupStatusFromPlaybackState()
+            updateSharedCache()
+            manageLiveActivity()
+
+            if !Self.audioQualityNeedsDelayedBadgeRetry(trackInfo?.audioQuality) {
+                delayedAudioQualityRetryExhaustedTrackKey = nil
+                return
+            }
+        }
+
+        delayedAudioQualityRetryExhaustedTrackKey = trackKey
+        logAudioQualityDiagnostic(action: "cloud-enrich-delayed-exhausted", extra: [
+            "trackKey=\(Self.liveActivityLogValue(trackKey))",
+            "currentQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))"
+        ])
     }
 
     private func logLocalControlMetadata(
@@ -3459,7 +3597,10 @@ final class SonosManager {
     /// first-party streaming services, this is effectively the *only* path
     /// that sets `audioQuality` for Apple Music / Spotify / etc. — making
     /// Cloud the single source of truth as long as the user is logged in.
-    private func enrichAudioQualityFromCloud(expectedSpeakerID: String) async {
+    private func enrichAudioQualityFromCloud(
+        expectedSpeakerID: String,
+        bypassCooldown: Bool = false
+    ) async {
         guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         let trackKey = Self.cloudQualityTrackKey(for: trackInfo)
         let loggedIn = SonosAuth.shared.isLoggedIn
@@ -3482,6 +3623,7 @@ final class SonosManager {
             "isEnriching=\(isEnrichingQuality)",
             "transport=\(transportState)",
             "loggedIn=\(loggedIn)",
+            "bypassCooldown=\(bypassCooldown)",
             "trackKey=\(Self.liveActivityLogValue(trackKey ?? "nil"))",
             "currentQuality=\(Self.liveActivityLogValue(trackInfo?.audioQuality?.label ?? "nil"))",
             "source=\(trackInfo?.source.rawValue ?? "nil")"
@@ -3508,7 +3650,7 @@ final class SonosManager {
         }
 
         // New track → fetch immediately; same track → respect cooldown
-        if trackKey == lastEnrichedTrackKey {
+        if !bypassCooldown, trackKey == lastEnrichedTrackKey {
             let age = Date().timeIntervalSince(lastCloudQualityAttempt)
             guard age > Self.cloudQualityRefreshCooldown else {
                 logAudioQualityDiagnostic(action: "cloud-enrich-skip", extra: [
@@ -3672,6 +3814,7 @@ final class SonosManager {
         stopEventSubscriptions()
         stopBackgroundKeepalive()
         stopLiveActivityPushToStartObservers()
+        cancelDelayedAudioQualityBadgeRetry()
         NotificationCenter.default.removeObserver(self,
             name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.removeObserver(self,

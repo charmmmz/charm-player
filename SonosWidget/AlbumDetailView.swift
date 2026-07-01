@@ -1,9 +1,11 @@
+import AVFoundation
 import SwiftUI
 
 struct AlbumDetailView: View {
     let albumItem: BrowseItem
     let searchManager: SearchManager
     let manager: SonosManager
+    @Environment(\.isAnimatedArtworkPlaybackSuspended) private var isAnimatedArtworkPlaybackSuspended
 
     @State private var response: SonosCloudAPI.AlbumBrowseResponse?
     @State private var isLoading = true
@@ -15,6 +17,17 @@ struct AlbumDetailView: View {
     @State private var themeColor: Color?
     @State private var isOpeningAppleMusicLink = false
     @State private var fallbackAppleMusicArtworkURL: URL?
+    @State private var animatedArtworkInfo: AnimatedArtworkInfo?
+    @State private var animatedArtworkReadyURL: URL?
+    @State private var animatedArtworkBackgroundReadyURL: URL?
+    @State private var resolvedAlbumID: String?
+
+    private var shouldPlayAnimatedArtworkVideo: Bool {
+        AlbumAnimatedArtworkPresentation.shouldPlayVideo(
+            isEnabled: AnimatedArtworkFeature.isEnabled,
+            isBackgroundPlaybackSuspended: isAnimatedArtworkPlaybackSuspended
+        )
+    }
 
     private var albumTitle: String { response?.title ?? albumItem.title }
     private var artistName: String { response?.subtitle ?? albumItem.artist }
@@ -31,6 +44,9 @@ struct AlbumDetailView: View {
     }
     private var tracks: [SonosCloudAPI.AlbumTrackItem] {
         response?.tracks?.items ?? []
+    }
+    private var playbackAlbumItem: BrowseItem {
+        AlbumPlaybackItemPolicy.playbackItem(from: albumItem, resolvedAlbumID: resolvedAlbumID)
     }
     private var appleMusicArtworkResource: AppleMusicFavoriteResource? {
         AppleMusicDetailArtworkLink.resource(
@@ -57,15 +73,35 @@ struct AlbumDetailView: View {
             appleMusicArtworkResource?.id ?? ""
         ].joined(separator: "|")
     }
+    private var animatedArtworkHeaderURL: URL? {
+        AlbumAnimatedArtworkPresentation.headerURL(
+            info: animatedArtworkInfo,
+            isEnabled: AnimatedArtworkFeature.isEnabled,
+            isImmersiveLayoutActive: usesImmersiveAnimatedArtwork
+        )
+    }
+    private var animatedArtworkBackgroundURL: URL? {
+        AlbumAnimatedArtworkPresentation.fullScreenBackgroundURL(
+            info: animatedArtworkInfo,
+            isEnabled: AnimatedArtworkFeature.isEnabled
+        )
+    }
+    private var animatedArtworkBackgroundAspectRatio: CGFloat? {
+        guard let value = animatedArtworkInfo?.tallAspectRatio else { return nil }
+        return CGFloat(value)
+    }
+    private var usesImmersiveAnimatedArtwork: Bool {
+        AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+            backgroundURL: animatedArtworkBackgroundURL,
+            readyURL: animatedArtworkBackgroundReadyURL
+        )
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 headerSection
-                actionBar
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                trackList
+                albumScrollableContent
             }
         }
         .background {
@@ -97,18 +133,163 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var albumBackground: some View {
-        if let img = coverImage {
+        GeometryReader { geo in
+            let size = geo.size
             ZStack {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .blur(radius: 80)
-                    .scaleEffect(1.5)
-                Color.black.opacity(0.5)
+                staticAlbumBackground
+
+                if let url = animatedArtworkBackgroundURL {
+                    albumAnimatedArtworkBackground(
+                        url: url,
+                        size: size
+                    )
+                    .frame(width: size.width, height: size.height, alignment: .top)
+                    .opacity(animatedArtworkBackgroundReadyURL == url ? 1 : 0)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                }
+
+                albumBackgroundScrim
+                    .frame(width: size.width, height: size.height)
+                    .allowsHitTesting(false)
             }
-            .ignoresSafeArea()
+            .frame(width: size.width, height: size.height, alignment: .top)
+        }
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.28), value: animatedArtworkBackgroundReadyURL)
+    }
+
+    @ViewBuilder
+    private var staticAlbumBackground: some View {
+        if let img = coverImage {
+            Image(uiImage: img)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .blur(radius: 80)
+                .scaleEffect(1.5)
+                .ignoresSafeArea()
         } else {
             Color(.systemBackground).ignoresSafeArea()
+        }
+    }
+
+    @ViewBuilder
+    private func albumAnimatedArtworkBackground(
+        url: URL,
+        size: CGSize
+    ) -> some View {
+        let containerAspectRatio = size.height > 0 ? size.width / size.height : 0
+        let videoAspectRatio = animatedArtworkBackgroundAspectRatio
+        let usesBlurFill = AnimatedArtworkFeature.shouldUseBlurFillForFullScreenArtwork(
+            videoAspectRatio: videoAspectRatio,
+            containerAspectRatio: containerAspectRatio
+        )
+
+        if usesBlurFill {
+            albumAnimatedArtworkBlurFill(
+                url: url,
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+        } else {
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
+                videoGravity: .resizeAspectFill,
+                onReadyForDisplay: {
+                    markAnimatedArtworkBackgroundReady(url)
+                }
+            )
+        }
+    }
+
+    private func albumAnimatedArtworkBlurFill(
+        url: URL,
+        size: CGSize,
+        videoAspectRatio: CGFloat?
+    ) -> some View {
+        let foregroundSize = AnimatedArtworkFeature.fullScreenBlurFillForegroundSize(
+            containerSize: size,
+            videoAspectRatio: videoAspectRatio
+        )
+        let foregroundTopOffset = AnimatedArtworkFeature.fullScreenBlurFillForegroundTopOffset(
+            containerSize: size
+        )
+
+        return ZStack(alignment: .top) {
+            FullScreenAnimatedArtworkExtensionBackdrop(
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
+                videoGravity: .resizeAspect,
+                onReadyForDisplay: {
+                    markAnimatedArtworkBackgroundReady(url)
+                }
+            )
+            .frame(width: foregroundSize.width, height: foregroundSize.height, alignment: .top)
+            .clipped()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.54),
+                        .init(color: .black.opacity(0.6), location: 0.72),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .offset(y: foregroundTopOffset)
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .clipped()
+    }
+
+    private func markAnimatedArtworkBackgroundReady(_ url: URL) {
+        if animatedArtworkBackgroundURL == url {
+            animatedArtworkBackgroundReadyURL = url
+        }
+    }
+
+    @ViewBuilder
+    private var albumBackgroundScrim: some View {
+        if usesImmersiveAnimatedArtwork {
+            ZStack {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.08), location: 0.0),
+                        .init(color: .black.opacity(0.08), location: 0.36),
+                        .init(color: .black.opacity(0.48), location: 0.58),
+                        .init(color: .black.opacity(0.88), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.32)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.34),
+                                .init(color: .black.opacity(0.35), location: 0.58),
+                                .init(color: .black, location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+        } else {
+            Color.black
+                .opacity(coverImage != nil ? 0.52 : 0)
         }
     }
 
@@ -149,7 +330,7 @@ struct AlbumDetailView: View {
         Menu {
             Button {
                 Task {
-                    await searchManager.playNext(item: albumItem, manager: manager)
+                    await searchManager.playNext(item: playbackAlbumItem, manager: manager)
                     showToast("Playing next")
                 }
             } label: {
@@ -158,7 +339,7 @@ struct AlbumDetailView: View {
 
             Button {
                 Task {
-                    await searchManager.addToQueue(item: albumItem, manager: manager)
+                    await searchManager.addToQueue(item: playbackAlbumItem, manager: manager)
                     showToast("Added to queue")
                 }
             } label: {
@@ -173,9 +354,79 @@ struct AlbumDetailView: View {
 
     // MARK: - Header
 
+    private var albumScrollableContent: some View {
+        VStack(spacing: 0) {
+            actionBar
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+            trackList
+        }
+        .background(alignment: .top) {
+            if usesImmersiveAnimatedArtwork {
+                immersiveScrollableContentBackdrop
+                    .padding(
+                        .top,
+                        AlbumAnimatedArtworkPresentation.contentBackdropTopPadding(
+                            isImmersive: usesImmersiveAnimatedArtwork
+                        )
+                    )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var immersiveScrollableContentBackdrop: some View {
+        let topOpacity = AlbumAnimatedArtworkPresentation.contentBackdropTopOpacity(
+            isImmersive: usesImmersiveAnimatedArtwork
+        )
+        let strongFadeLocation = AlbumAnimatedArtworkPresentation.contentBackdropStrongFadeLocation(
+            isImmersive: usesImmersiveAnimatedArtwork
+        )
+        let minimumHeight = AlbumAnimatedArtworkPresentation.contentBackdropMinimumHeight(
+            isImmersive: usesImmersiveAnimatedArtwork,
+            viewportHeight: UIScreen.main.bounds.height
+        )
+
+        ZStack(alignment: .top) {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(topOpacity), location: 0),
+                    .init(color: .black.opacity(0.14), location: 0.22),
+                    .init(color: .black.opacity(0.62), location: strongFadeLocation),
+                    .init(color: .black.opacity(0.94), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.42)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .clear, location: 0.24),
+                            .init(color: .black.opacity(0.42), location: 0.52),
+                            .init(color: .black, location: 0.88)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .top)
+        .ignoresSafeArea(edges: .horizontal)
+        .allowsHitTesting(false)
+    }
+
     private var headerSection: some View {
         VStack(spacing: 10) {
-            headerArtwork
+            if usesImmersiveAnimatedArtwork {
+                immersiveAnimatedArtworkHeaderSpacer
+            } else {
+                headerArtwork
+            }
 
             VStack(spacing: 4) {
                 Text(albumTitle)
@@ -194,7 +445,19 @@ struct AlbumDetailView: View {
             }
             .padding(.horizontal)
         }
-        .padding(.top, 20)
+        .padding(.top, usesImmersiveAnimatedArtwork ? 0 : 20)
+    }
+
+    private var immersiveAnimatedArtworkHeaderSpacer: some View {
+        Color.clear
+            .frame(
+                height: AlbumAnimatedArtworkPresentation.immersiveHeaderSpacerHeight(
+                    containerWidth: UIScreen.main.bounds.width,
+                    viewportHeight: UIScreen.main.bounds.height,
+                    videoAspectRatio: animatedArtworkBackgroundAspectRatio
+                )
+            )
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -214,15 +477,39 @@ struct AlbumDetailView: View {
     }
 
     private var headerArtworkImage: some View {
+        ZStack {
+            headerStaticArtworkImage
+
+            if let url = animatedArtworkHeaderURL {
+                AnimatedArtworkPlayerView(
+                    url: url,
+                    isPlaying: shouldPlayAnimatedArtworkVideo,
+                    videoGravity: .resizeAspectFill
+                ) {
+                    if animatedArtworkHeaderURL == url {
+                        animatedArtworkReadyURL = url
+                    }
+                }
+                .aspectRatio(1, contentMode: .fill)
+                .opacity(animatedArtworkReadyURL == url ? 1 : 0)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: 280)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
+        .animation(.easeInOut(duration: 0.28), value: animatedArtworkReadyURL)
+    }
+
+    private var headerStaticArtworkImage: some View {
         Group {
             if let img = coverImage {
                 Image(uiImage: img)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
             } else {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color(.secondarySystemBackground))
-                    .aspectRatio(1, contentMode: .fit)
                     .overlay {
                         Image(systemName: "opticaldisc")
                             .font(.system(size: 48))
@@ -230,9 +517,6 @@ struct AlbumDetailView: View {
                     }
             }
         }
-        .frame(maxWidth: 280)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.3), radius: 16, y: 8)
     }
 
     private func openAppleMusicFromArtwork() {
@@ -283,7 +567,11 @@ struct AlbumDetailView: View {
     @MainActor
     private func refreshAppleMusicArtworkURL() async {
         fallbackAppleMusicArtworkURL = nil
-        guard canSearchAppleMusicAlbumURL || appleMusicArtworkResource != nil else { return }
+        applyCachedAnimatedArtwork(appleMusicURLString: nil)
+        guard canSearchAppleMusicAlbumURL || appleMusicArtworkResource != nil else {
+            setAnimatedArtworkInfo(nil)
+            return
+        }
         let lookupID = appleMusicAlbumLinkLookupID
         let title = albumTitle
         let artist = artistName
@@ -295,12 +583,80 @@ struct AlbumDetailView: View {
             )
             guard appleMusicAlbumLinkLookupID == lookupID else { return }
             fallbackAppleMusicArtworkURL = url
+            if let url {
+                await prewarmAnimatedArtwork(albumURL: url)
+            } else {
+                applyCachedAnimatedArtwork(appleMusicURLString: nil)
+            }
         } catch {
             guard appleMusicAlbumLinkLookupID == lookupID else { return }
             SonosLog.debug(
                 .localService,
                 "Apple Music album URL preload failed title='\(title)' artist='\(artist)' error=\(error)"
             )
+        }
+    }
+
+    @MainActor
+    private func prewarmAnimatedArtwork(albumURL: URL) async {
+        guard AnimatedArtworkFeature.isEnabled,
+              let relayBaseURL = RelayManager.shared.url else {
+            applyCachedAnimatedArtwork(appleMusicURLString: albumURL.absoluteString)
+            return
+        }
+
+        applyCachedAnimatedArtwork(appleMusicURLString: albumURL.absoluteString)
+        if animatedArtworkInfo != nil { return }
+
+        do {
+            let response = try await RelayClient.animatedArtworkByURL(
+                baseURL: relayBaseURL,
+                albumURL: albumURL
+            )
+            guard let info = AnimatedArtworkInfo(
+                response: response,
+                fallbackAppleMusicURLString: albumURL.absoluteString,
+                fallbackArtist: artistName,
+                fallbackAlbum: albumTitle,
+                resolvedAt: Date()
+            ) else {
+                return
+            }
+            AnimatedArtworkRegistry.shared.register(info)
+            setAnimatedArtworkInfo(info)
+        } catch {
+            SonosLog.debug(
+                .albumDetail,
+                "Animated album artwork prewarm failed title='\(albumTitle)' artist='\(artistName)' error=\(error)"
+            )
+        }
+    }
+
+    @MainActor
+    private func applyCachedAnimatedArtwork(appleMusicURLString: String?) {
+        guard AnimatedArtworkFeature.isEnabled else {
+            setAnimatedArtworkInfo(nil)
+            return
+        }
+
+        let cached = AnimatedArtworkRegistry.shared.artwork(
+            appleMusicURLString: appleMusicURLString,
+            artist: artistName,
+            album: albumTitle
+        )
+        setAnimatedArtworkInfo(cached)
+    }
+
+    private func setAnimatedArtworkInfo(_ next: AnimatedArtworkInfo?) {
+        let shouldResetReadyState = AlbumAnimatedArtworkPresentation.shouldResetReadyState(
+            current: animatedArtworkInfo,
+            next: next
+        )
+        guard animatedArtworkInfo != next else { return }
+        animatedArtworkInfo = next
+        if shouldResetReadyState {
+            animatedArtworkReadyURL = nil
+            animatedArtworkBackgroundReadyURL = nil
         }
     }
 
@@ -446,12 +802,14 @@ struct AlbumDetailView: View {
         item: BrowseItem
     ) -> some View {
         let trackFavorited = searchManager.isFavorited(item)
+        let appleMusicResource = searchManager.appleMusicFavoriteResource(for: item)
 
         MusicResourceContextMenu(
-            actions: AlbumTrackMenuActionPolicy.actions(
-                favoriteKind: .sonos,
-                isFavoriteActive: trackFavorited,
-                isQueueable: item.playbackDescriptor.isQueueable
+            actions: AlbumTrackMenuActionPolicy.songActions(
+                isSonosFavoriteActive: trackFavorited,
+                isAppleMusicFavoriteActive: false,
+                isQueueable: item.playbackDescriptor.isQueueable,
+                isAppleMusicFavoriteAvailable: appleMusicResource != nil
             )
         ) { action in
             performTrackMenuAction(action, track: track, item: item)
@@ -472,7 +830,7 @@ struct AlbumDetailView: View {
         case .addToQueue:
             Task { await searchManager.addToQueue(item: item, manager: manager) }
             showToast("Added to queue")
-        case .favorite:
+        case .favorite(.sonos, _, _):
             Task {
                 let trackFavorited = searchManager.isFavorited(item)
                 if trackFavorited {
@@ -482,6 +840,11 @@ struct AlbumDetailView: View {
                     let ok = await searchManager.addToFavorites(item: item, manager: manager)
                     showToast(ok ? "Added to Favorites" : "Failed to add")
                 }
+            }
+        case .favorite(.appleMusic, _, _):
+            Task {
+                let ok = await searchManager.toggleAppleMusicFavorites(for: item)
+                showToast(ok ? "Updated Apple Music Favorites" : "Failed to update Apple Music")
             }
         case .startStation:
             break
@@ -559,6 +922,7 @@ struct AlbumDetailView: View {
             isLoading = false
             return
         }
+        resolvedAlbumID = browseAlbumId
         SonosLog.debug(
             .albumDetail,
             "browseAlbum rawId='\(albumItem.id)' normalizedId='\(browseAlbumId)' " +
@@ -647,7 +1011,7 @@ struct AlbumDetailView: View {
                                                     repeat: current?.repeat ?? .off)
                 }
             }
-            await searchManager.playNow(item: albumItem, manager: manager)
+            await searchManager.playNow(item: playbackAlbumItem, manager: manager)
             withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
         }
     }
@@ -662,7 +1026,7 @@ struct AlbumDetailView: View {
                 try? await SonosAPI.setPlayMode(ip: ip, shuffle: true,
                                                 repeat: current?.repeat ?? .off)
             }
-            await searchManager.playNow(item: albumItem, manager: manager)
+            await searchManager.playNow(item: playbackAlbumItem, manager: manager)
             withAnimation(.easeOut(duration: 0.2)) { playingItemId = nil }
         }
     }

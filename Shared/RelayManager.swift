@@ -58,6 +58,7 @@ final class RelayManager {
     private(set) var isHueAmbienceRelayEnabled = false
     private(set) var hueAmbienceRuntimeStatus: HueLiveEntertainmentRuntimeStatus = .unavailable
     private(set) var hueAmbienceRuntimeDetail = "Sync Hue Ambience to NAS Relay to enable always-on ambience."
+    private(set) var hueAmbienceActiveGroups: [HueAmbienceActiveSyncGroup] = []
     private(set) var hueEntertainmentStreamingStatus: HueEntertainmentStreamingStatus = .unknown
     private(set) var hueEntertainmentStreamingDetail = "Entertainment streaming status has not been checked."
     var hueAmbienceSyncStatus: HueAmbienceSyncStatus = .idle
@@ -226,6 +227,7 @@ final class RelayManager {
         renderMode: HueAmbienceRelayRenderMode? = nil,
         runtimeActive: Bool? = nil,
         activeTargetIds: [String]? = nil,
+        activeGroups: [HueAmbienceActiveSyncGroup]? = nil,
         entertainmentTargetActive: Bool? = nil,
         entertainmentMetadataComplete: Bool? = nil,
         lastFrameAt: String? = nil,
@@ -234,6 +236,7 @@ final class RelayManager {
         isHueAmbienceRelayConfigured = configured
         isHueAmbienceRelayEnabled = configured && enabled
         hueAmbienceSyncStatus = configured ? .synced(Date()) : .idle
+        hueAmbienceActiveGroups = runtimeActive == true ? activeGroups ?? [] : []
 
         guard configured else {
             hueAmbienceRuntimeStatus = .unavailable
@@ -284,6 +287,7 @@ final class RelayManager {
             renderMode: health.renderMode,
             runtimeActive: health.runtimeActive,
             activeTargetIds: health.activeTargetIds,
+            activeGroups: health.activeGroups,
             entertainmentTargetActive: health.entertainmentTargetActive,
             entertainmentMetadataComplete: health.entertainmentMetadataComplete,
             lastFrameAt: health.lastFrameAt,

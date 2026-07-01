@@ -68,6 +68,11 @@ export interface HueBridgeResources {
   areas: HueAreaResource[];
 }
 
+export interface HueAmbienceToneControl {
+  brightness: number;
+  saturation: number;
+}
+
 export interface HueAmbienceRuntimeConfig {
   enabled: boolean;
   bridge: HueBridgeInfo;
@@ -80,6 +85,7 @@ export interface HueAmbienceRuntimeConfig {
   stopBehavior: HueAmbienceStopBehavior;
   motionStyle: HueAmbienceMotionStyle;
   flowIntervalSeconds: number;
+  toneControl?: HueAmbienceToneControl;
 }
 
 export interface HueRGBColor {
@@ -103,6 +109,17 @@ export interface HueResolveTargetOptions {
   preferFallbackForEntertainment?: boolean;
 }
 
+export interface HueAmbienceActiveGroupStatus {
+  groupId: string;
+  speakerName?: string | null;
+  activeTargetIds: string[];
+  renderMode?: HueAmbienceRenderMode | null;
+  entertainmentTargetActive?: boolean;
+  entertainmentMetadataComplete?: boolean;
+  lastFrameAt?: string | null;
+  lastTrackKey?: string | null;
+}
+
 export interface HueAmbienceStatus {
   configured: boolean;
   enabled?: boolean;
@@ -112,8 +129,10 @@ export interface HueAmbienceStatus {
   areas?: number;
   motionStyle?: HueAmbienceMotionStyle;
   stopBehavior?: HueAmbienceStopBehavior;
+  toneControl?: HueAmbienceToneControl;
   renderMode?: HueAmbienceRenderMode | null;
   activeTargetIds?: string[];
+  activeGroups?: HueAmbienceActiveGroupStatus[];
   entertainmentTargetActive?: boolean;
   entertainmentMetadataComplete?: boolean;
   lastFrameAt?: string | null;

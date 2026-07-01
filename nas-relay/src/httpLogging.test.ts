@@ -19,6 +19,10 @@ test('ignores frequent Live Activity preference posts from HTTP auto logging', (
 test('ignores frequent artwork proxy requests from HTTP auto logging', () => {
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork' }), true);
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork?url=https%3A%2F%2Fexample.com%2Fcover.jpg' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/animated-artwork/url' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/animated-artwork/url?url=https%3A%2F%2Fmusic.apple.com%2Fus%2Falbum%2Fx%2F1' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/animated-artwork/search' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/animated-artwork/search?artist=a&album=b' }), true);
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/artwork-hints' }), false);
 });
 

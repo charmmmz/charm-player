@@ -1,7 +1,7 @@
 import Foundation
 import MusicKit
 
-struct LocalMusicLibrarySnapshot {
+struct LocalMusicLibrarySnapshot: Codable {
     var songs: [Song] = []
     var albums: [Album] = []
     var artists: [Artist] = []
@@ -54,7 +54,7 @@ enum LocalMusicRecentlyAddedSelection {
     }
 }
 
-enum LocalMusicRecentlyAddedItem {
+enum LocalMusicRecentlyAddedItem: Codable {
     case album(Album)
     case playlist(Playlist)
     case song(Song)
@@ -76,7 +76,7 @@ enum LocalMusicRecentlyAddedItem {
     }
 }
 
-struct LocalMusicRecentlyAddedContent {
+struct LocalMusicRecentlyAddedContent: Codable {
     var items: [LocalMusicRecentlyAddedItem] = []
 
     init() {}
@@ -96,7 +96,7 @@ struct LocalMusicRecentlyAddedContent {
     }
 }
 
-struct LocalMusicHomeContent {
+struct LocalMusicHomeContent: Codable {
     var snapshot = LocalMusicLibrarySnapshot()
     var recentlyPlayed: [RecentlyPlayedMusicItem] = []
     var recommendations: [MusicPersonalRecommendation] = []
@@ -111,7 +111,7 @@ struct LocalMusicHomeContent {
     }
 }
 
-enum LocalMusicRecommendationsLoadStatus: Equatable {
+enum LocalMusicRecommendationsLoadStatus: Codable, Equatable {
     case loaded
     case cancelled
     case failed(String)
@@ -232,6 +232,21 @@ struct LocalMusicLibraryClient {
             artists: Array(response.artists),
             playlists: Array(response.playlists)
         )
+    }
+
+    func loadCategorySnapshot(_ category: LocalLibraryCategory) async throws -> LocalMusicLibrarySnapshot {
+        _ = try await authorize()
+
+        switch category {
+        case .songs:
+            return LocalMusicLibrarySnapshot(songs: try await librarySongs(limit: nil))
+        case .albums:
+            return LocalMusicLibrarySnapshot(albums: try await libraryAlbums(limit: nil))
+        case .artists:
+            return LocalMusicLibrarySnapshot(artists: try await libraryArtists(limit: nil))
+        case .playlists:
+            return LocalMusicLibrarySnapshot(playlists: try await libraryPlaylists(limit: nil))
+        }
     }
 
     func play(song: Song) async throws {

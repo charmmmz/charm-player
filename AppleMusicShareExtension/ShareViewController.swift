@@ -41,7 +41,10 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        preferredContentSize = CGSize(width: 0, height: 560)
+        preferredContentSize = CGSize(
+            width: 0,
+            height: ShareSpeakerListLayout.defaultPreferredContentHeight
+        )
         configureView()
         processSharedInput()
     }
@@ -145,7 +148,7 @@ final class ShareViewController: UIViewController {
         scrollView.delaysContentTouches = false
 
         speakerStack.axis = .vertical
-        speakerStack.spacing = 10
+        speakerStack.spacing = ShareSpeakerListLayout.cardSpacing
         speakerStack.translatesAutoresizingMaskIntoConstraints = false
 
         emptyStateLabel.font = .preferredFont(forTextStyle: .subheadline)
@@ -214,8 +217,7 @@ final class ShareViewController: UIViewController {
             speakerStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
             speakerStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
             speakerStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
-            scrollFitsContentConstraint,
-            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: 310)
+            scrollFitsContentConstraint
         ])
     }
 
@@ -295,6 +297,7 @@ final class ShareViewController: UIViewController {
         speakerCards.removeAll()
 
         emptyStateLabel.isHidden = !speakerGroups.isEmpty
+        updatePreferredContentSizeForSpeakerGroups()
         for group in speakerGroups {
             let card = SpeakerGroupCard()
             card.configure(
@@ -312,6 +315,13 @@ final class ShareViewController: UIViewController {
             speakerCards[group.id] = card
             speakerStack.addArrangedSubview(card)
         }
+    }
+
+    private func updatePreferredContentSizeForSpeakerGroups() {
+        preferredContentSize = CGSize(
+            width: 0,
+            height: ShareSpeakerListLayout.preferredContentHeight(for: speakerGroups.count)
+        )
     }
 
     private func refreshPlaybackStatuses(for groups: [ShareSpeakerGroup]) {
@@ -851,7 +861,7 @@ private final class SpeakerGroupCard: UIControl {
         addSubview(stack)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 82),
+            heightAnchor.constraint(equalToConstant: ShareSpeakerListLayout.cardHeight),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),

@@ -508,6 +508,43 @@ final class HueAmbienceStoreTests: XCTestCase {
         XCTAssertEqual(restored.flowSpeed, .fast)
     }
 
+    func testStorePersistsToneControl() {
+        let suiteName = "HueAmbienceStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let storage = HueAmbienceDefaults(defaults: defaults)
+        let store = HueAmbienceStore(storage: storage)
+
+        store.brightnessLevel = 0.7
+        store.saturationLevel = 0.6
+
+        let restored = HueAmbienceStore(storage: storage)
+
+        XCTAssertEqual(restored.brightnessLevel, 0.7)
+        XCTAssertEqual(restored.saturationLevel, 0.6)
+    }
+
+    func testStoreClampsToneControl() {
+        let suiteName = "HueAmbienceStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = HueAmbienceStore(storage: HueAmbienceDefaults(defaults: defaults))
+
+        store.brightnessLevel = 9
+        store.saturationLevel = 9
+
+        XCTAssertEqual(store.brightnessLevel, 1.2)
+        XCTAssertEqual(store.saturationLevel, 1.12)
+
+        store.brightnessLevel = -2
+        store.saturationLevel = -2
+
+        XCTAssertEqual(store.brightnessLevel, 0.55)
+        XCTAssertEqual(store.saturationLevel, 0.55)
+    }
+
     func testStorePersistsEnabledBridgeMappingsAndStrategy() {
         let suiteName = "HueAmbienceStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

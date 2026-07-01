@@ -17,6 +17,7 @@ const config: HueAmbienceRuntimeConfig = {
   stopBehavior: 'turnOff',
   motionStyle: 'still',
   flowIntervalSeconds: 8,
+  toneControl: { brightness: 1, saturation: 1 },
 };
 
 const runtimeConfig = (overrides: Partial<HueAmbienceRuntimeConfig>): HueAmbienceRuntimeConfig => ({
@@ -71,8 +72,10 @@ test('config store status redacts application key', async () => {
       areas: 0,
       motionStyle: 'still',
       stopBehavior: 'turnOff',
+      toneControl: { brightness: 1, saturation: 1 },
       renderMode: null,
       activeTargetIds: [],
+      activeGroups: [],
       entertainmentTargetActive: false,
       entertainmentMetadataComplete: false,
       lastFrameAt: null,
@@ -533,6 +536,26 @@ test('config store uses flow interval environment override', async () => {
     } else {
       process.env.HUE_FLOW_INTERVAL_SECONDS = previous;
     }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('config store clamps Hue ambience tone control into the supported range', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-config-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(runtimeConfig({
+      toneControl: { brightness: 9, saturation: 9 },
+    }));
+
+    assert.deepEqual(store.current?.toneControl, { brightness: 1.2, saturation: 1.12 });
+
+    await store.save(runtimeConfig({
+      toneControl: { brightness: -2, saturation: -2 },
+    }));
+
+    assert.deepEqual(store.current?.toneControl, { brightness: 0.55, saturation: 0.55 });
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

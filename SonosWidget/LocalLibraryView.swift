@@ -774,10 +774,34 @@ struct LocalLibraryView: View {
             actions: MusicResourceActionPolicy.actions(
                 kind: kind,
                 isQueueable: playable != nil || fallbackKind != nil,
-                supportsStation: kind == .artist
+                supportsStation: kind == .artist,
+                isAppleMusicFavoriteAvailable: kind != .song ||
+                    AppleMusicFavoriteResource.fromLocalServicePlayable(playable) != nil
             )
         ) { action in
             Task {
+                switch action {
+                case .favorite(.sonos, _, _):
+                    await store.toggleSonosFavorite(
+                        playable: playable,
+                        displayID: displayID,
+                        fallbackKind: fallbackKind,
+                        fallbackTitle: fallbackTitle,
+                        fallbackArtist: fallbackArtist,
+                        fallbackAlbum: fallbackAlbum,
+                        manager: manager,
+                        searchManager: searchManager)
+                    return
+                case .favorite(.appleMusic, _, _):
+                    guard let resource = AppleMusicFavoriteResource.fromLocalServicePlayable(playable) else {
+                        return
+                    }
+                    _ = await searchManager.toggleAppleMusicFavorites(resource: resource)
+                    return
+                case .playNow, .playNext, .addToQueue, .startStation:
+                    break
+                }
+
                 await store.performSonosQueueAction(
                     action,
                     playable: playable,
@@ -1211,6 +1235,7 @@ struct LocalLibraryView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .onAppear {
             prepareCategoryDetail(category)
+            Task { await store.loadCategoryIfNeeded(category) }
         }
     }
 
@@ -1301,6 +1326,12 @@ struct LocalLibraryView: View {
                             }
                     }
                     .accessibilityLabel("Sort \(category.title)")
+                }
+
+                if store.isLoadingCategory(category) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.72))
                 }
             }
         }

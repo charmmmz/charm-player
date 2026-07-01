@@ -1,4 +1,6 @@
+import AVFoundation
 import SwiftUI
+import UIKit
 
 struct PlayerView: View {
     @Bindable var manager: SonosManager
@@ -95,11 +97,22 @@ struct PlayerView: View {
 
     @State private var dropTargetGroupID: String?
     @State private var isSeparateZoneTargeted = false
+    @State private var isTransferZoneTargeted = false
     @State private var isTransferringPlayback = false
     @State private var pendingSharePlaybackGroupID: String?
     @State private var pendingSharePulse = false
+    @State private var hasActiveSpeakerGroupDragSource = false
+    @State private var isSpeakerGroupDragPreviewVisible = false
+    @State private var speakerGroupDragAutoResetTask: Task<Void, Never>?
     @State private var speakerCardSizes: [String: CGSize] = [:]
     @State private var homeToastMessage: String?
+
+    private var isSpeakerGroupDragActive: Bool {
+        HomeActionTrayPresentation.isVisible(
+            hasActiveDragSource: hasActiveSpeakerGroupDragSource,
+            isDragPreviewVisible: isSpeakerGroupDragPreviewVisible
+        )
+    }
 
     private var speakersHomeView: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -143,7 +156,10 @@ struct PlayerView: View {
                                     }
                                 }
                                 // Drag source: carry the group ID as a String.
-                                .draggable(group.id) {
+                                .onDrag {
+                                    beginSpeakerGroupDrag()
+                                    return NSItemProvider(object: group.id as NSString)
+                                } preview: {
                                     dragPreview(group)
                                 }
                                 // Drop center to group, or top/bottom edges to reorder.
@@ -155,6 +171,7 @@ struct PlayerView: View {
                                         targetGroup: group,
                                         location: location
                                     )
+                                    endSpeakerGroupDrag()
                                     return true
                                 } isTargeted: { targeted in
                                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -221,11 +238,15 @@ struct PlayerView: View {
                     .padding(.top, 16)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            homeActionZone
-                .padding(.trailing, 20)
-                .padding(.bottom, homeActionBottomPadding)
+        .overlay(alignment: .bottom) {
+            if HomeActionTrayPresentation.isVisible(isSpeakerGroupDragActive: isSpeakerGroupDragActive) {
+                homeActionZone
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, homeActionBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isSpeakerGroupDragActive)
         .toast($homeToastMessage)
         .onAppear {
             manager.refreshHomeSpeakerCardsOnAppear()
@@ -357,12 +378,23 @@ struct PlayerView: View {
     }
 
     private var homeActionZone: some View {
-        VStack(spacing: 14) {
+        HStack(spacing: HomeActionTrayPresentation.actionSpacing) {
             transferZone
+                .dropDestination(for: String.self) { items, _ in
+                    guard let groupID = items.first else { return false }
+                    handoffPlayback(toGroupID: groupID)
+                    endSpeakerGroupDrag()
+                    return true
+                } isTargeted: { targeted in
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                        isTransferZoneTargeted = targeted
+                    }
+                }
             ungroupZone
                 .dropDestination(for: String.self) { items, _ in
                     guard let groupID = items.first else { return false }
                     Task { await manager.separateGroup(groupID: groupID) }
+                    endSpeakerGroupDrag()
                     return true
                 } isTargeted: { targeted in
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
@@ -370,6 +402,14 @@ struct PlayerView: View {
                     }
                 }
         }
+        .padding(.horizontal, HomeActionTrayPresentation.horizontalPadding)
+        .padding(.vertical, HomeActionTrayPresentation.verticalPadding)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 10)
     }
 
     private var homeActionBottomPadding: CGFloat {
@@ -394,23 +434,31 @@ struct PlayerView: View {
             VStack(spacing: 5) {
                 ZStack {
                     Circle()
-                        .fill(isTransferringPlayback ? Color.white.opacity(0.18) : Color.white.opacity(0.08))
+                        .fill(
+                            isTransferZoneTargeted || isTransferringPlayback
+                                ? Color.white.opacity(0.2)
+                                : Color.white.opacity(0.08)
+                        )
                     Circle()
-                        .strokeBorder(Color.white.opacity(0.2), lineWidth: 1.5)
+                        .strokeBorder(
+                            isTransferZoneTargeted ? Color.white.opacity(0.7) : Color.white.opacity(0.2),
+                            lineWidth: 1.5
+                        )
                     if isTransferringPlayback {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "arrow.left.arrow.right")
                             .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(isTransferZoneTargeted ? .white : .white.opacity(0.55))
                     }
                 }
                 .frame(width: 52, height: 52)
+                .scaleEffect(isTransferZoneTargeted ? 1.12 : 1.0)
 
                 Text("HANDOFF")
                     .font(.system(size: 8, weight: .bold))
                     .tracking(0.6)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(isTransferZoneTargeted ? .white.opacity(0.85) : .white.opacity(0.45))
             }
         }
         .buttonStyle(.plain)
@@ -442,6 +490,46 @@ struct PlayerView: View {
         }
     }
 
+    private func beginSpeakerGroupDrag() {
+        scheduleSpeakerGroupDragAutoReset()
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            hasActiveSpeakerGroupDragSource = true
+        }
+    }
+
+    private func setSpeakerGroupDragPreviewVisible(_ visible: Bool) {
+        if visible {
+            scheduleSpeakerGroupDragAutoReset()
+        }
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            isSpeakerGroupDragPreviewVisible = visible
+        }
+    }
+
+    private func endSpeakerGroupDrag() {
+        speakerGroupDragAutoResetTask?.cancel()
+        speakerGroupDragAutoResetTask = nil
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            hasActiveSpeakerGroupDragSource = false
+            isSpeakerGroupDragPreviewVisible = false
+            isSeparateZoneTargeted = false
+            isTransferZoneTargeted = false
+            dropTargetGroupID = nil
+        }
+    }
+
+    private func scheduleSpeakerGroupDragAutoReset() {
+        speakerGroupDragAutoResetTask?.cancel()
+        speakerGroupDragAutoResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled else { return }
+            endSpeakerGroupDrag()
+        }
+    }
+
     @ViewBuilder
     private func dragPreview(_ group: SpeakerGroupStatus) -> some View {
         let visibleMembers = group.members
@@ -469,6 +557,12 @@ struct PlayerView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(accent.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            setSpeakerGroupDragPreviewVisible(true)
+        }
+        .onDisappear {
+            setSpeakerGroupDragPreviewVisible(false)
+        }
     }
 
     private func transferAppleMusicToSonos() {
@@ -513,6 +607,21 @@ struct PlayerView: View {
             transferSonosToIPhone()
         case .phoneToSonos:
             transferAppleMusicToSonos()
+        }
+    }
+
+    private func handoffPlayback(toGroupID groupID: String) {
+        guard let group = manager.groupStatuses.first(where: { $0.id == groupID }) else {
+            handoffPlayback()
+            return
+        }
+
+        Task { @MainActor in
+            await manager.selectSpeaker(
+                group.coordinator,
+                userInitiatedLiveActivityResume: true
+            )
+            handoffPlayback()
         }
     }
 
@@ -1198,11 +1307,13 @@ struct NowPlayingOverlay: View {
     @State private var premuteVolume: Int?
     @State private var scrubPosition: TimeInterval = 0
     @State private var isScrubbing = false
-    @State private var dragDownOffset: CGFloat = 0
     @State private var nowPlayingInfo: SonosCloudAPI.NowPlayingResponse?
     @State private var lastFetchedTrackURI: String?
     @State private var isOpeningAppleMusicLink = false
     @State private var currentAppleMusicTrackURL: URL?
+    @StateObject private var animatedArtworkState = AnimatedNowPlayingArtworkState()
+    @State private var animatedArtworkReadyURL: URL?
+    @State private var fullScreenAnimatedArtworkReadyURL: URL?
     /// Handle on the in-flight NowPlaying fetch so we can cancel it when
     /// the track changes again before the previous lookup resolves. Without
     /// this, a slow fetch for track A could land after track B's fetch and
@@ -1216,28 +1327,86 @@ struct NowPlayingOverlay: View {
         manager.albumArtTransitionID()
     }
 
+    private var fullScreenAnimatedArtworkURL: URL? {
+        guard let info = animatedArtworkState.currentInfo,
+              AnimatedArtworkFeature.canRenderFullScreenTallArtwork(
+                source: manager.trackInfo?.source,
+                hasTallArtwork: info.tallArtworkURL != nil,
+                isCompactHeight: verticalSizeClass == .compact
+              ) else {
+            return nil
+        }
+        return info.fullScreenPlayerURL
+    }
+
+    private var fullScreenAnimatedArtworkAspectRatio: CGFloat? {
+        guard let value = animatedArtworkState.currentInfo?.tallAspectRatio else {
+            return nil
+        }
+        return CGFloat(value)
+    }
+
+    private var usesFullScreenAnimatedArtwork: Bool {
+        fullScreenAnimatedArtworkURL != nil
+    }
+
+    private var windowTopSafeAreaInset: CGFloat {
+        UIApplication.shared.sonosPresentationWindow?.safeAreaInsets.top ?? 0
+    }
+
+    private var windowBottomSafeAreaInset: CGFloat {
+        UIApplication.shared.sonosPresentationWindow?.safeAreaInsets.bottom ?? 0
+    }
+
+    private var dragHandleTopPadding: CGFloat {
+        NowPlayingOverlayPresentation.dragHandleTopPadding(
+            topSafeAreaInset: windowTopSafeAreaInset
+        )
+    }
+
+    private func bottomActionsBottomPadding(geo: GeometryProxy) -> CGFloat {
+        NowPlayingOverlayPresentation.bottomActionsBottomPadding(
+            bottomSafeAreaInset: max(geo.safeAreaInsets.bottom, windowBottomSafeAreaInset)
+        )
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
                 let isLandscape = geo.size.width > geo.size.height
-                if isLandscape {
-                    landscapeLayout(geo: geo)
-                } else {
-                    portraitLayout(geo: geo)
+                let backgroundSize = AnimatedArtworkFeature.fullScreenBackgroundContainerSize(
+                    contentSize: geo.size,
+                    topSafeAreaInset: geo.safeAreaInsets.top,
+                    bottomSafeAreaInset: geo.safeAreaInsets.bottom
+                )
+                let backgroundTopOffset = AnimatedArtworkFeature.fullScreenBackgroundTopOffset(
+                    topSafeAreaInset: geo.safeAreaInsets.top
+                )
+                ZStack(alignment: .top) {
+                    artBackground(size: backgroundSize)
+                        .offset(y: backgroundTopOffset)
+                        .allowsHitTesting(false)
+
+                    Group {
+                        if isLandscape {
+                            landscapeLayout(geo: geo)
+                        } else {
+                            portraitLayout(geo: geo)
+                        }
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .background { artBackground }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .padding(.horizontal, 6)
-        .padding(.top, 4)
-        .offset(y: dragDownOffset)
-        .ignoresSafeArea(edges: .bottom)
-        .onChange(of: manager.showFullPlayer) { _, isOpen in
-            if !isOpen { dragDownOffset = 0 }
-        }
+        .ignoresSafeArea(
+            .container,
+            edges: NowPlayingOverlayPresentation.internalIgnoredSafeAreaEdges
+        )
+        .padding(.horizontal, NowPlayingOverlayPresentation.horizontalPadding)
+        .padding(.top, NowPlayingOverlayPresentation.topPadding)
         .onChange(of: manager.trackInfo?.trackURI) { _, newURI in
             guard let uri = newURI, uri != lastFetchedTrackURI else { return }
             lastFetchedTrackURI = uri
@@ -1306,6 +1475,24 @@ struct NowPlayingOverlay: View {
         .task(id: currentAppleMusicLinkLookupID) {
             await refreshCurrentAppleMusicTrackURL()
         }
+        .task(id: animatedArtworkLookupID) {
+            refreshAnimatedArtwork()
+        }
+        .onChange(of: animatedArtworkState.currentURL) { oldURL, newURL in
+            if oldURL != newURL {
+                animatedArtworkReadyURL = nil
+            }
+        }
+        .onChange(of: fullScreenAnimatedArtworkURL) { oldURL, newURL in
+            if oldURL != newURL {
+                fullScreenAnimatedArtworkReadyURL = nil
+            }
+        }
+        .onDisappear {
+            animatedArtworkState.reset()
+            animatedArtworkReadyURL = nil
+            fullScreenAnimatedArtworkReadyURL = nil
+        }
         .sheet(isPresented: $manager.showingSpeakerPicker) {
             SpeakerPickerView(manager: manager)
         }
@@ -1316,13 +1503,23 @@ struct NowPlayingOverlay: View {
 
     // MARK: - Portrait Layout
 
+    @ViewBuilder
     private func portraitLayout(geo: GeometryProxy) -> some View {
+        if usesFullScreenAnimatedArtwork {
+            immersivePortraitLayout(geo: geo)
+        } else {
+            standardPortraitLayout(geo: geo)
+        }
+    }
+
+    private func standardPortraitLayout(geo: GeometryProxy) -> some View {
         let h = geo.size.height
         // Full-bleed square cover. Cap at h * 0.55 as a safety on small
         // devices (e.g. SE) where a width-sized square would crowd out the
         // transport row below; on every modern iPhone width wins this min.
         let artSz = max(1, min(geo.size.width, h * 0.55))
         let s = max(0.5, h / 760)
+        let bottomActionsBottomPadding = bottomActionsBottomPadding(geo: geo)
 
         return VStack(spacing: 0) {
             albumArtView(size: artSz)
@@ -1350,26 +1547,84 @@ struct NowPlayingOverlay: View {
             volumeControl
                 .padding(.top, manager.trackInfo?.source == .tv ? 18 * s : 22 * s)
 
+            Spacer(minLength: 0)
+
             // Queue is meaningless for TV input (the soundbar isn't playing
             // a queue, it's passing through HDMI/optical), so hide the list
             // button and let the speaker picker fill the row.
             bottomActions(showQueue: manager.trackInfo?.source != .tv)
                 .padding(.top, 16 * s)
-
-            Spacer(minLength: 0)
+                .padding(.bottom, bottomActionsBottomPadding)
 
             errorBanner
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Drag handle floats above the cover so the artwork can take the
-        // full top of the screen without losing the pull-to-dismiss
-        // affordance.
+        // Drag handle stays at the top of the player card. The card itself is
+        // already laid out below the window safe area.
         .overlay(alignment: .top) {
             dragHandle
-                .padding(.top, 8)
+                .padding(.top, dragHandleTopPadding)
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(dismissDragGesture)
+    }
+
+    private func immersivePortraitLayout(geo: GeometryProxy) -> some View {
+        let h = geo.size.height
+        let s = max(0.5, h / 760)
+        let controlsTopPadding = max(300, h * 0.52)
+        let bottomActionsBottomPadding = bottomActionsBottomPadding(geo: geo)
+        let backgroundSize = AnimatedArtworkFeature.fullScreenBackgroundContainerSize(
+            contentSize: geo.size,
+            topSafeAreaInset: geo.safeAreaInsets.top,
+            bottomSafeAreaInset: geo.safeAreaInsets.bottom
+        )
+        let foregroundSize = AnimatedArtworkFeature.fullScreenBlurFillForegroundSize(
+            containerSize: backgroundSize,
+            videoAspectRatio: fullScreenAnimatedArtworkAspectRatio
+        )
+        let foregroundTopOffset = AnimatedArtworkFeature.fullScreenBlurFillForegroundTopOffset(
+            containerSize: backgroundSize
+        )
+        let sourceBadgeTopPadding = AnimatedArtworkFeature.fullScreenSourceBadgeTopPadding(
+            foregroundSize: foregroundSize,
+            foregroundTopOffset: foregroundTopOffset,
+            controlsTopPadding: controlsTopPadding
+        )
+
+        return VStack(spacing: 0) {
+            Spacer(minLength: controlsTopPadding)
+
+            trackInfoView
+                .padding(.horizontal, 32)
+
+            progressView
+                .padding(.top, 18 * s)
+
+            playbackControls
+                .padding(.top, 22 * s)
+
+            volumeControl
+                .padding(.top, 22 * s)
+
+            Spacer(minLength: 0)
+
+            bottomActions(showQueue: true)
+                .padding(.top, 16 * s)
+                .padding(.bottom, bottomActionsBottomPadding)
+
+            errorBanner
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
+            dragHandle
+                .padding(.top, dragHandleTopPadding)
+        }
+        .overlay(alignment: .topLeading) {
+            fullScreenAnimatedArtworkSourceBadge
+                .padding(.leading, 32)
+                .padding(.top, sourceBadgeTopPadding)
+        }
+        .contentShape(Rectangle())
     }
 
     // MARK: - Landscape Layout (player left | queue right)
@@ -1384,7 +1639,7 @@ struct NowPlayingOverlay: View {
             // ── Left panel: player (gesture lives here to avoid QueueView List interference) ──
             VStack(spacing: 0) {
                 dragHandle
-                    .padding(.top, 10)
+                    .padding(.top, dragHandleTopPadding)
 
                 Spacer(minLength: topPad)
 
@@ -1438,7 +1693,6 @@ struct NowPlayingOverlay: View {
             }
             .frame(width: leftW)
             .contentShape(Rectangle())
-            .simultaneousGesture(dismissDragGesture)
 
             Rectangle()
                 .fill(.white.opacity(0.12))
@@ -1474,29 +1728,6 @@ struct NowPlayingOverlay: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Dismiss Drag Gesture
-
-    /// Global coordinate space: offset is at body level (outside clipShape/padding),
-    /// gestures are attached inside layouts — global coords keep translation stable.
-    private var dismissDragGesture: some Gesture {
-        DragGesture(coordinateSpace: .global)
-            .onChanged { v in
-                if v.translation.height > 0 {
-                    dragDownOffset = v.translation.height
-                }
-            }
-            .onEnded { v in
-                if v.translation.height > 120 || v.predictedEndTranslation.height > 300 {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                        manager.showFullPlayer = false
-                    }
-                }
-                withAnimation(.spring(response: 0.3)) {
-                    dragDownOffset = 0
-                }
-            }
-    }
-
     // MARK: - Drag Handle
 
     private var dragHandle: some View {
@@ -1508,17 +1739,155 @@ struct NowPlayingOverlay: View {
     // MARK: - Background
 
     @ViewBuilder
-    private var artBackground: some View {
+    private func artBackground(size: CGSize) -> some View {
         let transitionID = albumArtTransitionID
-        SonosArtworkBackground(
-            image: manager.albumArtImage,
-            fallbackColor: manager.albumArtDominantColor,
-            overlayOpacity: NowPlayingBackgroundPresentation.sharedArtworkOverlayOpacity
+        ZStack {
+            SonosArtworkBackground(
+                image: manager.albumArtImage,
+                fallbackColor: manager.albumArtDominantColor,
+                overlayOpacity: usesFullScreenAnimatedArtwork
+                    ? 0.18
+                    : NowPlayingBackgroundPresentation.sharedArtworkOverlayOpacity
+            )
+            .id(transitionID)
+
+            if let url = fullScreenAnimatedArtworkURL {
+                fullScreenAnimatedArtworkPresentation(
+                    url: url,
+                    size: size
+                )
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .opacity(fullScreenAnimatedArtworkReadyURL == url ? 1 : 0)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+
+                fullScreenAnimatedArtworkScrim
+                    .frame(width: size.width, height: size.height)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .clipped()
+        .ignoresSafeArea(
+            .container,
+            edges: NowPlayingOverlayPresentation.backgroundIgnoredSafeAreaEdges
         )
-        .id(transitionID)
-        .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.8), value: transitionID)
         .animation(.easeInOut(duration: 0.8), value: manager.albumArtDominantColor)
+        .animation(.easeInOut(duration: 0.45), value: fullScreenAnimatedArtworkReadyURL)
+    }
+
+    @ViewBuilder
+    private func fullScreenAnimatedArtworkPresentation(
+        url: URL,
+        size: CGSize
+    ) -> some View {
+        let containerAspectRatio = size.height > 0 ? size.width / size.height : 0
+        let videoAspectRatio = fullScreenAnimatedArtworkAspectRatio
+        let usesBlurFill = AnimatedArtworkFeature.shouldUseBlurFillForFullScreenArtwork(
+            videoAspectRatio: videoAspectRatio,
+            containerAspectRatio: containerAspectRatio
+        )
+
+        if usesBlurFill {
+            fullScreenAnimatedArtworkBlurFill(
+                url: url,
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+        } else {
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: true,
+                videoGravity: .resizeAspectFill,
+                onReadyForDisplay: {
+                    markFullScreenAnimatedArtworkReady(url)
+                }
+            )
+        }
+    }
+
+    private func fullScreenAnimatedArtworkBlurFill(
+        url: URL,
+        size: CGSize,
+        videoAspectRatio: CGFloat?
+    ) -> some View {
+        let foregroundSize = AnimatedArtworkFeature.fullScreenBlurFillForegroundSize(
+            containerSize: size,
+            videoAspectRatio: videoAspectRatio
+        )
+        let foregroundTopOffset = AnimatedArtworkFeature.fullScreenBlurFillForegroundTopOffset(
+            containerSize: size
+        )
+
+        return ZStack(alignment: .top) {
+            FullScreenAnimatedArtworkExtensionBackdrop(
+                size: size,
+                videoAspectRatio: videoAspectRatio
+            )
+
+            AnimatedArtworkPlayerView(
+                url: url,
+                isPlaying: true,
+                videoGravity: .resizeAspect,
+                onReadyForDisplay: {
+                    markFullScreenAnimatedArtworkReady(url)
+                }
+            )
+            .frame(width: foregroundSize.width, height: foregroundSize.height, alignment: .top)
+            .clipped()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.54),
+                        .init(color: .black.opacity(0.6), location: 0.72),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .offset(y: foregroundTopOffset)
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .clipped()
+    }
+
+    private func markFullScreenAnimatedArtworkReady(_ url: URL) {
+        if fullScreenAnimatedArtworkURL == url {
+            fullScreenAnimatedArtworkReadyURL = url
+        }
+    }
+
+    private var fullScreenAnimatedArtworkScrim: some View {
+        ZStack {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.08), location: 0.0),
+                    .init(color: .black.opacity(0.08), location: 0.36),
+                    .init(color: .black.opacity(0.48), location: 0.58),
+                    .init(color: .black.opacity(0.88), location: 1.0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.32)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.34),
+                            .init(color: .black.opacity(0.35), location: 0.58),
+                            .init(color: .black, location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
     }
 
     // MARK: - Album Art
@@ -1587,6 +1956,21 @@ struct NowPlayingOverlay: View {
                     Image(uiImage: image)
                         .resizable().aspectRatio(1, contentMode: .fit)
 
+                    if let animatedURL = animatedArtworkState.currentURL,
+                       AnimatedArtworkFeature.canRenderVideo(source: manager.trackInfo?.source) {
+                        AnimatedArtworkPlayerView(
+                            url: animatedURL,
+                            isPlaying: true,
+                            onReadyForDisplay: {
+                                if animatedArtworkState.currentURL == animatedURL {
+                                    animatedArtworkReadyURL = animatedURL
+                                }
+                            }
+                        )
+                        .opacity(animatedArtworkReadyURL == animatedURL ? 1 : 0)
+                        .accessibilityHidden(true)
+                    }
+
                     if verticalSizeClass != .compact,
                        let source = manager.trackInfo?.source, source != .unknown {
                         sourceBadge(source)
@@ -1626,6 +2010,15 @@ struct NowPlayingOverlay: View {
             .accessibilityLabel("Open current song in Apple Music")
         } else {
             badge
+        }
+    }
+
+    @ViewBuilder
+    private var fullScreenAnimatedArtworkSourceBadge: some View {
+        if verticalSizeClass != .compact,
+           let source = manager.trackInfo?.source,
+           source != .unknown {
+            sourceBadge(source)
         }
     }
 
@@ -1866,6 +2259,58 @@ struct NowPlayingOverlay: View {
             return nil
         }
         return trimmed
+    }
+
+    private var animatedArtworkLookupID: String {
+        [
+            animatedArtworkIdentity.map { identity in
+                [
+                    identity.trackURI ?? "",
+                    identity.title,
+                    identity.artist,
+                    identity.album
+                ].joined(separator: "|")
+            } ?? "none",
+            currentAppleMusicAnimatedArtworkLookupURL?.absoluteString ?? "",
+            RelayManager.shared.activeURLString ?? ""
+        ].joined(separator: "||")
+    }
+
+    private var animatedArtworkIdentity: AnimatedNowPlayingArtworkState.Identity? {
+        guard let info = manager.trackInfo,
+              info.isLiveStream != true,
+              let title = meaningfulAppleMusicSearchValue(info.title),
+              let artist = meaningfulAppleMusicSearchValue(info.artist),
+              let album = meaningfulAppleMusicSearchValue(info.album) else {
+            return nil
+        }
+        return AnimatedNowPlayingArtworkState.Identity(
+            trackURI: info.trackURI,
+            title: title,
+            artist: artist,
+            album: album
+        )
+    }
+
+    private var currentAppleMusicAnimatedArtworkLookupURL: URL? {
+        guard manager.trackInfo?.source == .appleMusic else { return nil }
+        return currentAppleMusicTrackURL
+    }
+
+    private func refreshAnimatedArtwork() {
+        guard let identity = animatedArtworkIdentity else {
+            animatedArtworkState.reset()
+            animatedArtworkReadyURL = nil
+            fullScreenAnimatedArtworkReadyURL = nil
+            return
+        }
+
+        animatedArtworkState.resolve(
+            identity: identity,
+            albumURL: currentAppleMusicAnimatedArtworkLookupURL,
+            relayBaseURL: RelayManager.shared.url,
+            source: manager.trackInfo?.source
+        )
     }
 
     private var artistBrowseItem: BrowseItem? {
@@ -2631,12 +3076,150 @@ enum MiniPlayerLayoutMetrics {
             homeActionDefaultBottomPadding
         }
     }
+
+    static func systemAccessoryContentBottomInset(isMiniPlayerVisible: Bool) -> CGFloat {
+        isMiniPlayerVisible
+            ? systemAccessoryMiniPlayerHeight + systemAccessoryMiniPlayerBottomGap
+            : 0
+    }
+}
+
+enum HomeActionTrayPresentation {
+    enum MountMode: Equatable {
+        case overlay
+    }
+
+    static let mountMode: MountMode = .overlay
+    static let actionSpacing: CGFloat = 18
+    static let horizontalPadding: CGFloat = 14
+    static let verticalPadding: CGFloat = 10
+
+    static func isVisible(isSpeakerGroupDragActive: Bool) -> Bool {
+        isSpeakerGroupDragActive
+    }
+
+    static func isVisible(
+        hasActiveDragSource: Bool,
+        isDragPreviewVisible: Bool
+    ) -> Bool {
+        hasActiveDragSource || isDragPreviewVisible
+    }
+}
+
+enum MiniPlayerMountPolicy {
+    static func shouldMount(
+        isConfigured: Bool,
+        isKeyboardVisible: Bool
+    ) -> Bool {
+        isConfigured && !isKeyboardVisible
+    }
+
+    static func isVisible(
+        isConfigured: Bool,
+        isFullPlayerVisible: Bool,
+        isKeyboardVisible: Bool
+    ) -> Bool {
+        shouldMount(
+            isConfigured: isConfigured,
+            isKeyboardVisible: isKeyboardVisible
+        ) && !isFullPlayerVisible
+    }
 }
 
 enum NowPlayingBackgroundPresentation {
     nonisolated static let usesSharedArtworkBackground = true
     nonisolated static let usesReflectedArtwork = false
     nonisolated static let sharedArtworkOverlayOpacity = 0.6
+}
+
+nonisolated struct NowPlayingOverlayCornerRadii: Equatable {
+    let topLeading: CGFloat
+    let bottomLeading: CGFloat
+    let bottomTrailing: CGFloat
+    let topTrailing: CGFloat
+
+    var rectangleCornerRadii: RectangleCornerRadii {
+        RectangleCornerRadii(
+            topLeading: topLeading,
+            bottomLeading: bottomLeading,
+            bottomTrailing: bottomTrailing,
+            topTrailing: topTrailing
+        )
+    }
+}
+
+nonisolated enum NowPlayingOverlayPresentation {
+    enum BackgroundSafeAreaMode: Equatable {
+        case clippedToRootCard
+    }
+    enum InternalSafeAreaMode: Equatable {
+        case respectsTopSafeAreaExtendsBottom
+    }
+    enum FullScreenArtworkMount: Equatable {
+        case rootCardStack
+    }
+
+    static let horizontalPadding: CGFloat = 0
+    static let topPadding: CGFloat = 4
+    static let restingCornerRadius: CGFloat = 0
+    static let restingTopCornerRadius: CGFloat = 0
+    static let maximumBottomCornerRadius: CGFloat = 0
+    static let maximumDraggedCornerRadius: CGFloat = maximumBottomCornerRadius
+    static let dragDismissalResetDelayNanoseconds: UInt64 = 450_000_000
+    static let dragHandleTopMargin: CGFloat = 8
+    static let bottomActionsBottomMargin: CGFloat = 22
+    static let bottomActionsHomeIndicatorGap: CGFloat = 10
+    static let backgroundSafeAreaMode: BackgroundSafeAreaMode = .clippedToRootCard
+    static let backgroundIgnoredSafeAreaEdges: Edge.Set = .all
+    static let internalSafeAreaMode: InternalSafeAreaMode = .respectsTopSafeAreaExtendsBottom
+    static let internalIgnoredSafeAreaEdges: Edge.Set = .bottom
+    static let fullScreenArtworkMount: FullScreenArtworkMount = .rootCardStack
+
+    static func cornerRadius(forDragOffset _: CGFloat) -> CGFloat {
+        restingCornerRadius
+    }
+
+    static func topCornerRadius(forDragOffset _: CGFloat) -> CGFloat {
+        restingTopCornerRadius
+    }
+
+    static func bottomCornerRadius(forDragOffset _: CGFloat) -> CGFloat {
+        maximumBottomCornerRadius
+    }
+
+    static func clipCornerRadii(forDragOffset dragOffset: CGFloat) -> NowPlayingOverlayCornerRadii {
+        let topRadius = topCornerRadius(forDragOffset: dragOffset)
+        let bottomRadius = bottomCornerRadius(forDragOffset: dragOffset)
+
+        return NowPlayingOverlayCornerRadii(
+            topLeading: topRadius,
+            bottomLeading: bottomRadius,
+            bottomTrailing: bottomRadius,
+            topTrailing: topRadius
+        )
+    }
+
+    static func dragHandleTopPadding(topSafeAreaInset: CGFloat) -> CGFloat {
+        dragHandleTopMargin
+    }
+
+    static func bottomActionsBottomPadding(bottomSafeAreaInset: CGFloat) -> CGFloat {
+        max(bottomActionsBottomMargin, max(0, bottomSafeAreaInset) + bottomActionsHomeIndicatorGap)
+    }
+
+    static func shouldDismissFromDrag(
+        translationHeight: CGFloat,
+        predictedEndTranslationHeight: CGFloat
+    ) -> Bool {
+        translationHeight > 120 || predictedEndTranslationHeight > 300
+    }
+
+    static func shouldResetDragOffsetImmediately(
+        isFullPlayerVisible: Bool,
+        isDismissingFromDrag: Bool
+    ) -> Bool {
+        isFullPlayerVisible || !isDismissingFromDrag
+    }
 }
 
 nonisolated enum PlaybackControlPresentation {
@@ -2690,23 +3273,12 @@ struct MiniPlayerBar: View {
                 let isLiveStream = manager.trackInfo?.isLiveStream == true
                 let artSize: CGFloat = inSystemAccessory ? 32 : 44
                 let cornerRadius: CGFloat = inSystemAccessory ? 6 : 8
-                if isTV {
-                    // TV input never has cover art — show a `tv` glyph
-                    // instead of the music note so the mini-player matches
-                    // the home card and full player.
-                    RoundedRectangle(cornerRadius: cornerRadius).fill(.quaternary)
-                        .frame(width: artSize, height: artSize)
-                        .overlay { Image(systemName: "tv").font(.caption).foregroundStyle(.tertiary) }
-                } else if let image = manager.albumArtImage {
-                    Image(uiImage: image)
-                        .resizable().aspectRatio(contentMode: .fill)
-                        .frame(width: artSize, height: artSize)
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                } else {
-                    RoundedRectangle(cornerRadius: cornerRadius).fill(.quaternary)
-                        .frame(width: artSize, height: artSize)
-                        .overlay { Image(systemName: "music.note").font(.caption).foregroundStyle(.tertiary) }
-                }
+                miniPlayerArtworkView(
+                    isTV: isTV,
+                    image: manager.albumArtImage,
+                    size: artSize,
+                    cornerRadius: cornerRadius
+                )
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
@@ -2810,6 +3382,39 @@ struct MiniPlayerBar: View {
             return nil
         }
     }
+
+    @ViewBuilder
+    private func miniPlayerArtworkView(
+        isTV: Bool,
+        image: UIImage?,
+        size: CGFloat,
+        cornerRadius: CGFloat
+    ) -> some View {
+        ZStack {
+            if isTV {
+                // TV input never has cover art — show a `tv` glyph instead
+                // of the music note so the mini-player matches the home card.
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.quaternary)
+                Image(systemName: "tv")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.quaternary)
+                Image(systemName: "music.note")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+    }
 }
 
 private struct MiniPlayerWidthModifier: ViewModifier {
@@ -2857,10 +3462,19 @@ private struct KeyboardAwareMiniPlayer: View {
 
     var body: some View {
         Group {
-            if manager.isConfigured
-                && !manager.showFullPlayer
-                && !isKeyboardVisible {
+            if MiniPlayerMountPolicy.shouldMount(
+                isConfigured: manager.isConfigured,
+                isKeyboardVisible: isKeyboardVisible
+            ) {
+                let isVisible = MiniPlayerMountPolicy.isVisible(
+                    isConfigured: manager.isConfigured,
+                    isFullPlayerVisible: manager.showFullPlayer,
+                    isKeyboardVisible: isKeyboardVisible
+                )
                 MiniPlayerBar(manager: manager, inSystemAccessory: inSystemAccessory)
+                    .opacity(isVisible ? 1 : 0)
+                    .allowsHitTesting(isVisible)
+                    .accessibilityHidden(!isVisible)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -2888,13 +3502,46 @@ private struct MiniPlayerInset: ViewModifier {
     }
 }
 
+private struct MiniPlayerSystemAccessoryContentInset: ViewModifier {
+    @Bindable var manager: SonosManager
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            KeyboardAwareMiniPlayerContentSpacer(manager: manager)
+        }
+    }
+}
+
+private struct KeyboardAwareMiniPlayerContentSpacer: View {
+    @Bindable var manager: SonosManager
+    @State private var isKeyboardVisible = false
+
+    var body: some View {
+        Color.clear
+            .frame(height: MiniPlayerLayoutMetrics.systemAccessoryContentBottomInset(
+                isMiniPlayerVisible: manager.isConfigured
+                    && !manager.showFullPlayer
+                    && !isKeyboardVisible
+            ))
+            .allowsHitTesting(false)
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+            }
+    }
+}
+
 extension View {
-    /// Legacy fallback path for iOS < 26. On iOS 26 this is a no-op because
-    /// `tabViewBottomAccessory` already supplies the shared mini-player.
+    /// Mounts the per-tab content inset needed to keep scrollable pages clear
+    /// of the persistent mini-player.
     @ViewBuilder
-    func miniPlayerLegacyInsetIfNeeded(manager: SonosManager) -> some View {
+    func miniPlayerTabContentInset(manager: SonosManager) -> some View {
         if #available(iOS 26.0, *) {
-            self
+            modifier(MiniPlayerSystemAccessoryContentInset(manager: manager))
         } else {
             modifier(MiniPlayerInset(manager: manager))
         }

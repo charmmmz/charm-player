@@ -516,6 +516,28 @@ enum SharedStorage {
         set { defaults.set(newValue, forKey: "hueFlowSpeed") }
     }
 
+    nonisolated static var hueBrightnessLevel: Double? {
+        get { defaults.object(forKey: "hueBrightnessLevel") as? Double }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: "hueBrightnessLevel")
+            } else {
+                defaults.removeObject(forKey: "hueBrightnessLevel")
+            }
+        }
+    }
+
+    nonisolated static var hueSaturationLevel: Double? {
+        get { defaults.object(forKey: "hueSaturationLevel") as? Double }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: "hueSaturationLevel")
+            } else {
+                defaults.removeObject(forKey: "hueSaturationLevel")
+            }
+        }
+    }
+
     nonisolated static var hueLastStatusText: String? {
         get { defaults.string(forKey: "hueLastStatusText") }
         set { defaults.set(newValue, forKey: "hueLastStatusText") }

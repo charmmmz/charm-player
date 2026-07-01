@@ -3,6 +3,31 @@ import UIKit
 @testable import SonosWidget
 
 final class AlbumDetailPresentationTests: XCTestCase {
+    func testResolvedAlbumIDReplacesRawTitleForPlaybackURI() {
+        let item = BrowseItem(
+            id: "NEVER ENOUGH",
+            title: "NEVER ENOUGH",
+            artist: "Daniel Caesar",
+            album: "NEVER ENOUGH",
+            albumArtURL: "https://example.com/cover.jpg",
+            uri: "x-rincon-cpcontainer:1004206cNEVER ENOUGH?sid=204&flags=8300&sn=2",
+            isContainer: true,
+            serviceId: 204,
+            cloudType: "ALBUM"
+        )
+
+        let resolved = AlbumPlaybackItemPolicy.playbackItem(
+            from: item,
+            resolvedAlbumID: "album:1681322859"
+        )
+
+        XCTAssertEqual(resolved.id, "album:1681322859")
+        XCTAssertEqual(
+            resolved.uri,
+            "x-rincon-cpcontainer:1004206calbum%3a1681322859?sid=204&flags=8300&sn=2"
+        )
+    }
+
     func testSonosAlbumPrimaryActionsUseSonosFavorite() {
         XCTAssertEqual(
             AlbumPrimaryActionPolicy.actions(favoriteKind: .sonos),
@@ -36,6 +61,23 @@ final class AlbumDetailPresentationTests: XCTestCase {
                 .playNext,
                 .addToQueue,
                 .favorite(.sonos, isActive: false)
+            ]
+        )
+    }
+
+    func testSongTrackMenuUsesSonosAndAppleMusicFavoritesTogether() {
+        XCTAssertEqual(
+            AlbumTrackMenuActionPolicy.songActions(
+                isSonosFavoriteActive: true,
+                isAppleMusicFavoriteActive: false,
+                isQueueable: true
+            ),
+            [
+                .playNow,
+                .playNext,
+                .addToQueue,
+                .favorite(.sonos, isActive: true),
+                .favorite(.appleMusic, isActive: false)
             ]
         )
     }
@@ -121,6 +163,258 @@ final class AlbumDetailPresentationTests: XCTestCase {
         XCTAssertEqual(MusicDetailHeaderTypography.sonosAlbumArtistStyle, .body)
         XCTAssertEqual(MusicDetailHeaderTypography.localAlbumArtistStyle, .title3)
         XCTAssertEqual(MusicDetailHeaderTypography.artistOpacity, 1)
+    }
+
+    func testAlbumHeaderAnimatedArtworkUsesPlayableRelayURLWhenOnlySquareArtworkIsAvailable() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: nil,
+            appleMusicURLString: "https://music.apple.com/us/album/american-idiot/1161539183",
+            artist: "Green Day",
+            album: "American Idiot",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.headerURL(
+                info: info,
+                isEnabled: true
+            )?.absoluteString,
+            "https://video.example.com/square.m3u8"
+        )
+    }
+
+    func testAlbumHeaderAnimatedArtworkIsHiddenWhenTallFullScreenArtworkIsAvailable() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: "https://video.example.com/tall.m3u8",
+            appleMusicURLString: "https://music.apple.com/us/album/american-idiot/1161539183",
+            artist: "Green Day",
+            album: "American Idiot",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.headerURL(info: info, isEnabled: true))
+    }
+
+    func testAlbumHeaderAnimatedArtworkUsesStaticCoverUntilImmersiveBackgroundIsReady() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: "https://video.example.com/tall.m3u8",
+            appleMusicURLString: "https://music.apple.com/us/album/american-idiot/1161539183",
+            artist: "Green Day",
+            album: "American Idiot",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertNil(
+            AlbumAnimatedArtworkPresentation.headerURL(
+                info: info,
+                isEnabled: true,
+                isImmersiveLayoutActive: false
+            )
+        )
+        XCTAssertNil(
+            AlbumAnimatedArtworkPresentation.headerURL(
+                info: info,
+                isEnabled: true,
+                isImmersiveLayoutActive: true
+            )
+        )
+    }
+
+    func testAlbumAnimatedArtworkReadyStateSurvivesEquivalentRenderableInfo() {
+        let current = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: "https://video.example.com/tall.m3u8",
+            appleMusicURLString: "https://music.apple.com/us/album/after-hours/1499378108",
+            artist: "The Weeknd",
+            album: "After Hours",
+            source: .cache,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+        let refreshed = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: "https://video.example.com/tall.m3u8",
+            appleMusicURLString: "https://music.apple.com/us/album/after-hours/1499378108?ls=1",
+            artist: "The Weeknd",
+            album: "After Hours",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldResetReadyState(
+                current: current,
+                next: refreshed
+            )
+        )
+    }
+
+    func testAlbumHeaderAnimatedArtworkFallsBackToStaticCoverWhenUnavailable() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: nil,
+            tallURLString: nil,
+            appleMusicURLString: "https://music.apple.com/us/album/american-idiot/1161539183",
+            artist: "Green Day",
+            album: "American Idiot",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.headerURL(info: info, isEnabled: true))
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.headerURL(info: info, isEnabled: false))
+    }
+
+    func testAlbumFullScreenAnimatedArtworkPrefersTallArtworkWhenAvailable() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: "https://video.example.com/tall.m3u8",
+            appleMusicURLString: "https://music.apple.com/us/album/never-enough-bonus-version/1681198089",
+            artist: "Daniel Caesar",
+            album: "NEVER ENOUGH (Bonus Version)",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.fullScreenBackgroundURL(
+                info: info,
+                isEnabled: true
+            )?.absoluteString,
+            "https://video.example.com/tall.m3u8"
+        )
+    }
+
+    func testAlbumFullScreenAnimatedArtworkFallsBackToStaticBackgroundWhenUnavailable() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: nil,
+            tallURLString: nil,
+            appleMusicURLString: "https://music.apple.com/us/album/never-enough-bonus-version/1681198089",
+            artist: "Daniel Caesar",
+            album: "NEVER ENOUGH (Bonus Version)",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.fullScreenBackgroundURL(info: info, isEnabled: true))
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.fullScreenBackgroundURL(info: info, isEnabled: false))
+    }
+
+    func testAlbumFullScreenAnimatedArtworkRequiresTallArtwork() {
+        let info = AnimatedArtworkInfo(
+            squareURLString: "https://video.example.com/square.m3u8",
+            tallURLString: nil,
+            appleMusicURLString: "https://music.apple.com/us/album/american-idiot/1161539183",
+            artist: "Green Day",
+            album: "American Idiot",
+            source: .url,
+            resolvedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertNil(AlbumAnimatedArtworkPresentation.fullScreenBackgroundURL(info: info, isEnabled: true))
+    }
+
+    func testAlbumImmersiveLayoutWaitsForBackgroundVideoReady() throws {
+        let tallURL = try XCTUnwrap(URL(string: "https://video.example.com/tall.m3u8"))
+        let otherURL = try XCTUnwrap(URL(string: "https://video.example.com/other.m3u8"))
+
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+                backgroundURL: tallURL,
+                readyURL: nil
+            )
+        )
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+                backgroundURL: tallURL,
+                readyURL: otherURL
+            )
+        )
+        XCTAssertTrue(
+            AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+                backgroundURL: tallURL,
+                readyURL: tallURL
+            )
+        )
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldUseImmersiveLayout(
+                backgroundURL: nil,
+                readyURL: tallURL
+            )
+        )
+    }
+
+    func testAlbumImmersiveAnimatedArtworkSpacerAnchorsTitleNearViewportMiddle() {
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.immersiveHeaderSpacerHeight(
+                containerWidth: 390,
+                viewportHeight: 852,
+                videoAspectRatio: 0.75
+            ),
+            300,
+            accuracy: 0.5
+        )
+    }
+
+    func testAlbumImmersiveContentBackdropSoftlyOverlapsHeaderContent() {
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropTopPadding(isImmersive: true),
+            -144
+        )
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropTopPadding(isImmersive: false),
+            0
+        )
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropTopOpacity(isImmersive: true),
+            0
+        )
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropStrongFadeLocation(isImmersive: true),
+            0.58
+        )
+    }
+
+    func testAlbumImmersiveContentBackdropCoversLoadingGap() {
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropMinimumHeight(
+                isImmersive: true,
+                viewportHeight: 852
+            ),
+            852
+        )
+        XCTAssertEqual(
+            AlbumAnimatedArtworkPresentation.contentBackdropMinimumHeight(
+                isImmersive: false,
+                viewportHeight: 852
+            ),
+            0
+        )
+    }
+
+    func testAlbumAnimatedArtworkPausesBehindNowPlayingOverlay() {
+        XCTAssertTrue(
+            AlbumAnimatedArtworkPresentation.shouldPlayVideo(
+                isEnabled: true,
+                isBackgroundPlaybackSuspended: false
+            )
+        )
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldPlayVideo(
+                isEnabled: true,
+                isBackgroundPlaybackSuspended: true
+            )
+        )
+        XCTAssertFalse(
+            AlbumAnimatedArtworkPresentation.shouldPlayVideo(
+                isEnabled: false,
+                isBackgroundPlaybackSuspended: false
+            )
+        )
     }
 
     func testEditorialDescriptionPrefersStandardText() {

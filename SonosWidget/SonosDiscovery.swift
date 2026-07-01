@@ -83,7 +83,7 @@ final class SonosDiscovery {
         Task {
             do {
                 let allSpeakers = try await SonosAPI.getZoneGroupState(ip: ip)
-                let coordinators = allSpeakers.filter(\.isCoordinator)
+                let coordinators = SonosManager.homeSpeakerCoordinatorCandidates(in: allSpeakers)
                 if !coordinators.isEmpty {
                     for speaker in coordinators where !discoveredSpeakers.contains(where: { $0.id == speaker.id }) {
                         discoveredSpeakers.append(speaker)
