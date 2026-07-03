@@ -2,57 +2,27 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>sonoswidget</string>
-			</array>
-			<key>CFBundleURLName</key>
-			<string>com.charm.SonosWidget.oauth</string>
-		</dict>
-	</array>
-	<key>SonosOAuthClientID</key>
-	<string>$(SONOS_OAUTH_CLIENT_ID)</string>
-	<key>SonosOAuthClientSecret</key>
-	<string>$(SONOS_OAUTH_CLIENT_SECRET)</string>
-	<key>SonosOAuthRedirectURI</key>
-	<string>$(SONOS_OAUTH_REDIRECT_URI)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.charm.SonosWidget.refresh</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<key>UISupportedInterfaceOrientations</key>
+	<key>CFBundleURLTypes</key>
 	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>NSSupportsLiveActivities</key>
-	<true/>
-	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
-	<true/>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Charm Player reads Apple Music playback, library, and favorite status so it can play library music, transfer playback to Sonos, and add Apple Music favorites.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Charm Player needs to access your local network to discover and control Sonos speakers and your Hue Bridge.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_sonos._tcp</string>
-		<string>_hue._tcp</string>
-		<string>_charmrelay._tcp</string>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.charm.SonosWidget.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sonoswidget</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
-		<!-- NetEase Cloud Music serves album / artist artwork over plain HTTP
-		     from *.music.126.net CDN hosts. Images only — no credentials or
-		     personal data travel over these requests — so we scope the
-		     exception tightly to the subdomain tree. -->
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>music.126.net</key>
@@ -64,5 +34,17 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_sonos._tcp</string>
+		<string>_hue._tcp</string>
+		<string>_charmrelay._tcp</string>
+	</array>
+	<key>SonosOAuthClientID</key>
+	<string>$(SONOS_OAUTH_CLIENT_ID)</string>
+	<key>SonosOAuthClientSecret</key>
+	<string>$(SONOS_OAUTH_CLIENT_SECRET)</string>
+	<key>SonosOAuthRedirectURI</key>
+	<string>$(SONOS_OAUTH_REDIRECT_URI)</string>
 </dict>
 </plist>
