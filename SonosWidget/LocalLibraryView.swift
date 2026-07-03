@@ -15,6 +15,8 @@ struct LocalLibraryView: View {
     @State private var librarySearchCategory = LocalServiceSearchPresentation.catalogCategoryOrder.first ?? .artists
     @State private var categoryDetailSearchText = ""
     @State private var categorySortSelections: [LocalLibraryCategory: LocalLibraryCategorySortOption] = [:]
+    @State private var songDetailPresentationCache = LocalLibraryCategoryDetailPresentationCache<Song>()
+    @State private var albumDetailPresentationCache = LocalLibraryCategoryDetailPresentationCache<Album>()
     @State private var pullRefreshController = LocalLibraryPullRefreshController()
     @FocusState private var isCategorySearchFieldFocused: Bool
     @Namespace private var catalogCategorySelectionNamespace
@@ -1342,9 +1344,9 @@ struct LocalLibraryView: View {
     private func libraryCategoryDetailContent(_ category: LocalLibraryCategory) -> some View {
         switch category {
         case .songs:
-            indexedSongList(displayedSongs(for: category), category: category)
+            indexedSongList(songDetailPresentation(for: category), category: category)
         case .albums:
-            indexedAlbumList(displayedAlbums(for: category), category: category)
+            indexedAlbumList(albumDetailPresentation(for: category), category: category)
         case .artists:
             indexedArtistList(displayedArtists(for: category), category: category)
         case .playlists:
@@ -1352,20 +1354,30 @@ struct LocalLibraryView: View {
         }
     }
 
-    private func displayedSongs(for category: LocalLibraryCategory) -> [Song] {
-        let filtered = store.displayedSnapshot.songs.filter {
-            matchesCategorySearch([$0.title, $0.artistName, $0.albumTitle])
-        }
+    private func songDetailPresentation(
+        for category: LocalLibraryCategory
+    ) -> LocalLibraryCategoryDetailPresentation<Song> {
+        let sortOption = categorySortSelection(for: category)
+        return songDetailPresentationCache.presentation(
+            key: categoryDetailPresentationCacheKey(for: category, sortOption: sortOption),
+            items: store.displayedSnapshot.songs,
+            isIncluded: { matchesCategorySearch([$0.title, $0.artistName, $0.albumTitle]) },
+            areInIncreasingOrder: songSortComparator(for: sortOption),
+            title: \.title)
+    }
 
-        switch categorySortSelection(for: category) {
+    private func songSortComparator(
+        for option: LocalLibraryCategorySortOption
+    ) -> (Song, Song) -> Bool {
+        switch option {
         case .artist:
-            return filtered.sorted { lhs, rhs in
+            return { lhs, rhs in
                 compareStrings(lhs.artistName, rhs.artistName)
                     || (lhs.artistName.localizedCaseInsensitiveCompare(rhs.artistName) == .orderedSame
                         && compareStrings(lhs.title, rhs.title))
             }
         case .album:
-            return filtered.sorted { lhs, rhs in
+            return { lhs, rhs in
                 let lhsAlbum = lhs.albumTitle ?? ""
                 let rhsAlbum = rhs.albumTitle ?? ""
                 return compareStrings(lhsAlbum, rhsAlbum)
@@ -1373,37 +1385,58 @@ struct LocalLibraryView: View {
                         && compareStrings(lhs.title, rhs.title))
             }
         case .recentlyAdded:
-            return filtered.sorted { lhs, rhs in
+            return { lhs, rhs in
                 compareDatesDescending(lhs.libraryAddedDate, rhs.libraryAddedDate, fallback: {
                     compareStrings(lhs.title, rhs.title)
                 })
             }
         case .title, .curator:
-            return filtered.sorted { compareStrings($0.title, $1.title) }
+            return { compareStrings($0.title, $1.title) }
         }
     }
 
-    private func displayedAlbums(for category: LocalLibraryCategory) -> [Album] {
-        let filtered = store.displayedSnapshot.albums.filter {
-            matchesCategorySearch([$0.title, $0.artistName])
-        }
+    private func albumDetailPresentation(
+        for category: LocalLibraryCategory
+    ) -> LocalLibraryCategoryDetailPresentation<Album> {
+        let sortOption = categorySortSelection(for: category)
+        return albumDetailPresentationCache.presentation(
+            key: categoryDetailPresentationCacheKey(for: category, sortOption: sortOption),
+            items: store.displayedSnapshot.albums,
+            isIncluded: { matchesCategorySearch([$0.title, $0.artistName]) },
+            areInIncreasingOrder: albumSortComparator(for: sortOption),
+            title: \.title)
+    }
 
-        switch categorySortSelection(for: category) {
+    private func albumSortComparator(
+        for option: LocalLibraryCategorySortOption
+    ) -> (Album, Album) -> Bool {
+        switch option {
         case .artist:
-            return filtered.sorted { lhs, rhs in
+            return { lhs, rhs in
                 compareStrings(lhs.artistName, rhs.artistName)
                     || (lhs.artistName.localizedCaseInsensitiveCompare(rhs.artistName) == .orderedSame
                         && compareStrings(lhs.title, rhs.title))
             }
         case .recentlyAdded:
-            return filtered.sorted { lhs, rhs in
+            return { lhs, rhs in
                 compareDatesDescending(lhs.libraryAddedDate, rhs.libraryAddedDate, fallback: {
                     compareStrings(lhs.title, rhs.title)
                 })
             }
         case .title, .album, .curator:
-            return filtered.sorted { compareStrings($0.title, $1.title) }
+            return { compareStrings($0.title, $1.title) }
         }
+    }
+
+    private func categoryDetailPresentationCacheKey(
+        for category: LocalLibraryCategory,
+        sortOption: LocalLibraryCategorySortOption
+    ) -> LocalLibraryCategoryDetailPresentationCacheKey {
+        LocalLibraryCategoryDetailPresentationCacheKey(
+            category: category,
+            contentToken: store.displayedSnapshotToken,
+            searchText: trimmedCategoryDetailSearchText,
+            sortOption: sortOption)
     }
 
     private func displayedArtists(for category: LocalLibraryCategory) -> [Artist] {
@@ -1470,12 +1503,14 @@ struct LocalLibraryView: View {
     }
 
     @ViewBuilder
-    private func indexedSongList(_ songs: [Song], category: LocalLibraryCategory) -> some View {
-        let sections = sectionedItems(songs, title: \.title)
-        if sections.isEmpty {
+    private func indexedSongList(
+        _ presentation: LocalLibraryCategoryDetailPresentation<Song>,
+        category: LocalLibraryCategory
+    ) -> some View {
+        if presentation.sections.isEmpty {
             emptyCategoryContent(category)
         } else {
-            ForEach(sections) { section in
+            ForEach(presentation.sections) { section in
                 indexedSectionHeader(section.title, category: category)
                 songList(section.items)
             }
@@ -1483,12 +1518,14 @@ struct LocalLibraryView: View {
     }
 
     @ViewBuilder
-    private func indexedAlbumList(_ albums: [Album], category: LocalLibraryCategory) -> some View {
-        let sections = sectionedItems(albums, title: \.title)
-        if sections.isEmpty {
+    private func indexedAlbumList(
+        _ presentation: LocalLibraryCategoryDetailPresentation<Album>,
+        category: LocalLibraryCategory
+    ) -> some View {
+        if presentation.sections.isEmpty {
             emptyCategoryContent(category)
         } else {
-            ForEach(sections) { section in
+            ForEach(presentation.sections) { section in
                 indexedSectionHeader(section.title, category: category)
                 albumList(section.items)
             }
@@ -1521,9 +1558,9 @@ struct LocalLibraryView: View {
     private func categoryIndexTitles(_ category: LocalLibraryCategory) -> [String] {
         switch category {
         case .songs:
-            return LocalLibrarySectionIndex.indexTitles(for: displayedSongs(for: category).map(\.title))
+            return songDetailPresentation(for: category).indexTitles
         case .albums:
-            return LocalLibrarySectionIndex.indexTitles(for: displayedAlbums(for: category).map(\.title))
+            return albumDetailPresentation(for: category).indexTitles
         case .artists:
             return LocalLibrarySectionIndex.indexTitles(for: displayedArtists(for: category).map(\.name))
         case .playlists:
@@ -1893,13 +1930,6 @@ private extension LocalServiceRowAccessory {
             return .progress
         }
     }
-}
-
-private struct LocalLibraryIndexedSection<Item>: Identifiable {
-    let title: String
-    let items: [Item]
-
-    var id: String { title }
 }
 
 private struct LocalLibraryAlphabetIndexBar: View {

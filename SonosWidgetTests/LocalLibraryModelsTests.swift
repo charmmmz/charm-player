@@ -41,6 +41,94 @@ final class LocalLibraryModelsTests: XCTestCase {
         )
     }
 
+    func testCategoryDetailPresentationBuildsSectionsAndIndexTitlesFromDisplayedItems() {
+        let items = [
+            LocalLibraryCategoryDetailTestItem(title: "Beta", artist: "Cat", album: "Second"),
+            LocalLibraryCategoryDetailTestItem(title: "15 Step", artist: "Radiohead", album: "In Rainbows"),
+            LocalLibraryCategoryDetailTestItem(title: "Alpha", artist: "Dog", album: "First"),
+            LocalLibraryCategoryDetailTestItem(title: "Ghost", artist: "Other", album: "Hidden")
+        ]
+        var titleReadCount = 0
+
+        let presentation = LocalLibraryCategoryDetailPresentation.make(
+            items: items,
+            isIncluded: { $0.artist != "Other" },
+            areInIncreasingOrder: { $0.title < $1.title },
+            title: { item in
+                titleReadCount += 1
+                return item.title
+            }
+        )
+
+        XCTAssertEqual(presentation.items.map(\.title), ["15 Step", "Alpha", "Beta"])
+        XCTAssertEqual(presentation.indexTitles, ["#", "A", "B"])
+        XCTAssertEqual(presentation.sections.map(\.title), ["#", "A", "B"])
+        XCTAssertEqual(presentation.sections.map { $0.items.map(\.title) }, [
+            ["15 Step"],
+            ["Alpha"],
+            ["Beta"]
+        ])
+        XCTAssertEqual(titleReadCount, presentation.items.count)
+    }
+
+    func testCategoryDetailPresentationCacheReusesResultUntilKeyChanges() {
+        let cache = LocalLibraryCategoryDetailPresentationCache<LocalLibraryCategoryDetailTestItem>()
+        let key = LocalLibraryCategoryDetailPresentationCacheKey(
+            category: .songs,
+            contentToken: LocalLibraryDisplayedSnapshotToken(source: .library, revision: 1),
+            searchText: "",
+            sortOption: .title
+        )
+        let items = [
+            LocalLibraryCategoryDetailTestItem(title: "Beta", artist: "Cat", album: "Second"),
+            LocalLibraryCategoryDetailTestItem(title: "Alpha", artist: "Dog", album: "First")
+        ]
+        var filterCallCount = 0
+
+        _ = cache.presentation(
+            key: key,
+            items: items,
+            isIncluded: { _ in
+                filterCallCount += 1
+                return true
+            },
+            areInIncreasingOrder: { $0.title < $1.title },
+            title: \.title
+        )
+        let cached = cache.presentation(
+            key: key,
+            items: Array(items.reversed()),
+            isIncluded: { _ in
+                filterCallCount += 1
+                return true
+            },
+            areInIncreasingOrder: { $0.title < $1.title },
+            title: \.title
+        )
+
+        XCTAssertEqual(cached.items.map(\.title), ["Alpha", "Beta"])
+        XCTAssertEqual(filterCallCount, items.count)
+
+        let nextKey = LocalLibraryCategoryDetailPresentationCacheKey(
+            category: .songs,
+            contentToken: LocalLibraryDisplayedSnapshotToken(source: .library, revision: 2),
+            searchText: "",
+            sortOption: .title
+        )
+        _ = cache.presentation(
+            key: nextKey,
+            items: items,
+            isIncluded: { _ in
+                filterCallCount += 1
+                return true
+            },
+            areInIncreasingOrder: { $0.title < $1.title },
+            title: \.title
+        )
+
+        XCTAssertEqual(filterCallCount, items.count * 2)
+    }
+
     func testSnapshotSummaryIsEmptyOnlyWhenAllSectionsAreEmpty() {
         XCTAssertTrue(
             LocalLibrarySnapshotSummary(
@@ -355,4 +443,10 @@ final class LocalLibraryModelsTests: XCTestCase {
         XCTAssertEqual(resource.subtitle, "Apple Music")
         XCTAssertTrue(resource.isQueueable)
     }
+}
+
+private struct LocalLibraryCategoryDetailTestItem {
+    let title: String
+    let artist: String
+    let album: String
 }

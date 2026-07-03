@@ -183,6 +183,19 @@ final class LocalLibraryStore {
     var hasLoaded = false
     var catalogArtworkURLStrings: [String: String] = [:]
     var loadingCategories: Set<LocalLibraryCategory> = []
+    var librarySnapshotRevision = 0
+    var searchSnapshotRevision = 0
+
+    var displayedSnapshotToken: LocalLibraryDisplayedSnapshotToken {
+        if searchSnapshot != nil {
+            return LocalLibraryDisplayedSnapshotToken(
+                source: .search,
+                revision: searchSnapshotRevision)
+        }
+        return LocalLibraryDisplayedSnapshotToken(
+            source: .library,
+            revision: librarySnapshotRevision)
+    }
 
     @ObservationIgnored private var artworkLookupTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var catalogArtworkMissIDs: Set<String> = []
@@ -366,6 +379,7 @@ final class LocalLibraryStore {
         }
 
         snapshot = content.snapshot
+        librarySnapshotRevision += 1
         recentlyAddedContent = nextRecentlyAddedContent
         recentlyPlayed = content.recentlyPlayed
         recommendations = nextRecommendations
@@ -399,6 +413,7 @@ final class LocalLibraryStore {
         case .playlists:
             snapshot.playlists = categorySnapshot.playlists
         }
+        librarySnapshotRevision += 1
     }
 
     func search(term: String, scope: LocalServiceSearchScope) async {
@@ -423,6 +438,7 @@ final class LocalLibraryStore {
                 let snapshot = try await client.search(term: trimmed)
                 guard !Task.isCancelled else { return }
                 searchSnapshot = snapshot
+                searchSnapshotRevision += 1
                 scheduleCatalogArtworkLookup(for: snapshot)
             case .appleMusic:
                 searchSnapshot = nil

@@ -254,11 +254,115 @@ nonisolated enum LocalLibrarySectionIndex {
 
     static func indexTitles(for titles: [String]) -> [String] {
         let titles = Set(titles.map(indexTitle(for:)))
-        return titles.sorted { lhs, rhs in
+        return sortedIndexTitles(titles)
+    }
+
+    static func sortedIndexTitles(_ titles: Set<String>) -> [String] {
+        titles.sorted { lhs, rhs in
             if lhs == "#" { return true }
             if rhs == "#" { return false }
             return lhs < rhs
         }
+    }
+}
+
+struct LocalLibraryIndexedSection<Item>: Identifiable {
+    let title: String
+    let items: [Item]
+
+    var id: String { title }
+}
+
+struct LocalLibraryCategoryDetailPresentation<Item> {
+    let items: [Item]
+    let sections: [LocalLibraryIndexedSection<Item>]
+    let indexTitles: [String]
+
+    static var empty: LocalLibraryCategoryDetailPresentation<Item> {
+        LocalLibraryCategoryDetailPresentation(items: [], sections: [], indexTitles: [])
+    }
+
+    static func make(
+        items: [Item],
+        isIncluded: (Item) -> Bool,
+        areInIncreasingOrder: (Item, Item) -> Bool,
+        title: (Item) -> String
+    ) -> LocalLibraryCategoryDetailPresentation<Item> {
+        make(
+            displayedItems: items.filter(isIncluded).sorted(by: areInIncreasingOrder),
+            title: title)
+    }
+
+    static func make(
+        displayedItems: [Item],
+        title: (Item) -> String
+    ) -> LocalLibraryCategoryDetailPresentation<Item> {
+        var groupedItems: [String: [Item]] = [:]
+        var sectionTitles = Set<String>()
+
+        for item in displayedItems {
+            let sectionTitle = LocalLibrarySectionIndex.indexTitle(for: title(item))
+            sectionTitles.insert(sectionTitle)
+            groupedItems[sectionTitle, default: []].append(item)
+        }
+
+        let indexTitles = LocalLibrarySectionIndex.sortedIndexTitles(sectionTitles)
+        return LocalLibraryCategoryDetailPresentation(
+            items: displayedItems,
+            sections: indexTitles.map { title in
+                LocalLibraryIndexedSection(
+                    title: title,
+                    items: groupedItems[title] ?? [])
+            },
+            indexTitles: indexTitles)
+    }
+}
+
+enum LocalLibraryDisplayedSnapshotSource: Equatable, Sendable {
+    case library
+    case search
+}
+
+struct LocalLibraryDisplayedSnapshotToken: Equatable, Sendable {
+    let source: LocalLibraryDisplayedSnapshotSource
+    let revision: Int
+}
+
+struct LocalLibraryCategoryDetailPresentationCacheKey: Equatable, Sendable {
+    let category: LocalLibraryCategory
+    let contentToken: LocalLibraryDisplayedSnapshotToken
+    let searchText: String
+    let sortOption: LocalLibraryCategorySortOption
+}
+
+final class LocalLibraryCategoryDetailPresentationCache<Item> {
+    private var cachedKey: LocalLibraryCategoryDetailPresentationCacheKey?
+    private var cachedPresentation = LocalLibraryCategoryDetailPresentation<Item>.empty
+
+    func presentation(
+        key: LocalLibraryCategoryDetailPresentationCacheKey,
+        items: [Item],
+        isIncluded: (Item) -> Bool,
+        areInIncreasingOrder: (Item, Item) -> Bool,
+        title: (Item) -> String
+    ) -> LocalLibraryCategoryDetailPresentation<Item> {
+        if cachedKey == key {
+            return cachedPresentation
+        }
+
+        let nextPresentation = LocalLibraryCategoryDetailPresentation.make(
+            items: items,
+            isIncluded: isIncluded,
+            areInIncreasingOrder: areInIncreasingOrder,
+            title: title)
+        cachedKey = key
+        cachedPresentation = nextPresentation
+        return nextPresentation
+    }
+
+    func invalidate() {
+        cachedKey = nil
+        cachedPresentation = .empty
     }
 }
 
