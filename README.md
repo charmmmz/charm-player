@@ -38,6 +38,46 @@ for fresh Lock Screen updates while the app is suspended.
 | Hue Ambience | Album-color lighting mapped from Sonos rooms to Hue rooms, lights, or Entertainment Areas |
 | Background updates | Optional NAS relay forwards Sonos state to ActivityKit through production APNs |
 
+## Feature Availability By Setup
+
+Sonos Cloud sign-in and `nas-relay` deployment are independent. The app can run
+with neither, one, or both:
+
+- **Sonos Cloud sign-in** unlocks account-backed Sonos features: linked music
+  services, cloud browse/search, remote-capable fallback control, and Apple
+  Music matching for handoff.
+- **`nas-relay` deployment** unlocks home-server behavior: APNs Live Activity
+  updates while the app is suspended, relay-led push-to-start, relay command
+  routing, relay artwork helpers, diagnostics upload, and always-on Hue
+  Ambience.
+
+| Capability | No Sonos Cloud | Sonos Cloud signed in | No `nas-relay` | `nas-relay` deployed |
+| --- | --- | --- | --- | --- |
+| Same-Wi-Fi Sonos discovery and Home controls | Available through LAN/UPnP | Available, with Cloud fallback when needed | Unaffected | Unaffected |
+| Play/pause, next/previous, volume, seek | Available on LAN | Available on LAN or Cloud-capable remote path | Unaffected | Relay can also route some Live Activity/widget commands |
+| Grouping, ungrouping, queue edits, play mode changes | Available on LAN | Still LAN-only; Cloud mode shows a same-network requirement | Unaffected | Unaffected |
+| Sonos Cloud browse/search, favorites, playlists, radio, linked service list | Unavailable or limited to cached/local metadata | Available | Unaffected | Can submit artwork hints to relay when available |
+| Apple Music handoff between iPhone and Sonos | Unavailable; matching requires Sonos Cloud and linked Apple Music | Available when Apple Music is linked in the Sonos household | Unaffected | Unaffected |
+| Local Service browsing from Apple Music library | Available with Apple Music permission | Available | Unaffected | Optional animated-artwork/relay helpers can improve some artwork paths |
+| Playing Local Service items on Sonos | Effectively unavailable for first-time setup; it needs a detected Sonos Apple Music account and local service-ID mapping | Available on LAN after Cloud-linked Apple Music is detected and mapped to local Sonos service ID | Unaffected | Unaffected |
+| Apple Music share extension playback | Effectively unavailable until the app has stored a Sonos Apple Music share credential and same-network speaker state | Available after the app has detected the linked Apple Music service and stored the share credential | Unaffected | Unaffected |
+| Home Screen widget | Shows shared cached state and can run local AppIntent paths | Same, with better Cloud-backed metadata where available | Works from shared app state | Can use relay command/artwork paths when token and relay are available |
+| Live Activity and Dynamic Island | Local updates only while the app or extension can execute | Same | Local ActivityKit updates only; state may go stale after suspension | APNs updates keep state fresh after suspension; push-to-start can create an activity after playback starts |
+| Hue Ambience | Phone-side Hue control can run on LAN | Same | Stops depending on the app process and local availability | NAS can keep Hue Ambience running per active Sonos group |
+| Diagnostics and remote logs | Local diagnostics only | Same | Local diagnostics only | Relay health, APNs status, device logs, and Hue runtime state become visible from the NAS path |
+
+Recommended configurations:
+
+1. **Basic same-Wi-Fi control:** no Cloud, no relay. Use this for local playback,
+   grouping, queue edits, and quick Home controls.
+2. **Full in-app music experience:** Sonos Cloud signed in, no relay. Use this
+   for browse/search, Apple Music handoff, Local Service playback to Sonos, and
+   share extension playback while accepting that Live Activities may become
+   stale after suspension.
+3. **Best TestFlight/home setup:** Sonos Cloud signed in and `nas-relay`
+   deployed with production APNs. This enables the full app surface plus fresh
+   Lock Screen updates and always-on Hue Ambience.
+
 ## Key Features
 
 ### Sonos Control
