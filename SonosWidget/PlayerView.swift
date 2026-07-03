@@ -3126,6 +3126,30 @@ enum MiniPlayerMountPolicy {
     }
 }
 
+nonisolated enum MiniPlayerDragStateOwner: Equatable {
+    case presentationLayer
+}
+
+nonisolated enum MiniPlayerDragPresentation {
+    static let dragStateOwner: MiniPlayerDragStateOwner = .presentationLayer
+    static let gestureMinimumDistance: CGFloat = 1
+    static let rubberBandFactor: CGFloat = 0.55
+    static let openTranslationThreshold: CGFloat = -40
+    static let openPredictedTranslationThreshold: CGFloat = -200
+
+    static func offset(forTranslationHeight translationHeight: CGFloat) -> CGFloat? {
+        translationHeight < 0 ? translationHeight * rubberBandFactor : nil
+    }
+
+    static func shouldOpenFullPlayer(
+        translationHeight: CGFloat,
+        predictedEndTranslationHeight: CGFloat
+    ) -> Bool {
+        translationHeight < openTranslationThreshold
+            || predictedEndTranslationHeight < openPredictedTranslationThreshold
+    }
+}
+
 enum NowPlayingBackgroundPresentation {
     nonisolated static let usesSharedArtworkBackground = true
     nonisolated static let usesReflectedArtwork = false
@@ -3254,6 +3278,7 @@ nonisolated enum PlaybackControlPresentation {
 /// to mount it above the tab bar with matching content padding.
 struct MiniPlayerBar: View {
     @Bindable var manager: SonosManager
+    @Binding var dragOffset: CGFloat
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     /// When mounted inside iOS 26's `tabViewBottomAccessory` slot the system
     /// provides its own liquid-glass capsule + horizontal inset, and renders
@@ -3343,27 +3368,28 @@ struct MiniPlayerBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(y: manager.miniPlayerDragOffset)
+        .offset(y: dragOffset)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 10)
+            DragGesture(minimumDistance: MiniPlayerDragPresentation.gestureMinimumDistance)
                 .onChanged { value in
-                    let dy = value.translation.height
-                    if dy < 0 {
-                        // rubber-band: follow finger but resist at extremes
-                        manager.miniPlayerDragOffset = dy * 0.55
+                    if let offset = MiniPlayerDragPresentation.offset(
+                        forTranslationHeight: value.translation.height
+                    ) {
+                        dragOffset = offset
                     }
                 }
                 .onEnded { value in
-                    let dy = value.translation.height
-                    let vel = value.predictedEndTranslation.height
-                    if dy < -40 || vel < -200 {
-                        manager.miniPlayerDragOffset = 0
+                    if MiniPlayerDragPresentation.shouldOpenFullPlayer(
+                        translationHeight: value.translation.height,
+                        predictedEndTranslationHeight: value.predictedEndTranslation.height
+                    ) {
+                        dragOffset = 0
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                             manager.showFullPlayer = true
                         }
                     } else {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            manager.miniPlayerDragOffset = 0
+                            dragOffset = 0
                         }
                     }
                 }
@@ -3457,6 +3483,7 @@ private struct MiniPlayerChromeModifier: ViewModifier {
 /// mini-players the same way during active input.
 private struct KeyboardAwareMiniPlayer: View {
     @Bindable var manager: SonosManager
+    @Binding var dragOffset: CGFloat
     var inSystemAccessory: Bool = false
     @State private var isKeyboardVisible = false
 
@@ -3471,7 +3498,10 @@ private struct KeyboardAwareMiniPlayer: View {
                     isFullPlayerVisible: manager.showFullPlayer,
                     isKeyboardVisible: isKeyboardVisible
                 )
-                MiniPlayerBar(manager: manager, inSystemAccessory: inSystemAccessory)
+                MiniPlayerBar(
+                    manager: manager,
+                    dragOffset: $dragOffset,
+                    inSystemAccessory: inSystemAccessory)
                     .opacity(isVisible ? 1 : 0)
                     .allowsHitTesting(isVisible)
                     .accessibilityHidden(!isVisible)
@@ -3494,10 +3524,11 @@ private struct KeyboardAwareMiniPlayer: View {
 /// `tabViewBottomAccessory`.
 private struct MiniPlayerInset: ViewModifier {
     @Bindable var manager: SonosManager
+    @Binding var dragOffset: CGFloat
 
     func body(content: Content) -> some View {
         content.safeAreaInset(edge: .bottom, spacing: 0) {
-            KeyboardAwareMiniPlayer(manager: manager)
+            KeyboardAwareMiniPlayer(manager: manager, dragOffset: $dragOffset)
         }
     }
 }
@@ -3539,11 +3570,14 @@ extension View {
     /// Mounts the per-tab content inset needed to keep scrollable pages clear
     /// of the persistent mini-player.
     @ViewBuilder
-    func miniPlayerTabContentInset(manager: SonosManager) -> some View {
+    func miniPlayerTabContentInset(
+        manager: SonosManager,
+        dragOffset: Binding<CGFloat>
+    ) -> some View {
         if #available(iOS 26.0, *) {
             modifier(MiniPlayerSystemAccessoryContentInset(manager: manager))
         } else {
-            modifier(MiniPlayerInset(manager: manager))
+            modifier(MiniPlayerInset(manager: manager, dragOffset: dragOffset))
         }
     }
 
@@ -3551,10 +3585,16 @@ extension View {
     /// so the OS can collapse the inactive tabs on scroll and render the
     /// selected-tab icon side-by-side with the mini-player capsule.
     @ViewBuilder
-    func miniPlayerSystemAccessoryIfAvailable(manager: SonosManager) -> some View {
+    func miniPlayerSystemAccessoryIfAvailable(
+        manager: SonosManager,
+        dragOffset: Binding<CGFloat>
+    ) -> some View {
         if #available(iOS 26.0, *) {
             self.tabViewBottomAccessory {
-                KeyboardAwareMiniPlayer(manager: manager, inSystemAccessory: true)
+                KeyboardAwareMiniPlayer(
+                    manager: manager,
+                    dragOffset: dragOffset,
+                    inSystemAccessory: true)
             }
         } else {
             self

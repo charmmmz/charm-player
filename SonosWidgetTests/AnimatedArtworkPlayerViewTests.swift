@@ -273,7 +273,7 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
         ))
     }
 
-    func testNowPlayingOverlayHostIgnoresBottomSafeAreaOnlyWhenFullPlayerIsVisible() {
+    func testNowPlayingOverlayHostIgnoresHorizontalAndBottomSafeAreaWhenFullPlayerIsVisible() {
         XCTAssertEqual(
             NowPlayingOverlayHostPresentation.ignoredSafeAreaEdges(isFullPlayerVisible: true),
             [.horizontal, .bottom]
@@ -302,6 +302,22 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
             44,
             accuracy: 0.5
         )
+    }
+
+    func testMiniPlayerInteractiveDragStateIsOwnedByPresentationLayer() throws {
+        XCTAssertEqual(MiniPlayerDragPresentation.dragStateOwner, .presentationLayer)
+        XCTAssertLessThanOrEqual(MiniPlayerDragPresentation.gestureMinimumDistance, 1)
+        let dragOffset = try XCTUnwrap(MiniPlayerDragPresentation.offset(forTranslationHeight: -80))
+        XCTAssertEqual(dragOffset, -44, accuracy: 0.5)
+        XCTAssertNil(MiniPlayerDragPresentation.offset(forTranslationHeight: 12))
+        XCTAssertTrue(MiniPlayerDragPresentation.shouldOpenFullPlayer(
+            translationHeight: -20,
+            predictedEndTranslationHeight: -240
+        ))
+        XCTAssertFalse(MiniPlayerDragPresentation.shouldOpenFullPlayer(
+            translationHeight: -20,
+            predictedEndTranslationHeight: -80
+        ))
     }
 
     func testNowPlayingOverlayHostKeepsDismissDragOffsetWhileAnimatingOffscreen() {

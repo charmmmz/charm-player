@@ -157,7 +157,6 @@ final class SonosManager {
     var isPlayingFromQueue = true
     var showingSpeakerPicker = false
     var showFullPlayer = true
-    var miniPlayerDragOffset: CGFloat = 0
     var memberVolumes: [String: Int] = [:]
     var groupAlbumColors: [String: Color] = [:]
     var groupAlbumImages: [String: UIImage] = [:]

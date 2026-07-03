@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var selectedTab: AppTab = .home
     @State private var pendingAppleMusicShare: PendingAppleMusicShare?
     @State private var playerDetailPath: [PlayerDetailRoute] = []
+    @State private var miniPlayerDragOffset: CGFloat = 0
     @State private var fullPlayerDismissDragOffset: CGFloat = 0
     @State private var fullPlayerDismissDragResetTask: Task<Void, Never>?
 
@@ -61,25 +62,35 @@ struct ContentView: View {
                     searchManager: searchManager,
                     pendingAppleMusicShare: $pendingAppleMusicShare,
                     detailPath: $playerDetailPath)
-                    .miniPlayerTabContentInset(manager: manager)
+                    .miniPlayerTabContentInset(
+                        manager: manager,
+                        dragOffset: $miniPlayerDragOffset)
             }
             Tab("Browse", systemImage: "magnifyingglass", value: AppTab.browse) {
                 SearchView(manager: manager, searchManager: searchManager)
-                    .miniPlayerTabContentInset(manager: manager)
+                    .miniPlayerTabContentInset(
+                        manager: manager,
+                        dragOffset: $miniPlayerDragOffset)
             }
             Tab("Local Service", systemImage: "music.note.house", value: AppTab.localService) {
                 LocalLibraryView(manager: manager, searchManager: searchManager)
-                    .miniPlayerTabContentInset(manager: manager)
+                    .miniPlayerTabContentInset(
+                        manager: manager,
+                        dragOffset: $miniPlayerDragOffset)
             }
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
                 SettingsView(manager: manager, searchManager: searchManager)
-                    .miniPlayerTabContentInset(manager: manager)
+                    .miniPlayerTabContentInset(
+                        manager: manager,
+                        dragOffset: $miniPlayerDragOffset)
             }
         }
         .environment(\.isAnimatedArtworkPlaybackSuspended, manager.showFullPlayer)
         .tint(manager.albumArtDominantColor ?? .blue)
         .tabBarMinimizeOnScrollIfAvailable()
-        .miniPlayerSystemAccessoryIfAvailable(manager: manager)
+        .miniPlayerSystemAccessoryIfAvailable(
+            manager: manager,
+            dragOffset: $miniPlayerDragOffset)
         .overlay {
             nowPlayingOverlayHost
         }
@@ -94,7 +105,7 @@ struct ContentView: View {
             let screenH = cardSize.height
             let overlayY = NowPlayingOverlayHostPresentation.overlayOffset(
                 screenHeight: screenH,
-                miniPlayerDragOffset: manager.miniPlayerDragOffset,
+                miniPlayerDragOffset: miniPlayerDragOffset,
                 isFullPlayerVisible: manager.showFullPlayer,
                 dismissDragOffset: fullPlayerDismissDragOffset
             )
@@ -109,7 +120,7 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                     .simultaneousGesture(fullPlayerDismissDragGesture())
                     .animation(.spring(response: 0.4, dampingFraction: 0.85), value: manager.showFullPlayer)
-                    .allowsHitTesting(manager.showFullPlayer || manager.miniPlayerDragOffset < -5)
+                    .allowsHitTesting(manager.showFullPlayer || miniPlayerDragOffset < -5)
             }
         }
         .ignoresSafeArea(
@@ -197,7 +208,7 @@ struct ContentView: View {
         }
 
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            manager.miniPlayerDragOffset = transition.miniPlayerDragOffset
+            miniPlayerDragOffset = transition.miniPlayerDragOffset
             manager.showFullPlayer = transition.showFullPlayer
         }
 
