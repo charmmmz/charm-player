@@ -55,7 +55,7 @@ struct AlbumDetailView: View {
             allowedTypes: [.albums]
         )
     }
-    private var canOpenAppleMusicArtwork: Bool {
+    private var canResolveAppleMusicAlbumURL: Bool {
         appleMusicArtworkResource != nil || fallbackAppleMusicArtworkURL != nil || canSearchAppleMusicAlbumURL
     }
     private var canSearchAppleMusicAlbumURL: Bool {
@@ -429,10 +429,7 @@ struct AlbumDetailView: View {
             }
 
             VStack(spacing: 4) {
-                Text(albumTitle)
-                    .font(.title3.bold())
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
+                albumTitleLabel
 
                 artistLabel
 
@@ -462,9 +459,11 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var headerArtwork: some View {
-        if canOpenAppleMusicArtwork {
+        if AlbumHeaderAppleMusicLinkPolicy.shouldLinkArtwork(
+            canResolveAppleMusicURL: canResolveAppleMusicAlbumURL
+        ) {
             Button {
-                openAppleMusicFromArtwork()
+                openAppleMusicFromTitle()
             } label: {
                 headerArtworkImage
             }
@@ -474,6 +473,32 @@ struct AlbumDetailView: View {
         } else {
             headerArtworkImage
         }
+    }
+
+    @ViewBuilder
+    private var albumTitleLabel: some View {
+        if AlbumHeaderAppleMusicLinkPolicy.shouldLinkTitle(
+            canResolveAppleMusicURL: canResolveAppleMusicAlbumURL
+        ) {
+            Button {
+                openAppleMusicFromTitle()
+            } label: {
+                albumTitleText
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpeningAppleMusicLink)
+            .accessibilityLabel("Open \(albumTitle) in Apple Music")
+        } else {
+            albumTitleText
+        }
+    }
+
+    private var albumTitleText: some View {
+        Text(albumTitle)
+            .font(.title3.bold())
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
     }
 
     private var headerArtworkImage: some View {
@@ -519,7 +544,7 @@ struct AlbumDetailView: View {
         }
     }
 
-    private func openAppleMusicFromArtwork() {
+    private func openAppleMusicFromTitle() {
         guard !isOpeningAppleMusicLink else { return }
         let cachedURL = fallbackAppleMusicArtworkURL
         let resource = appleMusicArtworkResource
@@ -547,18 +572,18 @@ struct AlbumDetailView: View {
                 guard let url = resolvedURL else {
                     SonosLog.debug(
                         .localService,
-                        "Apple Music album artwork lookup produced no URL title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")'"
+                        "Apple Music album title lookup produced no URL title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")'"
                     )
                     return
                 }
                 AppleMusicExternalLinkOpener.open(
                     url,
-                    context: "sonos-album-artwork title='\(title)' id='\(resource?.id ?? "nil")'"
+                    context: "sonos-album-title title='\(title)' id='\(resource?.id ?? "nil")'"
                 )
             } catch {
                 SonosLog.error(
                     .localService,
-                    "Apple Music album artwork lookup failed title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")' error=\(error)"
+                    "Apple Music album title lookup failed title='\(title)' artist='\(artist)' id='\(resource?.id ?? "nil")' error=\(error)"
                 )
             }
         }

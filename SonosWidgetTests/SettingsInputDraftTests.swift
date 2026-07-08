@@ -109,6 +109,12 @@ final class MiniPlayerLayoutMetricsTests: XCTestCase {
         )
     }
 
+    func testHomeActionTrayUsesUnwrappedDropTargetMetrics() {
+        XCTAssertEqual(HomeActionTrayPresentation.actionSpacing, 8)
+        XCTAssertEqual(HomeActionTrayPresentation.horizontalPadding, 0)
+        XCTAssertEqual(HomeActionTrayPresentation.verticalPadding, 0)
+    }
+
     func testSettingsDetailContentInsetClearsSystemAccessoryMiniPlayer() {
         XCTAssertEqual(
             SettingsDetailFormLayout.bottomContentInset(

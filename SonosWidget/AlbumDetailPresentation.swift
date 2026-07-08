@@ -42,6 +42,16 @@ enum AlbumPrimaryActionPolicy {
     }
 }
 
+enum AlbumHeaderAppleMusicLinkPolicy {
+    static func shouldLinkTitle(canResolveAppleMusicURL: Bool) -> Bool {
+        canResolveAppleMusicURL
+    }
+
+    static func shouldLinkArtwork(canResolveAppleMusicURL _: Bool) -> Bool {
+        false
+    }
+}
+
 enum AlbumOverflowAction: Equatable, Hashable, Sendable {
     case playNext
     case addToQueue

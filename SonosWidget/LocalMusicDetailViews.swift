@@ -16,6 +16,94 @@ private enum LocalMusicDetailSpacing {
     static let descriptionSectionBottomPadding = descriptionDividerGap - compactTrackRowVerticalPadding
 }
 
+private struct LocalMusicContainerDetailMenuContent: View {
+    let actions: [LocalMusicContainerDetailMenuAction]
+    let perform: (LocalMusicContainerDetailMenuAction) -> Void
+
+    var body: some View {
+        ForEach(actions) { action in
+            Button {
+                perform(action)
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
+            }
+
+            if action == .openAppleMusic, actions.count > 1 {
+                Divider()
+            }
+        }
+    }
+}
+
+@MainActor
+private func performLocalMusicContainerMenuAction(
+    _ action: LocalMusicContainerDetailMenuAction,
+    playable: LocalServiceAppleMusicPlayable?,
+    context: LocalMusicContainerSonosActionContext,
+    store: LocalLibraryStore,
+    manager: SonosManager,
+    searchManager: SearchManager,
+    openAppleMusic: () -> Void
+) {
+    switch action {
+    case .openAppleMusic:
+        openAppleMusic()
+    case .playNext:
+        performLocalMusicContainerQueueAction(
+            .playNext,
+            playable: playable,
+            context: context,
+            store: store,
+            manager: manager,
+            searchManager: searchManager
+        )
+    case .addToQueue:
+        performLocalMusicContainerQueueAction(
+            .addToQueue,
+            playable: playable,
+            context: context,
+            store: store,
+            manager: manager,
+            searchManager: searchManager
+        )
+    case .addToSonosFavorites:
+        Task { @MainActor in
+            await store.addSonosFavorite(
+                playable: playable,
+                displayID: context.favoriteDisplayID,
+                fallbackKind: context.fallbackKind,
+                fallbackTitle: context.fallbackTitle,
+                fallbackArtist: context.fallbackArtist,
+                fallbackAlbum: context.fallbackAlbum,
+                manager: manager,
+                searchManager: searchManager)
+        }
+    }
+}
+
+@MainActor
+private func performLocalMusicContainerQueueAction(
+    _ action: MusicResourceMenuAction,
+    playable: LocalServiceAppleMusicPlayable?,
+    context: LocalMusicContainerSonosActionContext,
+    store: LocalLibraryStore,
+    manager: SonosManager,
+    searchManager: SearchManager
+) {
+    Task { @MainActor in
+        await store.performSonosQueueAction(
+            action,
+            playable: playable,
+            displayID: context.queueDisplayID(for: action),
+            fallbackKind: context.fallbackKind,
+            fallbackTitle: context.fallbackTitle,
+            fallbackArtist: context.fallbackArtist,
+            fallbackAlbum: context.fallbackAlbum,
+            manager: manager,
+            searchManager: searchManager)
+    }
+}
+
 @ViewBuilder
 private func editorialDescriptionSection(text: String?, title: String) -> some View {
     if let text {
@@ -79,6 +167,13 @@ struct LocalMusicAlbumDetailView: View {
         LocalServiceAppleMusicPlayable.make(album: displayAlbum)?
             .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
+    private var albumSonosActionContext: LocalMusicContainerSonosActionContext {
+        LocalMusicContainerSonosActionContext.album(
+            containerID: playbackAlbumID,
+            title: displayAlbum.title,
+            artist: displayAlbum.artistName
+        )
+    }
     private var albumFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(albumPlayable)
     }
@@ -101,6 +196,12 @@ struct LocalMusicAlbumDetailView: View {
             currentTrackCount: currentTrackCount,
             completeAlbumID: completeCatalogAlbum?.id.rawValue,
             completeTrackCount: completeAlbumTrackCount)
+    }
+    private var canResolveAppleMusicTitleLink: Bool {
+        LocalMusicAlbumDetailPresentation.canResolveAppleMusicTitleLink(
+            appleMusicURL: appleMusicURL,
+            title: displayAlbum.title,
+            artist: displayAlbum.artistName)
     }
     private var appleMusicURL: URL? {
         LocalMusicAppleMusicURL.externalURL(
@@ -428,10 +529,7 @@ struct LocalMusicAlbumDetailView: View {
             }
 
             VStack(spacing: 5) {
-                Text(displayAlbum.title)
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
+                albumTitleLabel
 
                 Text(displayAlbum.artistName)
                     .font(MusicDetailHeaderTypography.localAlbumArtistStyle.font)
@@ -462,14 +560,46 @@ struct LocalMusicAlbumDetailView: View {
             .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var headerArtwork: some View {
-        Button {
-            openAppleMusicFromArtwork()
-        } label: {
+        if AlbumHeaderAppleMusicLinkPolicy.shouldLinkArtwork(
+            canResolveAppleMusicURL: canResolveAppleMusicTitleLink
+        ) {
+            Button {
+                openAppleMusicFromTitle()
+            } label: {
+                headerArtworkImage
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(displayAlbum.title) in Apple Music")
+        } else {
             headerArtworkImage
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open \(displayAlbum.title) in Apple Music")
+    }
+
+    @ViewBuilder
+    private var albumTitleLabel: some View {
+        if AlbumHeaderAppleMusicLinkPolicy.shouldLinkTitle(
+            canResolveAppleMusicURL: canResolveAppleMusicTitleLink
+        ) {
+            Button {
+                openAppleMusicFromTitle()
+            } label: {
+                albumTitleText
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(displayAlbum.title) in Apple Music")
+        } else {
+            albumTitleText
+        }
+    }
+
+    private var albumTitleText: some View {
+        Text(displayAlbum.title)
+            .font(.title2.weight(.bold))
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
     }
 
     private var headerArtworkImage: some View {
@@ -572,27 +702,12 @@ struct LocalMusicAlbumDetailView: View {
 
     private var albumMenu: some View {
         Menu {
-            if appleMusicURL != nil {
-                Button {
-                    performAction(.openAppleMusic)
-                } label: {
-                    Label("Open in Apple Music", systemImage: "music.note")
-                }
-
-                Divider()
-            }
-
-            Button {
-                queueAlbum(.playNext)
-            } label: {
-                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-            }
-
-            Button {
-                queueAlbum(.addToQueue)
-            } label: {
-                Label("Add to Queue", systemImage: "text.badge.plus")
-            }
+            LocalMusicContainerDetailMenuContent(
+                actions: LocalMusicContainerDetailMenuPolicy.actions(
+                    hasAppleMusicURL: appleMusicURL != nil
+                ),
+                perform: performAlbumMenuAction
+            )
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.body)
@@ -600,19 +715,16 @@ struct LocalMusicAlbumDetailView: View {
         }
     }
 
-    private func queueAlbum(_ action: MusicResourceMenuAction) {
-        Task {
-            await store.performSonosQueueAction(
-                action,
-                playable: albumPlayable,
-                displayID: "\(playbackAlbumID):\(action.id)",
-                fallbackKind: .album,
-                fallbackTitle: displayAlbum.title,
-                fallbackArtist: displayAlbum.artistName,
-                fallbackAlbum: displayAlbum.title,
-                manager: manager,
-                searchManager: searchManager)
-        }
+    private func performAlbumMenuAction(_ action: LocalMusicContainerDetailMenuAction) {
+        performLocalMusicContainerMenuAction(
+            action,
+            playable: albumPlayable,
+            context: albumSonosActionContext,
+            store: store,
+            manager: manager,
+            searchManager: searchManager,
+            openAppleMusic: { performAction(.openAppleMusic) }
+        )
     }
 
     @ViewBuilder
@@ -820,17 +932,17 @@ struct LocalMusicAlbumDetailView: View {
         }
     }
 
-    private func openAppleMusicFromArtwork() {
+    private func openAppleMusicFromTitle() {
         Task {
             guard let url = await resolveAppleMusicURLIfNeeded() else {
                 SonosLog.debug(
                     .localService,
-                    "Album Apple Music artwork tap has no resolved URL title='\(displayAlbum.title)' " +
+                    "Album Apple Music title tap has no resolved URL title='\(displayAlbum.title)' " +
                         "rawURL='\(displayAlbum.url?.absoluteString ?? "nil")' " +
                         "playableID='\(albumPlayable?.catalogID ?? "nil")'")
                 return
             }
-            openLocalMusicAppleMusicURL(url, context: "album-artwork title='\(displayAlbum.title)'")
+            openLocalMusicAppleMusicURL(url, context: "album-title title='\(displayAlbum.title)'")
         }
     }
 
@@ -1209,6 +1321,13 @@ struct LocalMusicPlaylistDetailView: View {
         LocalServiceAppleMusicPlayable.make(playlist: displayPlaylist)?
             .withPreferredArtworkURLString(coverURL?.absoluteString)
     }
+    private var playlistSonosActionContext: LocalMusicContainerSonosActionContext {
+        LocalMusicContainerSonosActionContext.playlist(
+            containerID: displayPlaylist.id.rawValue,
+            title: displayPlaylist.name,
+            curator: displayPlaylist.curatorName
+        )
+    }
     private var playlistFavoriteResource: AppleMusicFavoriteResource? {
         AppleMusicFavoriteResource.fromLocalServicePlayable(playlistPlayable)
     }
@@ -1240,6 +1359,11 @@ struct LocalMusicPlaylistDetailView: View {
         }
         .background(detailBackground.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                playlistMenu
+            }
+        }
         .task {
             logPlaylistDetailState(stage: "open", playlist: displayPlaylist)
             await loadDetails()
@@ -1350,6 +1474,33 @@ struct LocalMusicPlaylistDetailView: View {
         case .playStation:
             break
         }
+    }
+
+    private var playlistMenu: some View {
+        Menu {
+            LocalMusicContainerDetailMenuContent(
+                actions: LocalMusicContainerDetailMenuPolicy.actions(
+                    hasAppleMusicURL: appleMusicURL != nil
+                ),
+                perform: performPlaylistMenuAction
+            )
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.body)
+                .symbolRenderingMode(.hierarchical)
+        }
+    }
+
+    private func performPlaylistMenuAction(_ action: LocalMusicContainerDetailMenuAction) {
+        performLocalMusicContainerMenuAction(
+            action,
+            playable: playlistPlayable,
+            context: playlistSonosActionContext,
+            store: store,
+            manager: manager,
+            searchManager: searchManager,
+            openAppleMusic: { performAction(.openAppleMusic) }
+        )
     }
 
     @ViewBuilder

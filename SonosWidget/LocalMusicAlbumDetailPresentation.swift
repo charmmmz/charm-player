@@ -86,6 +86,16 @@ enum LocalMusicAlbumDetailPresentation {
         return nil
     }
 
+    static func canResolveAppleMusicTitleLink(
+        appleMusicURL: URL?,
+        title: String,
+        artist: String
+    ) -> Bool {
+        if appleMusicURL != nil { return true }
+        return meaningfulMetadataValue(title) != nil &&
+            meaningfulMetadataValue(artist) != nil
+    }
+
     static func animatedArtworkRetryDelayNanoseconds(
         afterFailedAttempt failedAttempt: Int,
         hasAnimatedArtwork: Bool

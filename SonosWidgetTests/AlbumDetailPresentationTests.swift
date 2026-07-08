@@ -165,6 +165,24 @@ final class AlbumDetailPresentationTests: XCTestCase {
         XCTAssertEqual(MusicDetailHeaderTypography.artistOpacity, 1)
     }
 
+    func testAlbumHeaderAppleMusicLinkUsesTitleInsteadOfArtwork() {
+        XCTAssertTrue(
+            AlbumHeaderAppleMusicLinkPolicy.shouldLinkTitle(canResolveAppleMusicURL: true)
+        )
+        XCTAssertFalse(
+            AlbumHeaderAppleMusicLinkPolicy.shouldLinkArtwork(canResolveAppleMusicURL: true)
+        )
+    }
+
+    func testAlbumHeaderAppleMusicLinkKeepsUnavailableTitleStatic() {
+        XCTAssertFalse(
+            AlbumHeaderAppleMusicLinkPolicy.shouldLinkTitle(canResolveAppleMusicURL: false)
+        )
+        XCTAssertFalse(
+            AlbumHeaderAppleMusicLinkPolicy.shouldLinkArtwork(canResolveAppleMusicURL: false)
+        )
+    }
+
     func testAlbumHeaderAnimatedArtworkUsesPlayableRelayURLWhenOnlySquareArtworkIsAvailable() {
         let info = AnimatedArtworkInfo(
             squareURLString: "https://video.example.com/square.m3u8",

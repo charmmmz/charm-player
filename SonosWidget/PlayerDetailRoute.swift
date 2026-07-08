@@ -46,6 +46,108 @@ enum PlayerDetailNavigationPolicy {
     )
 }
 
+enum NowPlayingAppleMusicLinkPolicy {
+    static func shouldLinkTitle(canOpenAppleMusicTrack: Bool) -> Bool {
+        canOpenAppleMusicTrack
+    }
+
+    static func shouldLinkSourceBadge(canOpenAppleMusicTrack _: Bool) -> Bool {
+        false
+    }
+}
+
+enum NowPlayingBottomActionSlot: Equatable, Identifiable, Sendable {
+    case emptyLeading
+    case queue
+    case speaker
+    case contextMenu
+
+    var id: String {
+        switch self {
+        case .emptyLeading:
+            return "empty-leading"
+        case .queue:
+            return "queue"
+        case .speaker:
+            return "speaker"
+        case .contextMenu:
+            return "context-menu"
+        }
+    }
+}
+
+enum NowPlayingBottomActionPolicy {
+    static func slots(showQueue: Bool) -> [NowPlayingBottomActionSlot] {
+        [
+            showQueue ? .queue : .emptyLeading,
+            .speaker,
+            .contextMenu
+        ]
+    }
+}
+
+enum NowPlayingContextMenuAction: Equatable, Identifiable, Sendable {
+    case addToSonosFavorites(isEnabled: Bool)
+    case addToAppleMusicFavorites(isEnabled: Bool)
+    case openInAppleMusic(isEnabled: Bool)
+
+    var id: String {
+        switch self {
+        case .addToSonosFavorites:
+            return "add-to-sonos-favorites"
+        case .addToAppleMusicFavorites:
+            return "add-to-apple-music-favorites"
+        case .openInAppleMusic:
+            return "open-in-apple-music"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .addToSonosFavorites:
+            return "Add to Sonos Favorites"
+        case .addToAppleMusicFavorites:
+            return "Add to Apple Music Favorites"
+        case .openInAppleMusic:
+            return "Open in Apple Music"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .addToSonosFavorites:
+            return "heart"
+        case .addToAppleMusicFavorites:
+            return "music.note"
+        case .openInAppleMusic:
+            return "arrow.up.right.square"
+        }
+    }
+
+    var isEnabled: Bool {
+        switch self {
+        case .addToSonosFavorites(let isEnabled),
+             .addToAppleMusicFavorites(let isEnabled),
+             .openInAppleMusic(let isEnabled):
+            return isEnabled
+        }
+    }
+}
+
+enum NowPlayingContextMenuPolicy {
+    static func actions(
+        canAddSonosFavorite: Bool,
+        canAddAppleMusicFavorite: Bool,
+        canOpenAppleMusicTrack: Bool
+    ) -> [NowPlayingContextMenuAction] {
+        [
+            .addToSonosFavorites(isEnabled: canAddSonosFavorite),
+            .addToAppleMusicFavorites(isEnabled: canAddAppleMusicFavorite),
+            .openInAppleMusic(isEnabled: canOpenAppleMusicTrack)
+        ]
+    }
+}
+
 private struct PlayerDetailRouteItem: Hashable {
     let id: String
     let title: String

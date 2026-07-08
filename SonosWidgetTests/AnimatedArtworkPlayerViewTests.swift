@@ -18,6 +18,22 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
         XCTAssertTrue(view.playerLayer.videoGravity == .resizeAspectFill)
     }
 
+    func testMutedVideoPlaybackAudioSessionAllowsExternalAudioToContinue() {
+        let configuration = AnimatedArtworkAudioSessionPolicy.mutedVideoPlaybackConfiguration
+
+        XCTAssertEqual(configuration.category, .ambient)
+        XCTAssertTrue(configuration.options.contains(.mixWithOthers))
+    }
+
+    func testNowPlayingAnimatedArtworkOnlyPlaysWhenFullPlayerIsVisible() {
+        XCTAssertFalse(
+            NowPlayingAnimatedArtworkPlaybackPolicy.shouldPlay(isFullPlayerVisible: false)
+        )
+        XCTAssertTrue(
+            NowPlayingAnimatedArtworkPlaybackPolicy.shouldPlay(isFullPlayerVisible: true)
+        )
+    }
+
     func testLayerViewKeepsPlayerWhenURLIsUnchanged() {
         let view = AnimatedArtworkPlayerLayerView()
         let url = URL(string: "https://video.example.com/square.m3u8")!

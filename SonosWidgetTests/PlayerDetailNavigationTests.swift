@@ -49,4 +49,64 @@ final class PlayerDetailNavigationTests: XCTestCase {
         XCTAssertTrue(NowPlayingBackgroundPresentation.usesSharedArtworkBackground)
         XCTAssertFalse(NowPlayingBackgroundPresentation.usesReflectedArtwork)
     }
+
+    func testNowPlayingAppleMusicLinkUsesTitleInsteadOfSourceBadge() {
+        XCTAssertTrue(
+            NowPlayingAppleMusicLinkPolicy.shouldLinkTitle(canOpenAppleMusicTrack: true)
+        )
+        XCTAssertFalse(
+            NowPlayingAppleMusicLinkPolicy.shouldLinkSourceBadge(canOpenAppleMusicTrack: true)
+        )
+    }
+
+    func testNowPlayingAppleMusicLinkKeepsUnavailableTitleStatic() {
+        XCTAssertFalse(
+            NowPlayingAppleMusicLinkPolicy.shouldLinkTitle(canOpenAppleMusicTrack: false)
+        )
+        XCTAssertFalse(
+            NowPlayingAppleMusicLinkPolicy.shouldLinkSourceBadge(canOpenAppleMusicTrack: false)
+        )
+    }
+
+    func testNowPlayingBottomActionsCentersSpeakerBetweenQueueAndContextMenu() {
+        XCTAssertEqual(
+            NowPlayingBottomActionPolicy.slots(showQueue: true),
+            [.queue, .speaker, .contextMenu]
+        )
+    }
+
+    func testNowPlayingBottomActionsReserveLeadingSlotWhenQueueHidden() {
+        XCTAssertEqual(
+            NowPlayingBottomActionPolicy.slots(showQueue: false),
+            [.emptyLeading, .speaker, .contextMenu]
+        )
+    }
+
+    func testNowPlayingContextMenuIncludesFavoritesAndOpenAppleMusic() {
+        let actions = NowPlayingContextMenuPolicy.actions(
+            canAddSonosFavorite: true,
+            canAddAppleMusicFavorite: true,
+            canOpenAppleMusicTrack: true
+        )
+
+        XCTAssertEqual(actions.map(\.title), [
+            "Add to Sonos Favorites",
+            "Add to Apple Music Favorites",
+            "Open in Apple Music"
+        ])
+        XCTAssertTrue(actions.allSatisfy(\.isEnabled))
+    }
+
+    func testNowPlayingContextMenuDisablesUnavailableCurrentTrackActions() {
+        let actions = NowPlayingContextMenuPolicy.actions(
+            canAddSonosFavorite: false,
+            canAddAppleMusicFavorite: false,
+            canOpenAppleMusicTrack: false
+        )
+
+        XCTAssertEqual(actions.count, 3)
+        XCTAssertFalse(actions[0].isEnabled)
+        XCTAssertFalse(actions[1].isEnabled)
+        XCTAssertFalse(actions[2].isEnabled)
+    }
 }

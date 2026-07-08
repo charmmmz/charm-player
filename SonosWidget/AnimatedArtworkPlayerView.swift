@@ -25,9 +25,9 @@ struct AnimatedArtworkPlayerView: UIViewRepresentable {
             onReadyForDisplay: onReadyForDisplay
         )
         if isPlaying {
-            view.player?.play()
+            view.play()
         } else {
-            view.player?.pause()
+            view.pause()
         }
     }
 
@@ -37,6 +37,57 @@ struct AnimatedArtworkPlayerView: UIViewRepresentable {
     ) {
         view.stop()
     }
+}
+
+nonisolated struct AnimatedArtworkAudioSessionConfiguration: Equatable {
+    let category: AVAudioSession.Category
+    let mode: AVAudioSession.Mode
+    let options: AVAudioSession.CategoryOptions
+}
+
+@MainActor
+enum AnimatedArtworkAudioSessionPolicy {
+    typealias CategorySetter = (
+        AVAudioSession.Category,
+        AVAudioSession.Mode,
+        AVAudioSession.CategoryOptions
+    ) throws -> Void
+
+    static let mutedVideoPlaybackConfiguration = AnimatedArtworkAudioSessionConfiguration(
+        category: .ambient,
+        mode: .default,
+        options: [.mixWithOthers]
+    )
+
+    private static var didConfigureMutedVideoPlayback = false
+
+    static func configureForMutedVideoPlayback(
+        setCategory: CategorySetter = { category, mode, options in
+            try AVAudioSession.sharedInstance().setCategory(
+                category,
+                mode: mode,
+                options: options
+            )
+        }
+    ) {
+        guard !didConfigureMutedVideoPlayback else { return }
+
+        let configuration = mutedVideoPlaybackConfiguration
+        do {
+            try setCategory(configuration.category, configuration.mode, configuration.options)
+            didConfigureMutedVideoPlayback = true
+        } catch {
+            #if DEBUG
+            print("[AnimatedArtwork] audio session configuration failed: \(error)")
+            #endif
+        }
+    }
+
+    #if DEBUG
+    static func resetForTests() {
+        didConfigureMutedVideoPlayback = false
+    }
+    #endif
 }
 
 struct FullScreenAnimatedArtworkExtensionBackdrop: View {
@@ -122,8 +173,17 @@ final class AnimatedArtworkPlayerLayerView: UIView {
         }
     }
 
-    func stop() {
+    func play() {
+        AnimatedArtworkAudioSessionPolicy.configureForMutedVideoPlayback()
+        player?.play()
+    }
+
+    func pause() {
         player?.pause()
+    }
+
+    func stop() {
+        pause()
         player = nil
         looper = nil
         readyObservation = nil

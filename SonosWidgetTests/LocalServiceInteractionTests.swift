@@ -46,6 +46,55 @@ final class LocalServiceInteractionTests: XCTestCase {
             [.play, .shuffle])
     }
 
+    func testContainerDetailMenuIncludesSonosFavoriteAfterQueueActions() {
+        XCTAssertEqual(
+            LocalMusicContainerDetailMenuPolicy.actions(hasAppleMusicURL: true),
+            [
+                .openAppleMusic,
+                .playNext,
+                .addToQueue,
+                .addToSonosFavorites
+            ])
+    }
+
+    func testContainerDetailMenuOmitsAppleMusicActionWhenUnavailable() {
+        XCTAssertEqual(
+            LocalMusicContainerDetailMenuPolicy.actions(hasAppleMusicURL: false),
+            [
+                .playNext,
+                .addToQueue,
+                .addToSonosFavorites
+            ])
+    }
+
+    func testContainerSonosActionContextBuildsAlbumFallbacks() {
+        let context = LocalMusicContainerSonosActionContext.album(
+            containerID: "album-1",
+            title: "Album Title",
+            artist: "Album Artist")
+
+        XCTAssertEqual(context.queueDisplayID(for: .playNext), "album-1:play-next")
+        XCTAssertEqual(context.favoriteDisplayID, "album-1:sonos-favorite")
+        XCTAssertEqual(context.fallbackKind, .album)
+        XCTAssertEqual(context.fallbackTitle, "Album Title")
+        XCTAssertEqual(context.fallbackArtist, "Album Artist")
+        XCTAssertEqual(context.fallbackAlbum, "Album Title")
+    }
+
+    func testContainerSonosActionContextBuildsPlaylistFallbacks() {
+        let context = LocalMusicContainerSonosActionContext.playlist(
+            containerID: "playlist-1",
+            title: "Playlist Title",
+            curator: "Curator")
+
+        XCTAssertEqual(context.queueDisplayID(for: .addToQueue), "playlist-1:add-to-queue")
+        XCTAssertEqual(context.favoriteDisplayID, "playlist-1:sonos-favorite")
+        XCTAssertEqual(context.fallbackKind, .playlist)
+        XCTAssertEqual(context.fallbackTitle, "Playlist Title")
+        XCTAssertEqual(context.fallbackArtist, "Curator")
+        XCTAssertEqual(context.fallbackAlbum, "Playlist Title")
+    }
+
     func testAppleMusicURLFallsBackToAlbumCatalogID() {
         let playable = LocalServiceAppleMusicPlayable(
             kind: .album,

@@ -467,6 +467,95 @@ enum LocalMusicDetailActions {
     }
 }
 
+enum LocalMusicContainerDetailMenuAction: Equatable, Hashable, Identifiable, Sendable {
+    case openAppleMusic
+    case playNext
+    case addToQueue
+    case addToSonosFavorites
+
+    var id: String {
+        switch self {
+        case .openAppleMusic: return "open-apple-music"
+        case .playNext: return "play-next"
+        case .addToQueue: return "add-to-queue"
+        case .addToSonosFavorites: return "add-to-sonos-favorites"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .openAppleMusic: return "Open in Apple Music"
+        case .playNext: return "Play Next"
+        case .addToQueue: return "Add to Queue"
+        case .addToSonosFavorites: return "Add to Sonos Favorites"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .openAppleMusic: return "music.note"
+        case .playNext: return "text.line.first.and.arrowtriangle.forward"
+        case .addToQueue: return "text.badge.plus"
+        case .addToSonosFavorites: return "heart"
+        }
+    }
+}
+
+enum LocalMusicContainerDetailMenuPolicy {
+    static func actions(hasAppleMusicURL: Bool) -> [LocalMusicContainerDetailMenuAction] {
+        var actions: [LocalMusicContainerDetailMenuAction] = []
+        if hasAppleMusicURL {
+            actions.append(.openAppleMusic)
+        }
+        actions.append(contentsOf: [.playNext, .addToQueue, .addToSonosFavorites])
+        return actions
+    }
+}
+
+struct LocalMusicContainerSonosActionContext: Equatable, Sendable {
+    let containerID: String
+    let fallbackKind: LocalServiceAppleMusicPlayable.Kind
+    let fallbackTitle: String
+    let fallbackArtist: String?
+    let fallbackAlbum: String?
+
+    var favoriteDisplayID: String {
+        "\(containerID):sonos-favorite"
+    }
+
+    func queueDisplayID(for action: MusicResourceMenuAction) -> String {
+        "\(containerID):\(action.id)"
+    }
+
+    static func album(
+        containerID: String,
+        title: String,
+        artist: String
+    ) -> LocalMusicContainerSonosActionContext {
+        LocalMusicContainerSonosActionContext(
+            containerID: containerID,
+            fallbackKind: .album,
+            fallbackTitle: title,
+            fallbackArtist: artist,
+            fallbackAlbum: title
+        )
+    }
+
+    static func playlist(
+        containerID: String,
+        title: String,
+        curator: String?
+    ) -> LocalMusicContainerSonosActionContext {
+        LocalMusicContainerSonosActionContext(
+            containerID: containerID,
+            fallbackKind: .playlist,
+            fallbackTitle: title,
+            fallbackArtist: curator,
+            fallbackAlbum: title
+        )
+    }
+}
+
 enum LocalMusicAppleMusicURL {
     enum Kind {
         case album

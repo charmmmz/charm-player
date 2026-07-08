@@ -721,6 +721,41 @@ final class LocalLibraryStore {
         }
     }
 
+    func addSonosFavorite(
+        playable: LocalServiceAppleMusicPlayable?,
+        displayID: String,
+        fallbackKind: LocalServiceAppleMusicPlayable.Kind? = nil,
+        fallbackTitle: String? = nil,
+        fallbackArtist: String? = nil,
+        fallbackAlbum: String? = nil,
+        manager: SonosManager,
+        searchManager: SearchManager
+    ) async {
+        await runPlayback(id: displayID) {
+            let item = try await resolveQueueBrowseItem(
+                playable: playable,
+                fallbackKind: fallbackKind,
+                fallbackTitle: fallbackTitle,
+                fallbackArtist: fallbackArtist,
+                fallbackAlbum: fallbackAlbum,
+                manager: manager,
+                searchManager: searchManager)
+
+            searchManager.errorMessage = nil
+            manager.errorMessage = nil
+            await searchManager.ensureBrowseContentLoaded(manager: manager)
+            if searchManager.isFavorited(item) {
+                return
+            }
+
+            let didUpdate = await searchManager.addToFavorites(item: item, manager: manager)
+            guard didUpdate else {
+                throw LocalServiceSonosPlaybackError.playbackFailed(
+                    searchManager.errorMessage ?? manager.errorMessage)
+            }
+        }
+    }
+
     private func startOnSonos(
         playable: LocalServiceAppleMusicPlayable?,
         fallbackKind: LocalServiceAppleMusicPlayable.Kind?,

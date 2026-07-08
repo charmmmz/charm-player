@@ -404,12 +404,6 @@ struct PlayerView: View {
         }
         .padding(.horizontal, HomeActionTrayPresentation.horizontalPadding)
         .padding(.vertical, HomeActionTrayPresentation.verticalPadding)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 10)
     }
 
     private var homeActionBottomPadding: CGFloat {
@@ -431,35 +425,13 @@ struct PlayerView: View {
         Button {
             handoffPlayback()
         } label: {
-            VStack(spacing: 5) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            isTransferZoneTargeted || isTransferringPlayback
-                                ? Color.white.opacity(0.2)
-                                : Color.white.opacity(0.08)
-                        )
-                    Circle()
-                        .strokeBorder(
-                            isTransferZoneTargeted ? Color.white.opacity(0.7) : Color.white.opacity(0.2),
-                            lineWidth: 1.5
-                        )
-                    if isTransferringPlayback {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.left.arrow.right")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(isTransferZoneTargeted ? .white : .white.opacity(0.55))
-                    }
-                }
-                .frame(width: 52, height: 52)
-                .scaleEffect(isTransferZoneTargeted ? 1.12 : 1.0)
-
-                Text("HANDOFF")
-                    .font(.system(size: 8, weight: .bold))
-                    .tracking(0.6)
-                    .foregroundStyle(isTransferZoneTargeted ? .white.opacity(0.85) : .white.opacity(0.45))
-            }
+            homeDropTarget(
+                title: "Handoff",
+                systemImage: "arrow.left.arrow.right",
+                tint: .blue,
+                isTargeted: isTransferZoneTargeted,
+                isBusy: isTransferringPlayback
+            )
         }
         .buttonStyle(.plain)
         .disabled(isTransferringPlayback || !manager.isConfigured)
@@ -467,27 +439,57 @@ struct PlayerView: View {
     }
 
     private var ungroupZone: some View {
-        VStack(spacing: 5) {
+        homeDropTarget(
+            title: "Ungroup",
+            systemImage: "minus",
+            tint: .red,
+            isTargeted: isSeparateZoneTargeted
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Ungroup speaker")
+    }
+
+    private func homeDropTarget(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        isTargeted: Bool,
+        isBusy: Bool = false
+    ) -> some View {
+        HStack(spacing: 8) {
             ZStack {
                 Circle()
-                    .fill(isSeparateZoneTargeted ? Color.red.opacity(0.85) : Color.white.opacity(0.08))
-                Circle()
-                    .strokeBorder(
-                        isSeparateZoneTargeted ? Color.red : Color.white.opacity(0.2),
-                        lineWidth: 1.5
-                    )
-                Image(systemName: "minus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(isSeparateZoneTargeted ? .white : .white.opacity(0.35))
+                    .fill(isTargeted ? Color.white.opacity(0.18) : Color.white.opacity(0.08))
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 17, weight: .semibold))
+                }
             }
-            .frame(width: 52, height: 52)
-            .scaleEffect(isSeparateZoneTargeted ? 1.15 : 1.0)
+            .frame(width: 32, height: 32)
 
-            Text("UNGROUP")
-                .font(.system(size: 8, weight: .bold))
-                .tracking(0.6)
-                .foregroundStyle(isSeparateZoneTargeted ? .red : .white.opacity(0.25))
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
         }
+        .foregroundStyle(isTargeted || isBusy ? .white : .white.opacity(0.62))
+        .frame(minWidth: HomeActionTrayPresentation.targetMinWidth)
+        .frame(height: HomeActionTrayPresentation.targetHeight)
+        .background {
+            Capsule()
+                .fill((isTargeted || isBusy) ? tint.opacity(0.26) : Color.white.opacity(0.06))
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    (isTargeted || isBusy) ? tint.opacity(0.72) : Color.white.opacity(0.1),
+                    lineWidth: (isTargeted || isBusy) ? 1.5 : 1
+                )
+        }
+        .scaleEffect(isTargeted ? 1.03 : 1)
+        .contentShape(Capsule())
     }
 
     private func beginSpeakerGroupDrag() {
@@ -1310,6 +1312,8 @@ struct NowPlayingOverlay: View {
     @State private var nowPlayingInfo: SonosCloudAPI.NowPlayingResponse?
     @State private var lastFetchedTrackURI: String?
     @State private var isOpeningAppleMusicLink = false
+    @State private var isAddingCurrentTrackToSonosFavorites = false
+    @State private var isAddingCurrentTrackToAppleMusicFavorites = false
     @State private var currentAppleMusicTrackURL: URL?
     @StateObject private var animatedArtworkState = AnimatedNowPlayingArtworkState()
     @State private var animatedArtworkReadyURL: URL?
@@ -1348,6 +1352,12 @@ struct NowPlayingOverlay: View {
 
     private var usesFullScreenAnimatedArtwork: Bool {
         fullScreenAnimatedArtworkURL != nil
+    }
+
+    private var shouldPlayAnimatedArtworkVideo: Bool {
+        NowPlayingAnimatedArtworkPlaybackPolicy.shouldPlay(
+            isFullPlayerVisible: manager.showFullPlayer
+        )
     }
 
     private var windowTopSafeAreaInset: CGFloat {
@@ -1648,10 +1658,7 @@ struct NowPlayingOverlay: View {
 
                     VStack(alignment: .leading) {
                         Spacer(minLength: 0)
-                        Text(manager.trackInfo?.title ?? "Not Playing")
-                            .font(.title3.bold())
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
+                        nowPlayingTitleLabel(lineLimit: 2, usesShadow: false)
                         // Hide artist/album rows for TV — the format pill in
                         // `tvFormatPanel` already conveys the codec.
                         if manager.trackInfo?.source != .tv {
@@ -1751,7 +1758,7 @@ struct NowPlayingOverlay: View {
             )
             .id(transitionID)
 
-            if let url = fullScreenAnimatedArtworkURL {
+            if shouldPlayAnimatedArtworkVideo, let url = fullScreenAnimatedArtworkURL {
                 fullScreenAnimatedArtworkPresentation(
                     url: url,
                     size: size
@@ -1798,7 +1805,7 @@ struct NowPlayingOverlay: View {
         } else {
             AnimatedArtworkPlayerView(
                 url: url,
-                isPlaying: true,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
                 videoGravity: .resizeAspectFill,
                 onReadyForDisplay: {
                     markFullScreenAnimatedArtworkReady(url)
@@ -1828,7 +1835,7 @@ struct NowPlayingOverlay: View {
 
             AnimatedArtworkPlayerView(
                 url: url,
-                isPlaying: true,
+                isPlaying: shouldPlayAnimatedArtworkVideo,
                 videoGravity: .resizeAspect,
                 onReadyForDisplay: {
                     markFullScreenAnimatedArtworkReady(url)
@@ -1956,7 +1963,8 @@ struct NowPlayingOverlay: View {
                     Image(uiImage: image)
                         .resizable().aspectRatio(1, contentMode: .fit)
 
-                    if let animatedURL = animatedArtworkState.currentURL,
+                    if shouldPlayAnimatedArtworkVideo,
+                       let animatedURL = animatedArtworkState.currentURL,
                        AnimatedArtworkFeature.canRenderVideo(source: manager.trackInfo?.source) {
                         AnimatedArtworkPlayerView(
                             url: animatedURL,
@@ -1995,22 +2003,8 @@ struct NowPlayingOverlay: View {
         content
     }
 
-    @ViewBuilder
     private func sourceBadge(_ source: PlaybackSource) -> some View {
-        let badge = SourceBadgeView(source: source, tintColor: manager.albumArtDominantColor)
-
-        if source == .appleMusic, canOpenCurrentAppleMusicTrack {
-            Button {
-                openCurrentAppleMusicTrack()
-            } label: {
-                badge
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Open current song in Apple Music")
-        } else {
-            badge
-        }
+        SourceBadgeView(source: source, tintColor: manager.albumArtDominantColor)
     }
 
     @ViewBuilder
@@ -2052,7 +2046,7 @@ struct NowPlayingOverlay: View {
                 guard let url = resolvedURL else {
                     SonosLog.debug(
                         .nowPlaying,
-                        "Apple Music current artwork lookup produced no URL " +
+                        "Apple Music current title lookup produced no URL " +
                             "title='\(info.title)' artist='\(info.artist)' album='\(info.album)' " +
                             "directID='\(resource?.id ?? "nil")'"
                     )
@@ -2060,15 +2054,54 @@ struct NowPlayingOverlay: View {
                 }
                 AppleMusicExternalLinkOpener.open(
                     url,
-                    context: "now-playing-source-badge title='\(info.title)' directID='\(resource?.id ?? "nil")'"
+                    context: "now-playing-title title='\(info.title)' directID='\(resource?.id ?? "nil")'"
                 )
             } catch {
                 SonosLog.error(
                     .nowPlaying,
-                    "Apple Music current artwork lookup failed " +
+                    "Apple Music current title lookup failed " +
                         "title='\(info.title)' artist='\(info.artist)' album='\(info.album)' " +
                         "directID='\(resource?.id ?? "nil")' error=\(error)"
                 )
+            }
+        }
+    }
+
+    private func addCurrentTrackToSonosFavorites() {
+        guard !isAddingCurrentTrackToSonosFavorites,
+              let item = currentTrackBrowseItemForSonosFavorite else { return }
+        isAddingCurrentTrackToSonosFavorites = true
+
+        Task { @MainActor in
+            defer { isAddingCurrentTrackToSonosFavorites = false }
+            if searchManager.isFavorited(item) {
+                SonosLog.info(
+                    .favorites,
+                    "Current track already in Sonos Favorites title='\(item.title)' id='\(item.id)'")
+                return
+            }
+            _ = await searchManager.addToFavorites(item: item, manager: manager)
+        }
+    }
+
+    private func addCurrentTrackToAppleMusicFavorites() {
+        guard !isAddingCurrentTrackToAppleMusicFavorites,
+              let resource = currentAppleMusicTrackResource else { return }
+        isAddingCurrentTrackToAppleMusicFavorites = true
+
+        Task { @MainActor in
+            defer { isAddingCurrentTrackToAppleMusicFavorites = false }
+            do {
+                let alreadyFavorited = (try? await searchManager.appleMusicFavoriteStatus(for: resource)) ?? false
+                if !alreadyFavorited {
+                    try await searchManager.addToAppleMusicFavorites(resource: resource)
+                }
+                SonosLog.info(
+                    .favorites,
+                    "Current track added to Apple Music Favorites resource='\(resource.id)' alreadyFavorited=\(alreadyFavorited)")
+            } catch {
+                SonosLog.error(.favorites, "Current track Apple Music Favorites add failed: \(error)")
+                searchManager.errorMessage = error.localizedDescription
             }
         }
     }
@@ -2102,12 +2135,7 @@ struct NowPlayingOverlay: View {
     private var trackInfoView: some View {
         let isTV = manager.trackInfo?.source == .tv
         return VStack(spacing: 4) {
-            Text(manager.trackInfo?.title ?? "Not Playing")
-                .font(.title3.bold()).foregroundStyle(.white).lineLimit(1)
-                // Safety-net shadow: keeps the title legible even if the
-                // page tint underneath happens to be near-white (covers
-                // with bright bottom edges).
-                .shadow(color: .black.opacity(0.45), radius: 6, y: 1)
+            nowPlayingTitleLabel(lineLimit: 1, usesShadow: true)
 
             // For TV input the codec ("Dolby Atmos · MAT") is already
             // shown by the format badge in `tvFormatPanel` below, so
@@ -2154,6 +2182,36 @@ struct NowPlayingOverlay: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func nowPlayingTitleLabel(lineLimit: Int, usesShadow: Bool) -> some View {
+        if NowPlayingAppleMusicLinkPolicy.shouldLinkTitle(
+            canOpenAppleMusicTrack: canOpenCurrentAppleMusicTrack
+        ) {
+            Button {
+                openCurrentAppleMusicTrack()
+            } label: {
+                nowPlayingTitleText(lineLimit: lineLimit, usesShadow: usesShadow)
+            }
+            .buttonStyle(.plain)
+            .disabled(isOpeningAppleMusicLink)
+            .accessibilityLabel("Open current song in Apple Music")
+        } else {
+            nowPlayingTitleText(lineLimit: lineLimit, usesShadow: usesShadow)
+        }
+    }
+
+    private func nowPlayingTitleText(lineLimit: Int, usesShadow: Bool) -> some View {
+        Text(manager.trackInfo?.title ?? "Not Playing")
+            .font(.title3.bold())
+            .foregroundStyle(.white)
+            .lineLimit(lineLimit)
+            .shadow(
+                color: usesShadow ? .black.opacity(0.45) : .clear,
+                radius: usesShadow ? 6 : 0,
+                y: usesShadow ? 1 : 0
+            )
     }
 
     // MARK: - Now Playing Navigation
@@ -2311,6 +2369,43 @@ struct NowPlayingOverlay: View {
             relayBaseURL: RelayManager.shared.url,
             source: manager.trackInfo?.source
         )
+    }
+
+    private var currentTrackBrowseItemForSonosFavorite: BrowseItem? {
+        guard let item = currentTrackBrowseItem,
+              item.playbackDescriptor.directURI != nil else { return nil }
+        return item
+    }
+
+    private var currentTrackBrowseItem: BrowseItem? {
+        guard let info = manager.trackInfo,
+              let title = meaningfulAppleMusicSearchValue(nowPlayingInfo?.item?.title)
+                ?? meaningfulAppleMusicSearchValue(info.title),
+              let nowPlayingItem = nowPlayingInfo?.item,
+              let rawObjectId = nowPlayingItem.resource?.id?.objectId ?? nowPlayingItem.id,
+              !rawObjectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let serviceId = nowPlayingItem.resource?.id?.serviceId,
+              let accountId = nowPlayingItem.resource?.id?.accountId else {
+            return nil
+        }
+
+        var item = searchManager.makeTrackItem(
+            objectId: rawObjectId,
+            title: title,
+            artist: meaningfulAppleMusicSearchValue(nowPlayingItem.artists?.first?.name)
+                ?? meaningfulAppleMusicSearchValue(info.artist)
+                ?? "",
+            album: meaningfulAppleMusicSearchValue(nowPlayingItem.albumName)
+                ?? meaningfulAppleMusicSearchValue(info.album)
+                ?? "",
+            artURL: nowPlayingItem.images?.tile1x1
+                ?? nowPlayingInfo?.images?.tile1x1
+                ?? info.albumArtURL,
+            cloudServiceId: serviceId,
+            accountId: accountId
+        )
+        item.duration = info.durationSeconds
+        return item
     }
 
     private var artistBrowseItem: BrowseItem? {
@@ -2878,55 +2973,128 @@ struct NowPlayingOverlay: View {
         .padding(.horizontal, 32)
     }
 
-    // MARK: - Bottom Actions (Speaker + optional Queue button)
+    // MARK: - Bottom Actions
 
     private let bottomButtonHeight: CGFloat = 38
+    private var bottomSideSlotWidth: CGFloat { bottomButtonHeight }
 
     private func bottomActions(showQueue: Bool) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                manager.showingSpeakerPicker = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: manager.isEverywhereActive ? "house.fill" : "hifispeaker.fill")
-                        .font(.subheadline)
-                    if manager.isEverywhereActive {
-                        Text("Everywhere")
-                            .font(.subheadline.weight(.medium))
-                    } else {
-                        Text(manager.selectedSpeaker?.name ?? "Select Speaker")
-                            .font(.subheadline.weight(.medium))
-                        if manager.currentGroupMembers.count > 1 {
-                            Text("+ \(manager.currentGroupMembers.count - 1)")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.white.opacity(0.2), in: Capsule())
-                        }
-                    }
-                }
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(height: bottomButtonHeight)
-                .padding(.horizontal, 16)
-                .background(.white.opacity(0.1), in: Capsule())
-            }
-            .buttonStyle(.plain)
+        let slots = NowPlayingBottomActionPolicy.slots(showQueue: showQueue)
 
-            if showQueue {
-                Button {
-                    manager.showingQueue = true
-                    Task { await manager.loadQueue() }
-                } label: {
-                    Image(systemName: "list.bullet")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: bottomButtonHeight, height: bottomButtonHeight)
-                        .background(.white.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
+        return HStack(spacing: 8) {
+            ForEach(slots) { slot in
+                bottomActionSlot(slot)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 32)
+    }
+
+    @ViewBuilder
+    private func bottomActionSlot(_ slot: NowPlayingBottomActionSlot) -> some View {
+        switch slot {
+        case .emptyLeading:
+            Color.clear
+                .frame(width: bottomSideSlotWidth, height: bottomButtonHeight)
+                .accessibilityHidden(true)
+        case .queue:
+            bottomQueueButton
+                .frame(width: bottomSideSlotWidth, height: bottomButtonHeight)
+        case .speaker:
+            bottomSpeakerButton
+        case .contextMenu:
+            nowPlayingContextMenuButton
+                .frame(width: bottomSideSlotWidth, height: bottomButtonHeight)
+        }
+    }
+
+    private var bottomSpeakerButton: some View {
+        Button {
+            manager.showingSpeakerPicker = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: manager.isEverywhereActive ? "house.fill" : "hifispeaker.fill")
+                    .font(.subheadline)
+                if manager.isEverywhereActive {
+                    Text("Everywhere")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                } else {
+                    Text(manager.selectedSpeaker?.name ?? "Select Speaker")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    if manager.currentGroupMembers.count > 1 {
+                        Text("+ \(manager.currentGroupMembers.count - 1)")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.white.opacity(0.2), in: Capsule())
+                    }
+                }
+            }
+            .foregroundStyle(.white.opacity(0.7))
+            .frame(height: bottomButtonHeight)
+            .padding(.horizontal, 16)
+            .background(.white.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var bottomQueueButton: some View {
+        Button {
+            manager.showingQueue = true
+            Task { await manager.loadQueue() }
+        } label: {
+            Image(systemName: "list.bullet")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: bottomButtonHeight, height: bottomButtonHeight)
+                .background(.white.opacity(0.1), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show Queue")
+    }
+
+    private var nowPlayingContextMenuButton: some View {
+        Menu {
+            ForEach(nowPlayingContextMenuActions) { action in
+                Button {
+                    performNowPlayingContextMenuAction(action)
+                } label: {
+                    Label(action.title, systemImage: action.systemImage)
+                }
+                .disabled(!action.isEnabled)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: bottomButtonHeight, height: bottomButtonHeight)
+                .background(.white.opacity(0.1), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More")
+    }
+
+    private var nowPlayingContextMenuActions: [NowPlayingContextMenuAction] {
+        NowPlayingContextMenuPolicy.actions(
+            canAddSonosFavorite: currentTrackBrowseItemForSonosFavorite != nil
+                && !isAddingCurrentTrackToSonosFavorites,
+            canAddAppleMusicFavorite: currentAppleMusicTrackResource != nil
+                && !isAddingCurrentTrackToAppleMusicFavorites,
+            canOpenAppleMusicTrack: canOpenCurrentAppleMusicTrack && !isOpeningAppleMusicLink
+        )
+    }
+
+    private func performNowPlayingContextMenuAction(_ action: NowPlayingContextMenuAction) {
+        switch action {
+        case .addToSonosFavorites:
+            addCurrentTrackToSonosFavorites()
+        case .addToAppleMusicFavorites:
+            addCurrentTrackToAppleMusicFavorites()
+        case .openInAppleMusic:
+            openCurrentAppleMusicTrack()
+        }
     }
 
     // MARK: - Error Banner
@@ -3090,9 +3258,11 @@ enum HomeActionTrayPresentation {
     }
 
     static let mountMode: MountMode = .overlay
-    static let actionSpacing: CGFloat = 18
-    static let horizontalPadding: CGFloat = 14
-    static let verticalPadding: CGFloat = 10
+    static let targetMinWidth: CGFloat = 136
+    static let targetHeight: CGFloat = 52
+    static let actionSpacing: CGFloat = 8
+    static let horizontalPadding: CGFloat = 0
+    static let verticalPadding: CGFloat = 0
 
     static func isVisible(isSpeakerGroupDragActive: Bool) -> Bool {
         isSpeakerGroupDragActive
@@ -3154,6 +3324,12 @@ enum NowPlayingBackgroundPresentation {
     nonisolated static let usesSharedArtworkBackground = true
     nonisolated static let usesReflectedArtwork = false
     nonisolated static let sharedArtworkOverlayOpacity = 0.6
+}
+
+nonisolated enum NowPlayingAnimatedArtworkPlaybackPolicy {
+    static func shouldPlay(isFullPlayerVisible: Bool) -> Bool {
+        isFullPlayerVisible
+    }
 }
 
 nonisolated struct NowPlayingOverlayCornerRadii: Equatable {

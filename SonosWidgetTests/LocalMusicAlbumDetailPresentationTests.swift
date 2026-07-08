@@ -115,6 +115,32 @@ final class LocalMusicAlbumDetailPresentationTests: XCTestCase {
         )
     }
 
+    func testLocalMusicAlbumTitleLinkCanUseResolvedAppleMusicURL() throws {
+        let url = try XCTUnwrap(URL(string: "https://music.apple.com/us/album/never-enough/1681198089"))
+
+        XCTAssertTrue(
+            LocalMusicAlbumDetailPresentation.canResolveAppleMusicTitleLink(
+                appleMusicURL: url,
+                title: " ",
+                artist: "Unknown")
+        )
+    }
+
+    func testLocalMusicAlbumTitleLinkCanUseMetadataFallback() {
+        XCTAssertTrue(
+            LocalMusicAlbumDetailPresentation.canResolveAppleMusicTitleLink(
+                appleMusicURL: nil,
+                title: "NEVER ENOUGH",
+                artist: "Daniel Caesar")
+        )
+        XCTAssertFalse(
+            LocalMusicAlbumDetailPresentation.canResolveAppleMusicTitleLink(
+                appleMusicURL: nil,
+                title: "NEVER ENOUGH",
+                artist: "Unknown")
+        )
+    }
+
     func testLocalMusicAlbumAnimatedArtworkRetriesForLateRelayOrCatalogResults() {
         XCTAssertEqual(
             LocalMusicAlbumDetailPresentation.animatedArtworkRetryDelayNanoseconds(
