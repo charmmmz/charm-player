@@ -1,4 +1,4 @@
-# Sonos Live Activity Relay — for QNAP Container Station via Portainer Stacks.
+# Charm Player nas-relay — generic Docker Compose template.
 #
 # Why network_mode: host?
 #   Sonos UPnP eventing (GENA) requires the relay to expose a callback URL
@@ -9,17 +9,18 @@
 #   discovery also Just Works in host mode.
 #
 # To bring up:
-#   1. cp .env.example .env  (then fill in the values)
-#   2. docker login forgejo.charmmmz.xyz  (only needed for private packages)
-#   3. docker compose pull && docker compose up -d
+#   1. cp .env.example .env
+#   2. Set NAS_RELAY_IMAGE to your Docker Hub, Aliyun, Forgejo, or GHCR image.
+#   3. Put APNs .p8 files and relay state under NAS_RELAY_DATA_DIR.
+#   4. docker compose pull && docker compose up -d
 #   (or paste this file into Portainer → Stacks → New stack, attach the
 #    .env content under "Environment variables".)
 
 services:
   relay:
-    image: ${NAS_RELAY_IMAGE:-forgejo.charmmmz.xyz/charm/charm-for-sonos/nas-relay:latest}
-    pull_policy: always
-    container_name: sonos-live-activity-relay
+    image: ${NAS_RELAY_IMAGE:?Set NAS_RELAY_IMAGE in .env, for example docker.io/your-dockerhub-user/nas-relay:latest}
+    pull_policy: ${NAS_RELAY_PULL_POLICY:-always}
+    container_name: ${NAS_RELAY_CONTAINER_NAME:-sonos-live-activity-relay}
     init: true
     restart: unless-stopped
     logging:
@@ -29,36 +30,91 @@ services:
         max-file: "3"
     network_mode: host
     environment:
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      RELAY_PORT: ${RELAY_PORT:-8787}
-      DATA_DIR: ${DATA_DIR:-/app/data}
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      RELAY_PORT: "${RELAY_PORT:-8787}"
+      DATA_DIR: "${DATA_DIR:-/app/data}"
 
       # Sonos — defaults to SSDP auto-discovery. Set SONOS_SEED_IP only as a
       # fallback for networks where multicast discovery is blocked.
-      SONOS_SEED_IP: ${SONOS_SEED_IP:-}
+      SONOS_SEED_IP: "${SONOS_SEED_IP:-}"
 
       # Shared secret for `/internal/*` (Python agent). Optional if you don't run nas-agent.
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:-}"
 
       # Hue Ambience — the iOS app uploads the actual Bridge app key and
       # assignments to this file through /api/hue-ambience/config.
-      HUE_AMBIENCE_ENABLED: ${HUE_AMBIENCE_ENABLED:-true}
-      HUE_AMBIENCE_CONFIG_PATH: ${HUE_AMBIENCE_CONFIG_PATH:-/app/data/hue-ambience-config.json}
+      HUE_AMBIENCE_ENABLED: "${HUE_AMBIENCE_ENABLED:-true}"
+      HUE_AMBIENCE_CONFIG_PATH: "${HUE_AMBIENCE_CONFIG_PATH:-/app/data/hue-ambience-config.json}"
       # Optional override. Leave blank to use the Light Motion Speed selected
       # in the iOS app. Lower values move faster; examples: 8, 6, 4.
-      HUE_FLOW_INTERVAL_SECONDS: ${HUE_FLOW_INTERVAL_SECONDS:-}
+      HUE_FLOW_INTERVAL_SECONDS: "${HUE_FLOW_INTERVAL_SECONDS:-}"
 
       # APNs — bundle/team defaults match Charm for Sonos. Leave KEY_ID blank
       # during initial setup; the relay runs in dry-run mode and logs the
       # payloads it would have sent until a .p8 key is mounted.
-      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-com.charm.SonosWidget}
-      APNS_KEY_PATH: ${APNS_KEY_PATH:-/app/data/apns.p8}
-      APNS_KEY_ID: ${APNS_KEY_ID:-}
-      APNS_TEAM_ID: ${APNS_TEAM_ID:-3MSS7DJGVR}
-      # false = Xcode debug/sandbox APNs; true = TestFlight/App Store production APNs.
-      APNS_PRODUCTION: ${APNS_PRODUCTION:-false}
+      APNS_BUNDLE_ID: "${APNS_BUNDLE_ID:-com.charm.SonosWidget}"
+      APNS_KEY_PATH: "${APNS_KEY_PATH:-/app/data/apns.p8}"
+      APNS_KEY_ID: "${APNS_KEY_ID:-}"
+      APNS_TEAM_ID: "${APNS_TEAM_ID:-3MSS7DJGVR}"
+      # Primary relay: TestFlight/App Store production APNs.
+      APNS_PRODUCTION: "${APNS_PRODUCTION:-true}"
 
     volumes:
-      # tokens.json, apns.p8, and hue-ambience-config.json live here.
-      # Don't bake secrets into the image.
-      - ./data:/app/data
+      # tokens.json, APNs .p8 files, and hue-ambience-config.json live here.
+      # Don't bake secrets into the image. Use an absolute NAS path in production.
+      - type: bind
+        source: ${NAS_RELAY_DATA_DIR:-./data}
+        target: /app/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.RELAY_PORT || '8787') + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  relay-debug:
+    image: ${NAS_RELAY_IMAGE:?Set NAS_RELAY_IMAGE in .env, for example docker.io/your-dockerhub-user/nas-relay:latest}
+    pull_policy: ${NAS_RELAY_DEBUG_PULL_POLICY:-always}
+    container_name: ${NAS_RELAY_DEBUG_CONTAINER_NAME:-sonos-live-activity-relay-debug}
+    init: true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "3"
+    network_mode: host
+    environment:
+      LOG_LEVEL: "${DEBUG_LOG_LEVEL:-debug}"
+      RELAY_PORT: "${DEBUG_RELAY_PORT:-8789}"
+      DATA_DIR: "${DEBUG_DATA_DIR:-/app/data}"
+
+      # Keep debug state separate from production. If both relays are running,
+      # set the iOS app Relay URL manually to the desired port instead of
+      # relying on Bonjour auto-discovery.
+      SONOS_SEED_IP: "${DEBUG_SONOS_SEED_IP:-${SONOS_SEED_IP:-}}"
+      INTERNAL_API_TOKEN: "${DEBUG_INTERNAL_API_TOKEN:-${INTERNAL_API_TOKEN:-}}"
+
+      HUE_AMBIENCE_ENABLED: "${DEBUG_HUE_AMBIENCE_ENABLED:-${HUE_AMBIENCE_ENABLED:-true}}"
+      HUE_AMBIENCE_CONFIG_PATH: "${DEBUG_HUE_AMBIENCE_CONFIG_PATH:-/app/data/hue-ambience-config.json}"
+      HUE_FLOW_INTERVAL_SECONDS: "${DEBUG_HUE_FLOW_INTERVAL_SECONDS:-${HUE_FLOW_INTERVAL_SECONDS:-}}"
+
+      APNS_BUNDLE_ID: "${DEBUG_APNS_BUNDLE_ID:-${APNS_BUNDLE_ID:-com.charm.SonosWidget}}"
+      APNS_KEY_PATH: "${DEBUG_APNS_KEY_PATH:-${APNS_KEY_PATH:-/app/data/apns.p8}}"
+      APNS_KEY_ID: "${DEBUG_APNS_KEY_ID:-${APNS_KEY_ID:-}}"
+      APNS_TEAM_ID: "${DEBUG_APNS_TEAM_ID:-${APNS_TEAM_ID:-3MSS7DJGVR}}"
+      # Debug relay: Xcode-installed builds use sandbox APNs.
+      APNS_PRODUCTION: "${DEBUG_APNS_PRODUCTION:-false}"
+
+    volumes:
+      - type: bind
+        source: ${NAS_RELAY_DEBUG_DATA_DIR:-./data-debug}
+        target: /app/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.RELAY_PORT || '8789') + '/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

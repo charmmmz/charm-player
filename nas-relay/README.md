@@ -42,18 +42,65 @@ External access (DDNS IPv6 / Cloudflare Tunnel / Tailscale) is intentionally
 out of scope here; bring up the LAN path first, then layer on whichever
 external transport once Phase 1 is verified.
 
+## Docker Compose deployment
+
+Create a folder for the relay, put this `docker-compose.yml` inside it, then
+deploy it with Docker Compose or Portainer.
+
+Use the GitHub Container Registry image by default:
+
+```yaml
+services:
+  relay:
+    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    # Mainland China users can replace the image with:
+    # image: crpi-wgo31iwe48epi9ov.cn-hangzhou.personal.cr.aliyuncs.com/charmmmz/sonos-nas-relay:latest
+    container_name: charm-player-relay
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      APNS_BUNDLE_ID: com.charm.SonosWidget
+      APNS_TEAM_ID: 3MSS7DJGVR
+      APNS_KEY_PATH: ${APNS_KEY_PATH:-/app/data/apns.p8}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_PRODUCTION: "${APNS_PRODUCTION:-true}"
+    volumes:
+      - ${NAS_RELAY_DATA_DIR:-./data}:/app/data
+```
+
+For a NAS deployment, set `NAS_RELAY_DATA_DIR` to a real host path so relay
+state and configuration survive container updates:
+
+```env
+# QNAP example
+NAS_RELAY_DATA_DIR=/share/Data/nas-relay/data
+
+# Synology example
+# NAS_RELAY_DATA_DIR=/volume1/docker/nas-relay/data
+```
+
+`/app/data` stores relay state such as ActivityKit tokens, Hue Ambience config,
+artwork cache, and the optional APNs `.p8` provider key. Do not bake secrets
+into the image.
+
+APNs provider keys should only be configured by the app maintainer or by users
+who build the iOS app under their own Apple Developer account and bundle ID.
+Without `APNS_KEY_ID` and a readable `.p8` file at `APNS_KEY_PATH`, the relay
+runs in dry-run mode: Sonos discovery, health checks, local diagnostics, and
+non-APNs features still work, but Live Activity push updates are not sent.
+
 ## Quick start (QNAP + Portainer)
 
 1. **Copy `.env.example` → `.env`**. Leave `SONOS_SEED_IP` empty for SSDP
    auto-discovery. Leave `APNS_KEY_ID` blank for now; the relay starts in
-   *dry-run* mode until a `.p8` key is mounted.
+   *dry-run* mode until a `.p8` key is mounted. Set `NAS_RELAY_IMAGE` to the
+   image you publish on Docker Hub, Aliyun, Forgejo, or another registry.
 2. **Deploy via Portainer** — Stacks → Add stack, paste the contents of
    `docker-compose.yml`, attach `.env` under "Environment variables", deploy.
-   The stack pulls `forgejo.charmmmz.xyz/charm/charm-for-sonos/nas-relay:latest` and
-   `forgejo.charmmmz.xyz/charm/hue-edk-sidecar:latest` by default.
-   If either Forgejo package is private, log in first with a Forgejo token that
-   can read packages. Override `NAS_RELAY_IMAGE` or `HUE_EDK_SIDECAR_IMAGE` in
-   `.env` if you publish either image under a different package path.
+   If the selected image is private, log in to that registry on the NAS first.
+   For public Docker Hub or Aliyun images, no registry login is required for
+   normal pulls.
 3. **Verify**:
    ```bash
    curl http://<qnap-ip>:8787/api/health
@@ -62,14 +109,13 @@ external transport once Phase 1 is verified.
    entry under `groups[]`. The first sample takes a few seconds while the relay
    enumerates speakers. If your network blocks multicast discovery, set
    `SONOS_SEED_IP` to any always-on speaker IP and restart the stack.
-   On the NAS itself, the Hue EDK sidecar should also answer:
+   If you deploy the Hue EDK sidecar separately, check it on the NAS itself:
    ```bash
    curl http://127.0.0.1:8788/health
    ```
-   The sidecar binds to loopback by default, so this second check is not
-   expected to work from another LAN device. If relay health refuses the
-   connection, the iOS app will treat NAS sync as unavailable and keep using
-   phone-side Hue sync.
+   The sidecar usually binds to loopback, so this check is not expected to work
+   from another LAN device. If no sidecar is running, the relay can still run
+   normal Sonos, APNs, diagnostics, and non-sidecar Hue paths.
 4. **Open the iOS app settings**. Leave the Relay URL field blank. The app
    browses for `_charmrelay._tcp` and uses the first healthy relay it finds.
    Enter a manual URL only for cross-subnet networks, tunnels, or Bonjour
@@ -92,8 +138,8 @@ external transport once Phase 1 is verified.
 3. Drop the `.p8` into the mounted volume:
    ```bash
    ssh admin@<qnap>
-   cp ~/AuthKey_ABCDEF1234.p8 /share/Container/sonos-live-activity-relay/data/apns.p8
-   chmod 600 /share/Container/.../data/apns.p8
+   cp ~/AuthKey_ABCDEF1234.p8 /share/Data/nas-relay/data/apns.p8
+   chmod 600 /share/Data/nas-relay/data/apns.p8
    ```
 4. Update `.env`:
    ```

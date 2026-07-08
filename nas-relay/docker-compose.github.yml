@@ -1,0 +1,39 @@
+# Charm Player nas-relay stack using GitHub Container Registry.
+# Prod relay: TestFlight/App Store APNs on 8787.
+# Debug relay: Xcode sandbox APNs on 8789.
+
+services:
+  relay:
+    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    pull_policy: always
+    container_name: sonos-live-activity-relay
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LOG_LEVEL: info
+      APNS_BUNDLE_ID: com.charm.SonosWidget
+      APNS_TEAM_ID: 3MSS7DJGVR
+      APNS_KEY_PATH: /app/data/AuthKey_4K6LLXCPPN.p8
+      APNS_KEY_ID: 4K6LLXCPPN
+      APNS_PRODUCTION: "true"
+    volumes:
+      - ${NAS_RELAY_DATA_DIR:-./data}:/app/data
+
+  relay-debug:
+    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    pull_policy: always
+    container_name: sonos-live-activity-relay-debug
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LOG_LEVEL: debug
+      RELAY_PORT: "8789"
+      APNS_BUNDLE_ID: com.charm.SonosWidget
+      APNS_TEAM_ID: 3MSS7DJGVR
+      APNS_KEY_PATH: /app/data/AuthKey_M8FQR2H6DD.p8
+      APNS_KEY_ID: M8FQR2H6DD
+      APNS_PRODUCTION: "false"
+    volumes:
+      - ${NAS_RELAY_DEBUG_DATA_DIR:-./data-debug}:/app/data
