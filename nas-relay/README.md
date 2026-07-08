@@ -2,8 +2,9 @@
 
 A small Node.js + TypeScript service that subscribes to Sonos UPnP events on
 your LAN, pushes the corresponding Live Activity updates to the Charm for
-Sonos iOS app via Apple's APNs HTTP/2 endpoint, and can run Hue Ambience
-while the iPhone app is suspended.
+Sonos iOS app via Apple's APNs HTTP/2 endpoint, resolves Apple Music animated
+artwork for app surfaces, and can run Hue Ambience while the iPhone app is
+suspended.
 
 The point: keep the iPhone Lock Screen Live Activity fresh **without** the
 iOS app needing to run in the background. UPnP eventing means we don't poll
@@ -19,10 +20,10 @@ APNs, and the Live Activity updates within another ~1–3 s.
   manually entered URL.
 - Pushes the basic ContentState fields used by the Lock Screen widget:
   track / artist / album / isPlaying / startedAt / endsAt / groupMemberCount.
-- Album art is **not** delivered via push yet (`albumArtThumbnail = nil`)
-  — the widget falls back to its on-device cache, same path it uses today
-  for the local-update flow. Phase 2 will fetch and downsample art on the
-  relay and embed it.
+- Live Activity push payloads stay metadata-focused; artwork and video are not
+  embedded directly in APNs payloads. Separately, the relay exposes a cached
+  artwork proxy and Apple Music animated artwork lookup endpoints for app UI
+  surfaces while the relay is reachable.
 - Hue Ambience config is uploaded from the iOS app. The relay stores the
   Hue app key and assignments in `DATA_DIR/hue-ambience-config.json`, then
   applies album-palette transitions on Sonos play/track changes.
@@ -65,6 +66,7 @@ services:
       APNS_KEY_PATH: ${APNS_KEY_PATH:-/app/data/apns.p8}
       APNS_KEY_ID: ${APNS_KEY_ID:-}
       APNS_PRODUCTION: "${APNS_PRODUCTION:-true}"
+      ANIMATED_ARTWORK_ENABLED: "${ANIMATED_ARTWORK_ENABLED:-true}"
     volumes:
       - ${NAS_RELAY_DATA_DIR:-./data}:/app/data
 ```
@@ -81,8 +83,8 @@ NAS_RELAY_DATA_DIR=/share/Data/nas-relay/data
 ```
 
 `/app/data` stores relay state such as ActivityKit tokens, Hue Ambience config,
-artwork cache, and the optional APNs `.p8` provider key. Do not bake secrets
-into the image.
+artwork cache, animated artwork cache, and the optional APNs `.p8` provider key.
+Do not bake secrets into the image.
 
 APNs provider keys should only be configured by the app maintainer or by users
 who build the iOS app under their own Apple Developer account and bundle ID.
@@ -202,12 +204,29 @@ live_activity action=apns-update trigger=register-initial groupId=<group>
 The iPhone should show one Live Activity, update its track metadata, and avoid
 creating a duplicate when the app is opened later.
 
+### Animated Apple Music artwork
+
+When `ANIMATED_ARTWORK_ENABLED` is not set to `false`, the relay can resolve
+Apple Music animated artwork for app UI surfaces:
+
+- `/api/animated-artwork/url` accepts an Apple Music album URL and returns
+  available square/tall animated artwork URLs.
+- `/api/animated-artwork/search` accepts artist and album metadata, searches for
+  the matching Apple Music album, then resolves animated artwork.
+
+Results are cached in `DATA_DIR/animated-artwork-cache.json` so repeated player
+and album visits do not repeatedly fetch Apple Music metadata. This feature is
+independent of APNs readiness: a dry-run relay can still provide animated
+artwork lookup as long as it can reach Apple Music endpoints.
+
 ## API
 
 | Method | Path                                  | Body / Params                                                   | Description                                              |
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
 | GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
 | GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
+| GET    | `/api/animated-artwork/url`           | query: `url=<apple-music-album-url>&country=<storefront?>`      | Resolves cached Apple Music animated artwork by album URL |
+| GET    | `/api/animated-artwork/search`        | query: `artist=<artist>&album=<album>&country=<storefront?>`    | Resolves cached Apple Music animated artwork by metadata |
 | POST   | `/api/artwork-hints`                  | `{ hints: [{ title, artist, album, artworkUrl, ... }] }`        | Stores app-known CDN artwork hints for relay snapshots   |
 | POST   | `/api/register-push-to-start`         | `{ groupId, token, clientId?, speakerName?, liveActivityStyleRaw? }` | Stores iOS ActivityKit push-to-start tokens              |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
@@ -302,6 +321,8 @@ nas-relay/
 └── src/
     ├── index.ts            # Express + wire-up
     ├── artworkRoutes.ts    # /api/artwork cached artwork proxy
+    ├── animatedArtworkRoutes.ts # /api/animated-artwork/*
+    ├── animatedAppleMusicArtwork.ts # Apple Music animated artwork resolver/cache
     ├── cs2GameState.ts     # CS2 GSI state cache and event emitter
     ├── cs2Routes.ts        # /api/cs2/*
     ├── cs2Types.ts         # CS2 GSI payload models
@@ -323,6 +344,6 @@ nas-relay/
 ## Future phases
 
 - Phase 2 polish: external access (Tailscale / DDNS IPv6), token rotation
-  edge cases, album-art forwarding via APNs, multi-group iOS UI.
+  edge cases, direct album-art embedding in APNs payloads, multi-group iOS UI.
 - Auth: shared-secret header on register/unregister once we leave the LAN.
 - Observability: Prometheus `/metrics` if it ever feels needed.
