@@ -17,37 +17,84 @@ would otherwise suspend the app.
 
 ## Highlights
 
-- Fast Sonos room control from a compact Home dashboard.
-- Speaker cards with artwork, source, playback state, volume, and grouping.
-- Apple Music handoff between iPhone and Sonos.
-- `Play in Charm Player` share action for Apple Music links.
-- Home Screen widgets for quick status and actions.
-- Live Activity and Dynamic Island controls for now playing.
-- Optional NAS relay for fresher background updates, animated artwork helpers,
-  and remote diagnostics.
-- Optional Hue Ambience that reacts to the current album artwork.
+- Fast Sonos room control from a compact Home dashboard, with speaker cards,
+  playback controls, volume, grouping, queue access, artwork, and source state.
+- Apple Music feels native: browse library content through MusicKit, send Apple
+  Music share links into Charm Player, hand off playback between iPhone and
+  Sonos, and show animated album artwork when available.
+- Live Activity and Dynamic Island keep now playing visible, with Lock Screen
+  controls and optional NAS relay updates that stay fresh after the app is
+  suspended.
+- Hue Ambience syncs the room to the music, using album colors to drive mapped
+  Hue rooms, lights, or Entertainment Areas from the phone or the NAS relay.
 
 ## Setup Options
 
 Sonos Cloud sign-in and `nas-relay` are independent. You can use the app without
 either one, but they unlock different parts of the experience.
 
-| Setup | Best for | Available | Limited |
-| --- | --- | --- | --- |
-| App only, same Wi-Fi | Basic local control | Discover speakers, play/pause, skip, volume, grouping, queue edits, cached widgets | No Sonos Cloud browsing, no Apple Music-to-Sonos matching, Live Activities may stop refreshing after iOS suspends the app |
-| Sonos Cloud signed in | Full music browsing and handoff | Cloud browse/search, linked services, Apple Music matching, Local Service playback, share extension playback | Background Live Activity updates still need the relay |
-| `nas-relay` only | Better background behavior at home | Local control plus relay diagnostics, production APNs updates, push-to-start, background Hue Ambience | No Cloud browse/search or Apple Music matching without Sonos Cloud |
-| Sonos Cloud + `nas-relay` | Best home/TestFlight setup | Full browsing, Apple Music transfer, share extension, fresh Live Activities, diagnostics, always-on Hue Ambience | Requires both Sonos account setup and a reachable home relay |
+**App only, same Wi-Fi**
+
+- Best for basic local control.
+- Available: speaker discovery, play/pause, skip, volume, grouping, queue edits,
+  and cached widgets.
+- Limited: no Sonos Cloud browsing, no Apple Music-to-Sonos matching, and Live
+  Activities may stop refreshing after iOS suspends the app.
+
+**Sonos Cloud signed in**
+
+- Best for full music browsing and handoff.
+- Available: Cloud browse/search, linked services, Apple Music matching, Local
+  Service playback, and share extension playback.
+- Limited: background Live Activity updates still need the relay.
+
+**`nas-relay` only**
+
+- Best for better background behavior at home.
+- Available: local control plus relay diagnostics, production APNs updates,
+  push-to-start, and background Hue Ambience.
+- Limited: no Cloud browse/search or Apple Music matching without Sonos Cloud.
+
+**Sonos Cloud + `nas-relay`**
+
+- Best home/TestFlight setup.
+- Available: full browsing, Apple Music transfer, share extension, fresh Live
+  Activities, diagnostics, and always-on Hue Ambience.
+- Limited: requires both Sonos account setup and a reachable home relay.
 
 ### What the relay changes
 
-| Capability | Without `nas-relay` | With `nas-relay` |
-| --- | --- | --- |
-| Live Activity refresh | Local updates only while the app, widget, or system extension can execute; state may go stale after suspension | APNs updates keep the Lock Screen and Dynamic Island current, and push-to-start can create a Live Activity after playback starts |
-| Animated Apple Music artwork | Uses only artwork the app can resolve locally while it is active | Relay can resolve Apple Music album URLs or artist/album metadata to animated artwork URLs, cache results, and provide a NAS fallback for player and album surfaces |
-| Artwork fallback | Uses app and shared-container caches | Relay can proxy/cache artwork URLs and accept app-provided artwork hints for later snapshots |
-| Hue Ambience | Phone-side control can stop when the app is suspended | NAS-side ambience can keep running for active Sonos groups |
-| Diagnostics | Mostly local logs and app-visible state | Relay health, APNs readiness, device logs, Hue runtime, and recent Sonos snapshots are visible from the NAS path |
+**Live Activity refresh**
+
+- Without relay: local updates only while the app, widget, or system extension
+  can execute; state may go stale after suspension.
+- With relay: APNs updates keep the Lock Screen and Dynamic Island current, and
+  push-to-start can create a Live Activity after playback starts.
+
+**Animated Apple Music artwork**
+
+- Without relay: uses only artwork the app can resolve locally while it is
+  active.
+- With relay: resolves Apple Music album URLs or artist/album metadata to
+  animated artwork URLs, caches results, and provides a NAS fallback for player
+  and album surfaces.
+
+**Artwork fallback**
+
+- Without relay: uses app and shared-container caches.
+- With relay: proxies and caches artwork URLs, and accepts app-provided artwork
+  hints for later snapshots.
+
+**Hue Ambience**
+
+- Without relay: phone-side control can stop when the app is suspended.
+- With relay: NAS-side ambience can keep running for active Sonos groups.
+
+**Diagnostics**
+
+- Without relay: mostly local logs and app-visible state.
+- With relay: relay health, APNs readiness, device logs, Hue runtime, and recent
+  Sonos snapshots are visible from the NAS path.
 
 In short:
 
