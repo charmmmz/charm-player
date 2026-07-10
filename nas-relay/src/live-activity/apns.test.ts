@@ -9,7 +9,7 @@ import {
   makeLiveActivityStartNotification,
   type ApnsConfig,
 } from './apns.js';
-import type { LiveActivityContentState, LiveActivityStartAttributes } from './types.js';
+import type { LiveActivityContentState, LiveActivityStartAttributes } from '../types.js';
 
 const baseConfig: ApnsConfig = {
   bundleId: 'com.charm.SonosWidget',

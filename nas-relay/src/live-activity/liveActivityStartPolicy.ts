@@ -3,7 +3,7 @@ import type {
   PushToStartTokenEntry,
   SonosGroupSnapshot,
   TokenEntry,
-} from './types.js';
+} from '../types.js';
 
 export type PushToStartDecisionReason =
   | 'start'

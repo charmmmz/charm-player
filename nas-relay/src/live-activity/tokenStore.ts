@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Logger } from 'pino';
-import type { RegisterRequest, TokenEntry } from './types.js';
+import type { RegisterRequest, TokenEntry } from '../types.js';
 
 /// Disk-backed token registry. In-memory `Map<token, TokenEntry>` for fast
 /// lookups; write-through to a JSON file on every mutation so the relay

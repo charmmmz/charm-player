@@ -1,4 +1,4 @@
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 export function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> {
   return {

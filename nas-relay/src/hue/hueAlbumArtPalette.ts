@@ -1,10 +1,10 @@
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 
-import { fetchAlbumArt as defaultFetchAlbumArt } from './albumArtFetchCache.js';
+import { fetchAlbumArt as defaultFetchAlbumArt } from '../artwork/albumArtFetchCache.js';
 import { stablePaletteForTrack } from './huePalette.js';
 import type { HueRGBColor, HueSnapshot } from './hueTypes.js';
-export { fetchAlbumArt } from './albumArtFetchCache.js';
+export { fetchAlbumArt } from '../artwork/albumArtFetchCache.js';
 
 const SAMPLE_SIZE = 24;
 const MAX_PALETTE_COLORS = 5;

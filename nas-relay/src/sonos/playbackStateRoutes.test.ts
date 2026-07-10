@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import pino from 'pino';
 
 import { createPlaybackStateRouter } from './playbackStateRoutes.js';
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 test('playback state route returns the cached snapshot without pulling Sonos', async () => {
   const app = express();

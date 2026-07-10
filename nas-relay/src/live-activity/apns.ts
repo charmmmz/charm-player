@@ -1,7 +1,7 @@
 import apn from '@parse/node-apn';
 import { promises as fs } from 'node:fs';
 import type { Logger } from 'pino';
-import type { LiveActivityContentState, LiveActivityStartAttributes } from './types.js';
+import type { LiveActivityContentState, LiveActivityStartAttributes } from '../types.js';
 
 /// Swift's `Date` Codable default uses NSDate reference epoch (2001-01-01 UTC),
 /// NOT Unix epoch. ContentState fields like `startedAt` / `endsAt` must be

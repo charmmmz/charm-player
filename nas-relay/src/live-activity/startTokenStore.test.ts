@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import pino from 'pino';
 
 import { StartTokenStore } from './startTokenStore.js';
-import type { PushToStartTokenEntry } from './types.js';
+import type { PushToStartTokenEntry } from '../types.js';
 
 test('registering a rotated push-to-start token replaces the previous token for the same client group', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'sonos-start-token-store-'));

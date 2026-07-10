@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Logger } from 'pino';
-import type { PushToStartRegisterRequest, PushToStartTokenEntry } from './types.js';
+import type { PushToStartRegisterRequest, PushToStartTokenEntry } from '../types.js';
 
 type WriteFile = typeof fs.writeFile;
 

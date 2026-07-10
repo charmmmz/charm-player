@@ -7,7 +7,7 @@ import type {
   PushToStartTokenEntry,
   SonosGroupSnapshot,
   TokenEntry,
-} from './types.js';
+} from '../types.js';
 
 export async function maybeStartLiveActivityForSnapshot(input: {
   snap: SonosGroupSnapshot;

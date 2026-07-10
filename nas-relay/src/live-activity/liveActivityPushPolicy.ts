@@ -1,4 +1,4 @@
-import type { SonosGroupSnapshot, TokenEntry } from './types.js';
+import type { SonosGroupSnapshot, TokenEntry } from '../types.js';
 
 export type LiveActivityLogLevel = 'debug' | 'info';
 

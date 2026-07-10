@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { LiveActivityPreferenceStore } from './liveActivityPreferences.js';
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 test('Live Activity preferences apply app-selected style to relay-owned snapshots', () => {
   const store = new LiveActivityPreferenceStore();

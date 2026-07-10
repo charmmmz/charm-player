@@ -9,7 +9,7 @@ import type {
   PushToStartTokenEntry,
   SonosGroupSnapshot,
   TokenEntry,
-} from './types.js';
+} from '../types.js';
 
 const snap: SonosGroupSnapshot = {
   groupId: '192.168.50.25',

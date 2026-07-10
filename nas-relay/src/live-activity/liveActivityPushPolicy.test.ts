@@ -6,7 +6,7 @@ import {
   liveActivityPushResultLogLevel,
   shouldPushLiveActivityUpdate,
 } from './liveActivityPushPolicy.js';
-import type { TokenEntry } from './types.js';
+import type { TokenEntry } from '../types.js';
 
 test('Live Activity force updates bypass an unchanged content hash', () => {
   const token = tokenEntry({ lastSentHash: 'same-hash' });

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Logger } from 'pino';
-import type { LiveActivityDismissedRequest, PushToStartSuppressionEntry } from './types.js';
+import type { LiveActivityDismissedRequest, PushToStartSuppressionEntry } from '../types.js';
 
 type WriteFile = typeof fs.writeFile;
 

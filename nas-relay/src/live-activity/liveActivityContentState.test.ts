@@ -9,7 +9,7 @@ import {
   buildLiveActivityContentState,
   hashLiveActivityContentState,
 } from './liveActivityContentState.js';
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 test('Live Activity content state embeds fetched album art as a push-sized high-density JPEG thumbnail', async () => {
   const state = await buildLiveActivityContentState(snapshot({

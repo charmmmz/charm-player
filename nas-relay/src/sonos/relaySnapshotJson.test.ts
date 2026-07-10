@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { snapshotJson } from './relaySnapshotJson.js';
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 test('relay snapshot JSON includes TV soundbar state for command responses', () => {
   const json = snapshotJson(snapshot({

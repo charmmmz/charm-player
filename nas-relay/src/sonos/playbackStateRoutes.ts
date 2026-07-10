@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import { snapshotJson } from './relaySnapshotJson.js';
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 export interface PlaybackStateSource {
   current(groupId: string): SonosGroupSnapshot | undefined;

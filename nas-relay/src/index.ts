@@ -3,38 +3,38 @@ import pino from 'pino';
 import pinoHttp from 'pino-http';
 import path from 'node:path';
 
-import { SonosBridge, type SonosSnapshotChangeContext } from './sonos.js';
-import { createInternalSonosRouter, internalAuthMiddleware } from './internalSonosRoutes.js';
-import { ApnsClient } from './apns.js';
-import { TokenStore } from './tokenStore.js';
-import { HueAmbienceConfigStore } from './hueConfigStore.js';
-import { HueAmbienceService } from './hueAmbienceService.js';
-import { createHueAmbienceRouter } from './hueRoutes.js';
-import { createHueMusicAmbienceRenderer } from './hueMusicAmbienceRenderer.js';
-import { AnimatedAppleMusicArtworkResolver } from './animatedAppleMusicArtwork.js';
-import { createAnimatedArtworkRouter } from './animatedArtworkRoutes.js';
-import { createPlaybackStateRouter } from './playbackStateRoutes.js';
-import { DeviceLogService } from './deviceLogs.js';
-import { createDeviceLogRouter } from './deviceLogRoutes.js';
-import { shouldIgnoreHttpAutoLog } from './httpLogging.js';
+import { SonosBridge, type SonosSnapshotChangeContext } from './sonos/sonos.js';
+import { createInternalSonosRouter, internalAuthMiddleware } from './sonos/internalSonosRoutes.js';
+import { ApnsClient } from './live-activity/apns.js';
+import { TokenStore } from './live-activity/tokenStore.js';
+import { HueAmbienceConfigStore } from './hue/hueConfigStore.js';
+import { HueAmbienceService } from './hue/hueAmbienceService.js';
+import { createHueAmbienceRouter } from './hue/hueRoutes.js';
+import { createHueMusicAmbienceRenderer } from './hue/hueMusicAmbienceRenderer.js';
+import { AnimatedAppleMusicArtworkResolver } from './artwork/animatedAppleMusicArtwork.js';
+import { createAnimatedArtworkRouter } from './artwork/animatedArtworkRoutes.js';
+import { createPlaybackStateRouter } from './sonos/playbackStateRoutes.js';
+import { DeviceLogService } from './diagnostics/deviceLogs.js';
+import { createDeviceLogRouter } from './diagnostics/deviceLogRoutes.js';
+import { shouldIgnoreHttpAutoLog } from './transport/httpLogging.js';
 import {
   buildLiveActivityContentState,
   hashLiveActivityContentState,
-} from './liveActivityContentState.js';
-import { maybeStartLiveActivityForSnapshot } from './liveActivityStartCoordinator.js';
+} from './live-activity/liveActivityContentState.js';
+import { maybeStartLiveActivityForSnapshot } from './live-activity/liveActivityStartCoordinator.js';
 import {
   LiveActivityPreferenceStore,
   type LiveActivityPreferencesRequest,
-} from './liveActivityPreferences.js';
+} from './live-activity/liveActivityPreferences.js';
 import {
   LiveActivityPushInFlightRegistry,
   liveActivityPushResultLogLevel,
   shouldForceLiveActivityCalibration,
-} from './liveActivityPushPolicy.js';
-import { snapshotJson } from './relaySnapshotJson.js';
-import { publishRelayBonjour, type RelayBonjourAdvertisement } from './bonjour.js';
-import { StartTokenStore } from './startTokenStore.js';
-import { LiveActivityDismissalStore } from './liveActivityDismissalStore.js';
+} from './live-activity/liveActivityPushPolicy.js';
+import { snapshotJson } from './sonos/relaySnapshotJson.js';
+import { publishRelayBonjour, type RelayBonjourAdvertisement } from './transport/bonjour.js';
+import { StartTokenStore } from './live-activity/startTokenStore.js';
+import { LiveActivityDismissalStore } from './live-activity/liveActivityDismissalStore.js';
 import type {
   LiveActivityContentState,
   LiveActivityDismissedRequest,

@@ -3,8 +3,8 @@ import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import type { Logger } from 'pino';
 
-import { normalizedAlbumArtUri } from './albumArtFetchCache.js';
-import type { LiveActivityContentState, SonosGroupSnapshot } from './types.js';
+import { normalizedAlbumArtUri } from '../artwork/albumArtFetchCache.js';
+import type { LiveActivityContentState, SonosGroupSnapshot } from '../types.js';
 
 const MAX_ALBUM_ART_BYTES = 5 * 1024 * 1024;
 const THUMBNAIL_SIZE_CANDIDATES = [128, 120, 112, 104, 96, 88, 80, 72, 64, 56, 48] as const;

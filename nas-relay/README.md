@@ -291,24 +291,13 @@ nas-relay/
 ├── data/                   # local default for persistent relay state
 └── src/
     ├── index.ts            # Express + wire-up
-    ├── animatedArtworkRoutes.ts # /api/animated-artwork/*
-    ├── animatedAppleMusicArtwork.ts # Apple Music animated artwork resolver/cache
-    ├── bonjour.ts          # mDNS/Bonjour advertisement for iOS relay discovery
-    ├── deviceLogRoutes.ts  # app diagnostics ingestion and SSE
-    ├── hueAmbienceFrames.ts # album-art palette and spatial light frames
-    ├── hueAmbienceService.ts # Sonos snapshots → Hue ambience runtime
-    ├── hueClient.ts        # Hue CLIP v2 client
-    ├── hueConfigStore.ts   # disk-backed Hue config
-    ├── hueEntertainmentStream.ts # built-in Hue Entertainment DTLS transport
-    ├── hueRoutes.ts        # /api/hue-ambience/*
-    ├── internalSonosRoutes.ts  # /internal/sonos/* for Python agent
-    ├── liveActivityStartCoordinator.ts # push-to-start policy orchestration
-    ├── playbackStateRoutes.ts # cached group playback state
-    ├── sonos.ts            # @svrooij/sonos bridge
-    ├── apns.ts             # @parse/node-apn wrapper + dry-run
-    ├── tokenStore.ts       # disk-backed update-token registry
-    ├── startTokenStore.ts  # disk-backed push-to-start token registry
-    └── types.ts            # mirrors iOS ContentState shape
+    ├── types.ts            # shared relay and ActivityKit payload types
+    ├── artwork/            # artwork lookup, cache, routes, and tests
+    ├── diagnostics/        # iOS device-log ingestion and streaming
+    ├── hue/                # Hue ambience, CLIP, and Entertainment streaming
+    ├── live-activity/      # APNs, token stores, start/update policy, and tests
+    ├── sonos/              # Sonos bridge, snapshots, playback, and internal API
+    └── transport/          # Bonjour advertisement and HTTP log policy
 ```
 
 ## Possible future work

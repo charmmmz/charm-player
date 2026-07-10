@@ -6,8 +6,8 @@ import {
   createSonosArtworkResolver,
   type ITunesArtworkLookupClient,
   type SonosArtworkResolver,
-} from './sonosArtworkResolver.js';
-import type { SonosGroupSnapshot } from './types.js';
+} from '../artwork/sonosArtworkResolver.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 export type SonosSnapshotChangeTrigger =
   | 'sonos-change'

@@ -1,4 +1,4 @@
-import type { SonosGroupSnapshot } from './types.js';
+import type { SonosGroupSnapshot } from '../types.js';
 
 export type HueAmbienceTargetKind = 'entertainmentArea' | 'room' | 'zone' | 'light';
 export type HueAmbienceCapability = 'basic' | 'gradientReady' | 'liveEntertainment';

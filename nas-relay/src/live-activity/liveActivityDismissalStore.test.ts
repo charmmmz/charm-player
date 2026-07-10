@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import pino from 'pino';
 
 import { LiveActivityDismissalStore } from './liveActivityDismissalStore.js';
-import type { PushToStartSuppressionEntry } from './types.js';
+import type { PushToStartSuppressionEntry } from '../types.js';
 
 test('dismissal store returns active suppressions for a group and ignores expired entries', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'sonos-live-activity-dismissal-store-'));
