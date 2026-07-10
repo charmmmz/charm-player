@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 const token = requiredEnv('GITHUB_TOKEN');
 const repository = process.env.GITHUB_REPOSITORY_TARGET ?? 'charmmmz/Charm-for-Sonos';
 const branch = process.env.GITHUB_BRANCH_TARGET ?? 'main';
-const apiBase = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, '');
+const apiBase = (process.env.GITHUB_API_URL_TARGET ?? 'https://api.github.com').replace(/\/$/, '');
 const dryRun = process.env.GITHUB_README_SYNC_DRY_RUN === 'true';
 const files = [
   { local: 'README.md', remote: 'README.md' },

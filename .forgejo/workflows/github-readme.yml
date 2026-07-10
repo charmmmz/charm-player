@@ -31,4 +31,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN }}
           GITHUB_REPOSITORY_TARGET: charmmmz/Charm-for-Sonos
           GITHUB_BRANCH_TARGET: main
+          GITHUB_API_URL_TARGET: https://api.github.com
         run: node tools/sync-github-readmes.mjs
