@@ -32,4 +32,5 @@ jobs:
           GITHUB_REPOSITORY_TARGET: charmmmz/Charm-for-Sonos
           GITHUB_BRANCH_TARGET: main
           GITHUB_API_URL_TARGET: https://api.github.com
+          NODE_USE_ENV_PROXY: "1"
         run: node tools/sync-github-readmes.mjs
