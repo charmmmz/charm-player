@@ -1,0 +1,34 @@
+name: Sync README to GitHub
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - README.md
+      - nas-relay/README.md
+      - tools/sync-github-readmes.mjs
+      - .forgejo/workflows/github-readme.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-readme-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Update public documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Sync README files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GITHUB_REPOSITORY_TARGET: charmmmz/Charm-for-Sonos
+          GITHUB_BRANCH_TARGET: main
+        run: node tools/sync-github-readmes.mjs

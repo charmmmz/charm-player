@@ -34,6 +34,7 @@ env:
   ACR_REGISTRY_OVERRIDE: ${{ vars.ACR_REGISTRY }}
   ACR_NAMESPACE: ${{ vars.ACR_NAMESPACE }}
   ACR_REPOSITORY: ${{ vars.ACR_REPOSITORY }}
+  GHCR_IMAGE_OVERRIDE: ${{ vars.GHCR_IMAGE }}
 
 jobs:
   build:
@@ -131,6 +132,23 @@ jobs:
           echo "image=${acr_image}" >> "$GITHUB_OUTPUT"
           echo "Aliyun ACR image: ${acr_image}"
 
+      - name: Resolve GitHub Container Registry image
+        id: ghcr
+        run: |
+          ghcr_image="${GHCR_IMAGE_OVERRIDE:-ghcr.io/charmmmz/charm-for-sonos/nas-relay}"
+          ghcr_image="${ghcr_image%/}"
+          ghcr_image=$(printf '%s' "$ghcr_image" | tr '[:upper:]' '[:lower:]')
+          case "$ghcr_image" in
+            ghcr.io/*/*)
+              ;;
+            *)
+              echo "::error::GHCR_IMAGE must be a full ghcr.io image path."
+              exit 1
+              ;;
+          esac
+          echo "image=${ghcr_image}" >> "$GITHUB_OUTPUT"
+          echo "GitHub Container Registry image: ${ghcr_image}"
+
       - name: Resolve platforms
         env:
           PLATFORM_INPUT: ${{ inputs.platforms }}
@@ -190,7 +208,14 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Build and push image
+      - name: Login to GitHub Container Registry
+        uses: https://github.com/docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: charmmmz
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build once and push to all registries
         uses: https://github.com/docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: ./nas-relay
@@ -212,3 +237,5 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.build_tag }}
             ${{ steps.acr.outputs.image }}:latest
             ${{ steps.acr.outputs.image }}:${{ env.build_tag }}
+            ${{ steps.ghcr.outputs.image }}:latest
+            ${{ steps.ghcr.outputs.image }}:${{ env.build_tag }}
