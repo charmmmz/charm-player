@@ -12,79 +12,103 @@ Sonos — the speakers themselves push state changes (track / play / pause /
 group changes) to the relay within ~100 ms, the relay forwards them through
 APNs, and the Live Activity updates within another ~1–3 s.
 
-## Phase 1 scope
+## What it does
 
-- LAN-only HTTP (no auth, no TLS — fine for inside a tailnet / home LAN).
+- LAN-only HTTP (no general HTTP auth or TLS, so keep it inside a trusted home
+  LAN or tailnet).
 - Relay discovery is automatic on the local subnet: the relay publishes a
   Bonjour service (`_charmrelay._tcp`) and the iOS app can find it without a
   manually entered URL.
 - Pushes the basic ContentState fields used by the Lock Screen widget:
   track / artist / album / isPlaying / startedAt / endsAt / groupMemberCount.
 - Live Activity push payloads stay metadata-focused; artwork and video are not
-  embedded directly in APNs payloads. Separately, the relay exposes a cached
-  artwork proxy and Apple Music animated artwork lookup endpoints for app UI
-  surfaces while the relay is reachable.
+  embedded directly in APNs payloads. Separately, the relay exposes Apple
+  Music animated artwork lookup endpoints for app UI surfaces while the relay
+  is reachable.
 - Hue Ambience config is uploaded from the iOS app. The relay stores the
   Hue app key and assignments in `DATA_DIR/hue-ambience-config.json`, then
   applies album-palette transitions on Sonos play/track changes.
   The iOS Light Motion Speed setting controls the flow interval; set
   `HUE_FLOW_INTERVAL_SECONDS` only when the NAS should override that value.
-  Mapped Entertainment Areas use the private Hue EDK sidecar for Hue
-  Entertainment streaming effects, with CLIP v2 color rotation as a Music
-  Ambience fallback when sync is unavailable.
-- Counter-Strike 2 Game State Integration payloads can be posted directly to
-  the relay. When Hue Ambience config has CS2 sync enabled and at least one
-  mapped Entertainment Area, the relay renders low-latency game lighting from
-  the latest local-player state. Competitive and deathmatch use separate
-  strategies; competitive spectator/death state falls back to low-brightness
-  ambience.
+  Mapped Entertainment Areas can use the relay's built-in Hue Entertainment
+  DTLS streaming, with CLIP v2 color rotation as a Music Ambience fallback
+  when streaming is unavailable.
 
 External access (DDNS IPv6 / Cloudflare Tunnel / Tailscale) is intentionally
-out of scope here; bring up the LAN path first, then layer on whichever
-external transport once Phase 1 is verified.
+out of scope here. Bring up the LAN path first, then add an external transport
+only if your deployment needs one.
 
 ## Docker Compose deployment
 
 Create a folder for the relay, put this `docker-compose.yml` inside it, then
-deploy it with Docker Compose or Portainer.
+deploy it with Docker Compose or Portainer. This stack runs two relays:
 
-Use the GitHub Container Registry image by default:
+- `relay`: TestFlight/App Store production APNs on port `8787`.
+- `relay-debug`: Xcode-installed sandbox APNs on port `8789`.
+
+Use the GitHub Container Registry image by default. Mainland China users can
+replace each `image:` line with the Aliyun ACR line shown in the comments.
 
 ```yaml
 services:
   relay:
     image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
-    # Mainland China users can replace the image with:
+    # Mainland China image:
     # image: crpi-wgo31iwe48epi9ov.cn-hangzhou.personal.cr.aliyuncs.com/charmmmz/sonos-nas-relay:latest
-    container_name: charm-player-relay
+    pull_policy: always
+    container_name: sonos-live-activity-relay
     init: true
     restart: unless-stopped
     network_mode: host
     environment:
+      LOG_LEVEL: info
       APNS_BUNDLE_ID: com.charm.SonosWidget
       APNS_TEAM_ID: 3MSS7DJGVR
-      APNS_KEY_PATH: ${APNS_KEY_PATH:-/app/data/apns.p8}
-      APNS_KEY_ID: ${APNS_KEY_ID:-}
-      APNS_PRODUCTION: "${APNS_PRODUCTION:-true}"
+      APNS_KEY_PATH: /app/data/AuthKey_4K6LLXCPPN.p8
+      APNS_KEY_ID: 4K6LLXCPPN
+      APNS_PRODUCTION: "true"
       ANIMATED_ARTWORK_ENABLED: "${ANIMATED_ARTWORK_ENABLED:-true}"
     volumes:
       - ${NAS_RELAY_DATA_DIR:-./data}:/app/data
+
+  relay-debug:
+    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    # Mainland China image:
+    # image: crpi-wgo31iwe48epi9ov.cn-hangzhou.personal.cr.aliyuncs.com/charmmmz/sonos-nas-relay:latest
+    pull_policy: always
+    container_name: sonos-live-activity-relay-debug
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LOG_LEVEL: debug
+      RELAY_PORT: "8789"
+      APNS_BUNDLE_ID: com.charm.SonosWidget
+      APNS_TEAM_ID: 3MSS7DJGVR
+      APNS_KEY_PATH: /app/data/AuthKey_M8FQR2H6DD.p8
+      APNS_KEY_ID: M8FQR2H6DD
+      APNS_PRODUCTION: "false"
+      ANIMATED_ARTWORK_ENABLED: "${ANIMATED_ARTWORK_ENABLED:-true}"
+    volumes:
+      - ${NAS_RELAY_DEBUG_DATA_DIR:-./data-debug}:/app/data
 ```
 
-For a NAS deployment, set `NAS_RELAY_DATA_DIR` to a real host path so relay
-state and configuration survive container updates:
+For a NAS deployment, set the data directory variables to real host paths so
+relay state and configuration survive container updates:
 
 ```env
 # QNAP example
 NAS_RELAY_DATA_DIR=/share/Data/nas-relay/data
+NAS_RELAY_DEBUG_DATA_DIR=/share/Data/nas-relay-debug/data
 
 # Synology example
 # NAS_RELAY_DATA_DIR=/volume1/docker/nas-relay/data
+# NAS_RELAY_DEBUG_DATA_DIR=/volume1/docker/nas-relay-debug/data
 ```
 
 `/app/data` stores relay state such as ActivityKit tokens, Hue Ambience config,
-artwork cache, animated artwork cache, and the optional APNs `.p8` provider key.
-Do not bake secrets into the image.
+the animated artwork cache, and the optional APNs `.p8` provider key. Do not
+bake secrets into the image.
 
 APNs provider keys should only be configured by the app maintainer or by users
 who build the iOS app under their own Apple Developer account and bundle ID.
@@ -92,36 +116,31 @@ Without `APNS_KEY_ID` and a readable `.p8` file at `APNS_KEY_PATH`, the relay
 runs in dry-run mode: Sonos discovery, health checks, local diagnostics, and
 non-APNs features still work, but Live Activity push updates are not sent.
 
-## Quick start (QNAP + Portainer)
+## Quick start (NAS + Portainer)
 
-1. **Copy `.env.example` → `.env`**. Leave `SONOS_SEED_IP` empty for SSDP
-   auto-discovery. Leave `APNS_KEY_ID` blank for now; the relay starts in
-   *dry-run* mode until a `.p8` key is mounted. Set `NAS_RELAY_IMAGE` to the
-   image you publish on Docker Hub, Aliyun, Forgejo, or another registry.
-2. **Deploy via Portainer** — Stacks → Add stack, paste the contents of
-   `docker-compose.yml`, attach `.env` under "Environment variables", deploy.
-   If the selected image is private, log in to that registry on the NAS first.
-   For public Docker Hub or Aliyun images, no registry login is required for
-   normal pulls.
+1. **Prepare the data directories.** Put the production and sandbox APNs
+   `.p8` files in their respective mounted directories. Set
+   `NAS_RELAY_DATA_DIR` and `NAS_RELAY_DEBUG_DATA_DIR` in Portainer or a local
+   `.env` file when the defaults are not suitable for your NAS.
+2. **Deploy via Portainer** — Stacks → Add stack, paste the Compose block above,
+   choose either the GitHub or Aliyun image lines, then deploy. If the selected
+   image is private, log in to that registry on the NAS first.
 3. **Verify**:
    ```bash
-   curl http://<qnap-ip>:8787/api/health
+   curl http://<nas-ip>:8787/api/health
+   curl http://<nas-ip>:8789/api/health
    ```
-   Should return JSON with `sonos.discoveryStatus: "ready"` and at least one
-   entry under `groups[]`. The first sample takes a few seconds while the relay
-   enumerates speakers. If your network blocks multicast discovery, set
+   Each enabled relay should return JSON with `sonos.discoveryStatus: "ready"`
+   and at least one entry under `groups[]`. The first sample takes a few seconds
+   while the relay enumerates speakers. If your network blocks multicast
+   discovery, set
    `SONOS_SEED_IP` to any always-on speaker IP and restart the stack.
-   If you deploy the Hue EDK sidecar separately, check it on the NAS itself:
-   ```bash
-   curl http://127.0.0.1:8788/health
-   ```
-   The sidecar usually binds to loopback, so this check is not expected to work
-   from another LAN device. If no sidecar is running, the relay can still run
-   normal Sonos, APNs, diagnostics, and non-sidecar Hue paths.
-4. **Open the iOS app settings**. Leave the Relay URL field blank. The app
-   browses for `_charmrelay._tcp` and uses the first healthy relay it finds.
-   Enter a manual URL only for cross-subnet networks, tunnels, or Bonjour
-   discovery failures.
+4. **Select the matching relay in the iOS app.** TestFlight/App Store builds
+   use `http://<nas-ip>:8787`; Xcode debug builds use
+   `http://<nas-ip>:8789`. When both containers are running, set the Relay URL
+   manually because Bonjour advertises both `_charmrelay._tcp` services and
+   cannot choose the APNs environment for you. With only one relay running,
+   automatic discovery is sufficient.
 5. **Watch logs** (Portainer → Containers → relay → Logs). Play / pause
    / change track on Sonos and you should see lines like:
    ```
@@ -137,26 +156,28 @@ non-APNs features still work, but Live Activity push updates are not sent.
 2. Note the **Key ID** (10-char string shown next to the key). `APNS_TEAM_ID`
    already defaults to `3MSS7DJGVR` for this app; change it only if you build
    under a different Apple Developer team.
-3. Drop the `.p8` into the mounted volume:
+3. Drop the `.p8` into the matching mounted volume:
    ```bash
    ssh admin@<qnap>
-   cp ~/AuthKey_ABCDEF1234.p8 /share/Data/nas-relay/data/apns.p8
-   chmod 600 /share/Data/nas-relay/data/apns.p8
+   cp ~/AuthKey_ABCDEF1234.p8 /share/Data/nas-relay/data/AuthKey_ABCDEF1234.p8
+   chmod 600 /share/Data/nas-relay/data/AuthKey_ABCDEF1234.p8
    ```
-4. Update `.env`:
+4. Update the matching Compose service:
    ```
+   APNS_KEY_PATH=/app/data/AuthKey_ABCDEF1234.p8
    APNS_KEY_ID=ABCDEF1234
    APNS_TEAM_ID=3MSS7DJGVR
-   APNS_PRODUCTION=false   # Xcode debug/sandbox APNs
+   APNS_PRODUCTION=true    # TestFlight/App Store production APNs
    ```
 5. Restart the stack. Relay log will print `APNs provider ready` instead of
    `running in DRY-RUN mode`. `/api/health` also reports `apns.mode: "ready"`
    when the key is usable, or `apns.mode: "dry-run"` with missing fields when
    setup is incomplete.
 
-Set `APNS_PRODUCTION=true` for TestFlight or App Store builds. Keep it
-`false` for Xcode-installed debug builds because those use APNs sandbox
-tokens.
+Use `APNS_PRODUCTION=true` on the production relay for TestFlight or App Store
+builds. Keep it `false` on the debug relay for Xcode-installed builds because
+those use APNs sandbox tokens. Keep their data directories separate so tokens
+from the two APNs environments are never mixed.
 
 The bundle ID defaults to `com.charm.SonosWidget` (matches your iOS
 project); change `APNS_BUNDLE_ID` if you renamed it. The APNs topic is
@@ -224,71 +245,21 @@ artwork lookup as long as it can reach Apple Music endpoints.
 | Method | Path                                  | Body / Params                                                   | Description                                              |
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
 | GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
-| GET    | `/api/artwork`                        | query: `url=<http-or-https-artwork-url>`                        | Cached artwork proxy for iOS player/group art fallback   |
 | GET    | `/api/animated-artwork/url`           | query: `url=<apple-music-album-url>&country=<storefront?>`      | Resolves cached Apple Music animated artwork by album URL |
 | GET    | `/api/animated-artwork/search`        | query: `artist=<artist>&album=<album>&country=<storefront?>`    | Resolves cached Apple Music animated artwork by metadata |
-| POST   | `/api/artwork-hints`                  | `{ hints: [{ title, artist, album, artworkUrl, ... }] }`        | Stores app-known CDN artwork hints for relay snapshots   |
+| GET    | `/api/playback-state`                 | query: `groupId=<group-id>`                                    | Returns the cached playback snapshot for one group       |
 | POST   | `/api/register-push-to-start`         | `{ groupId, token, clientId?, speakerName?, liveActivityStyleRaw? }` | Stores iOS ActivityKit push-to-start tokens              |
 | POST   | `/api/register-activity`              | `{ groupId, token, attributes? }`                               | Called by iOS on every push-token rotation               |
 | DELETE | `/api/register-activity/:token`       | path: `:token`                                                  | Called by iOS when the Live Activity ends                |
+| POST   | `/api/live-activity-preferences`      | selected group, style, and optional resume request              | Updates relay-side Live Activity preferences             |
+| POST   | `/api/live-activity-dismissed`        | group, client/activity identity, and optional token             | Records dismissal suppression and removes the token      |
+| POST   | `/api/live-activity-command`          | registered token plus playback or soundbar command              | Executes authenticated Live Activity controls on Sonos   |
 | GET    | `/api/hue-ambience/status`            | —                                                               | Hue runtime status without exposing the Hue app key      |
 | PUT    | `/api/hue-ambience/config`            | complete config uploaded by iOS                                 | Stores Bridge key, resources, assignments, and settings  |
 | DELETE | `/api/hue-ambience/config`            | —                                                               | Removes stored Hue config and stops active ambience      |
-| POST   | `/api/cs2/gamestate`                  | Valve CS2 Game State Integration JSON                           | Receives and caches the latest CS2 state per SteamID     |
-| GET    | `/api/cs2/status`                     | —                                                               | Summarized latest CS2 state for each connected SteamID   |
-| GET    | `/api/cs2/debug/recent`               | —                                                               | Recent raw CS2 payload samples for field inspection      |
-| DELETE | `/api/cs2/debug/recent`               | —                                                               | Clears recent CS2 debug samples                          |
-| GET    | `/api/cs2/debug/stream`               | —                                                               | SSE stream of raw CS2 payload samples as they arrive     |
-
-### Counter-Strike 2 Game State Integration
-
-Create this file on the gaming PC:
-
-```
-C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\gamestate_integration_charm.cfg
-```
-
-Use the relay host or NAS IP in the `uri`:
-
-```text
-"Charm Sonos Relay"
-{
- "uri" "http://<relay-ip-or-hostname>:8787/api/cs2/gamestate"
- "timeout" "5.0"
- "buffer" "0.1"
- "throttle" "0.1"
- "heartbeat" "5.0"
- "data"
- {
-   "provider" "1"
-   "map" "1"
-   "round" "1"
-   "player_id" "1"
-   "player_state" "1"
-   "player_match_stats" "1"
- }
-}
-```
-
-After launching CS2 and joining a match, verify ingestion:
-
-```bash
-curl http://<relay-ip-or-hostname>:8787/api/cs2/status
-```
-
-You should see a `providers[]` entry with the provider SteamID, player name,
-team, health, flash/burning values, bomb state, and map name.
-
-For field research, clear existing samples and then listen to the live debug
-stream while performing one action at a time in game:
-
-```bash
-curl -X DELETE http://<relay-ip-or-hostname>:8787/api/cs2/debug/recent
-curl -N http://<relay-ip-or-hostname>:8787/api/cs2/debug/stream
-```
-
-Each `event: state` message contains the raw Valve GSI payload plus relay
-metadata such as the provider SteamID, receive time, and request source IP.
+| POST   | `/api/device-logs`                    | batched diagnostics from the iOS app                            | Receives recent device logs for relay-side debugging     |
+| GET    | `/api/device-logs/recent`             | optional query: `limit=<count>`                                 | Returns recent in-memory device logs                     |
+| GET    | `/api/device-logs/stream`             | —                                                               | Streams new device logs over SSE                         |
 
 ### Internal Sonos API (for `nas-agent`)
 
@@ -304,46 +275,45 @@ All routes require header **`X-Internal-Token: $INTERNAL_API_TOKEN`**. If `INTER
 | POST | `/internal/sonos/previous` | `{ groupId }` | Previous track. |
 | POST | `/internal/sonos/volume` | `{ groupId, volume }` | Group volume 0–100. |
 
-`groupId` is whatever string the iOS app assigns to a Sonos coordinator —
-it doesn't have to match Sonos's internal `RINCON_…` UUID, the only
-requirement is that the same value is used both in `register-activity`
-and inside the relay (it does today via the bridge's `groupName ?? uuid`).
+Use the `groupId` returned by `/internal/sonos/groups` for the other internal
+Sonos routes.
 
 ## Layout
 
 ```
 nas-relay/
-├── docker-compose.yml      # Portainer stack
+├── docker-compose.yml      # Generic env-driven stack
+├── docker-compose.github.yml # GitHub Container Registry stack
+├── docker-compose.aliyun.yml # Aliyun ACR stack
 ├── Dockerfile              # multi-stage Node 24 alpine build
 ├── .env.example
 ├── package.json / tsconfig.json
-├── data/                   # mounted volume — tokens.json, apns.p8 live here
+├── data/                   # local default for persistent relay state
 └── src/
     ├── index.ts            # Express + wire-up
-    ├── artworkRoutes.ts    # /api/artwork cached artwork proxy
     ├── animatedArtworkRoutes.ts # /api/animated-artwork/*
     ├── animatedAppleMusicArtwork.ts # Apple Music animated artwork resolver/cache
-    ├── cs2GameState.ts     # CS2 GSI state cache and event emitter
-    ├── cs2Routes.ts        # /api/cs2/*
-    ├── cs2Types.ts         # CS2 GSI payload models
     ├── bonjour.ts          # mDNS/Bonjour advertisement for iOS relay discovery
+    ├── deviceLogRoutes.ts  # app diagnostics ingestion and SSE
+    ├── hueAmbienceFrames.ts # album-art palette and spatial light frames
     ├── hueAmbienceService.ts # Sonos snapshots → Hue ambience runtime
     ├── hueClient.ts        # Hue CLIP v2 client
     ├── hueConfigStore.ts   # disk-backed Hue config
-    ├── huePalette.ts       # deterministic fallback palettes
-    ├── hueRenderer.ts      # basic/gradient light update bodies
+    ├── hueEntertainmentStream.ts # built-in Hue Entertainment DTLS transport
     ├── hueRoutes.ts        # /api/hue-ambience/*
-    ├── hueTypes.ts         # Hue config/resource models
     ├── internalSonosRoutes.ts  # /internal/sonos/* for Python agent
+    ├── liveActivityStartCoordinator.ts # push-to-start policy orchestration
+    ├── playbackStateRoutes.ts # cached group playback state
     ├── sonos.ts            # @svrooij/sonos bridge
     ├── apns.ts             # @parse/node-apn wrapper + dry-run
-    ├── tokenStore.ts       # disk-backed token registry
+    ├── tokenStore.ts       # disk-backed update-token registry
+    ├── startTokenStore.ts  # disk-backed push-to-start token registry
     └── types.ts            # mirrors iOS ContentState shape
 ```
 
-## Future phases
+## Possible future work
 
-- Phase 2 polish: external access (Tailscale / DDNS IPv6), token rotation
-  edge cases, direct album-art embedding in APNs payloads, multi-group iOS UI.
+- External access through Tailscale, DDNS IPv6, or another private transport.
+- Further ActivityKit token-rotation and multi-device hardening.
 - Auth: shared-secret header on register/unregister once we leave the LAN.
 - Observability: Prometheus `/metrics` if it ever feels needed.
