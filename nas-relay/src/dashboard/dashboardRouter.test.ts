@@ -63,6 +63,19 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
     assert.equal(state.liveActivity.updateTokenCount, 1);
     assert.equal(state.mcp.maxVolume, 70);
 
+    const themeResponse = await fetch(
+      `${service.baseURL}/api/dashboard/artwork-theme?url=${encodeURIComponent('https://example.com/cover.jpg')}`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(themeResponse.status, 200);
+    assert.deepEqual(await themeResponse.json(), { ok: true, color: '#E58A66' });
+
+    const invalidThemeResponse = await fetch(
+      `${service.baseURL}/api/dashboard/artwork-theme?url=${encodeURIComponent('file:///etc/passwd')}`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(invalidThemeResponse.status, 400);
+
     const overLimit = await fetch(`${service.baseURL}/api/dashboard/sonos/volume`, {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -121,8 +134,9 @@ function fakeDependencies(
   return {
     sonos,
     hue: {
-      status: () => ({ configured: true, enabled: true, runtimeActive: false }),
+      status: () => ({ configured: true, enabled: true, runtimeActive: false, runtimePaused: false }),
       entertainmentStatus: async () => ({ configured: true, bridgeReachable: true, streaming: 'free', lastError: null }),
+      start: async () => undefined,
       stop: async () => undefined,
     },
     apns: {
@@ -141,6 +155,7 @@ function fakeDependencies(
     relayLogs,
     mcp: { token: 'mcp-secret', maxVolume: 70, allowedOrigins: [] },
     version: 'test',
+    artworkTheme: async () => '#E58A66',
   };
 }
 
@@ -165,7 +180,7 @@ async function startDashboardServer(dependencies: DashboardDependencies) {
 function snapshot(): SonosGroupSnapshot {
   return {
     groupId: '192.168.50.25', speakerName: 'Living Room', trackTitle: 'Song', artist: 'Artist', album: 'Album',
-    albumArtUri: null, isPlaying: true, groupVolume: 28, playbackSourceRaw: 'appleMusic', positionSeconds: 10,
+    albumArtUri: 'https://example.com/cover.jpg', isPlaying: true, groupVolume: 28, playbackSourceRaw: 'appleMusic', positionSeconds: 10,
     durationSeconds: 200, groupMemberCount: 2, sampledAt: new Date('2026-07-15T00:00:00Z'),
   };
 }

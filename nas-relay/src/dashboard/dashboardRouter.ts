@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { Logger } from 'pino';
 
+import { fetchAlbumArt } from '../artwork/albumArtFetchCache.js';
 import type { DeviceLogService } from '../diagnostics/deviceLogs.js';
 import type { RelayLogBuffer } from '../diagnostics/relayLogs.js';
 import type { HueAmbienceServiceStatus, HueEntertainmentStatus } from '../hue/hueTypes.js';
@@ -9,6 +10,7 @@ import type { ApnsStatus } from '../live-activity/apns.js';
 import { resolveMcpTarget, type SonosMcpController, type SonosMcpOptions } from '../mcp/sonosMcpRouter.js';
 import { snapshotJson } from '../sonos/relaySnapshotJson.js';
 import type { SonosDiscoveryState } from '../sonos/sonos.js';
+import { themeColorFromAlbumArtBuffer } from './dashboardArtworkTheme.js';
 
 const COOKIE_NAME = 'charm_dashboard_session';
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
@@ -28,6 +30,7 @@ export interface DashboardDependencies {
   hue: {
     status(): HueAmbienceServiceStatus;
     entertainmentStatus(): Promise<HueEntertainmentStatus>;
+    start(): Promise<void>;
     stop(): Promise<void>;
   };
   apns: { status(): ApnsStatus };
@@ -38,6 +41,7 @@ export interface DashboardDependencies {
   relayLogs: RelayLogBuffer;
   mcp: SonosMcpOptions;
   version: string;
+  artworkTheme?: (url: string) => Promise<string>;
 }
 
 export interface DashboardOptions {
@@ -68,6 +72,7 @@ export function createDashboardRouter(
 ): Router {
   const router = Router();
   const sessions = new Map<string, number>();
+  const artworkThemes = new Map<string, string>();
   const dashboardLog = log.child({ module: 'dashboard' });
 
   router.use((_req, res, next) => {
@@ -107,6 +112,40 @@ export function createDashboardRouter(
   });
 
   router.use(authenticate(options, sessions));
+
+  router.get('/artwork-theme', async (req, res) => {
+    const url = dashboardArtworkURL(req.query.url);
+    if (!url) {
+      res.status(400).json({ ok: false, error: 'valid http artwork url required' });
+      return;
+    }
+    const allowed = dependencies.sonos.allSnapshots().some(snapshot => (
+      [snapshot.albumArtUri, snapshot.albumArtFallbackUri]
+        .some(candidate => dashboardArtworkURL(candidate) === url)
+    ));
+    if (!allowed) {
+      res.status(403).json({ ok: false, error: 'artwork_url_not_in_snapshot' });
+      return;
+    }
+
+    const cached = artworkThemes.get(url);
+    if (cached) {
+      res.json({ ok: true, color: cached });
+      return;
+    }
+
+    try {
+      const color = dependencies.artworkTheme
+        ? await dependencies.artworkTheme(url)
+        : themeColorFromAlbumArtBuffer(await fetchAlbumArt(url));
+      if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('invalid dashboard artwork theme color');
+      rememberArtworkTheme(artworkThemes, url, color);
+      res.json({ ok: true, color });
+    } catch (error) {
+      dashboardLog.warn({ err: error, url }, 'dashboard artwork theme extraction failed');
+      res.status(502).json({ ok: false, error: 'artwork_theme_unavailable' });
+    }
+  });
 
   router.get('/state', async (_req, res) => {
     try {
@@ -242,14 +281,19 @@ export function createDashboardRouter(
     }
   });
 
-  router.post('/hue/stop', sameOriginOnly, async (_req, res) => {
+  router.post('/hue/:action', sameOriginOnly, async (req, res) => {
+    const action = req.params.action;
+    if (action !== 'start' && action !== 'stop') {
+      res.status(404).json({ ok: false, error: 'unsupported_action' });
+      return;
+    }
     try {
-      await dependencies.hue.stop();
-      dashboardLog.info('dashboard stopped Hue ambience');
+      await dependencies.hue[action]();
+      dashboardLog.info({ action }, 'dashboard Hue ambience control');
       res.json({ ok: true, state: dependencies.hue.status() });
     } catch (error) {
-      dashboardLog.warn({ err: error }, 'dashboard Hue stop failed');
-      res.status(500).json({ ok: false, error: 'hue_stop_failed' });
+      dashboardLog.warn({ err: error, action }, 'dashboard Hue ambience control failed');
+      res.status(500).json({ ok: false, error: `hue_${action}_failed` });
     }
   });
 
@@ -325,6 +369,25 @@ function pruneSessions(sessions: Map<string, number>, now = Date.now()): void {
 function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : Number.NaN;
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function dashboardArtworkURL(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 2_048) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberArtworkTheme(cache: Map<string, string>, url: string, color: string): void {
+  cache.set(url, color);
+  while (cache.size > 200) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) return;
+    cache.delete(oldest);
+  }
 }
 
 export const dashboardDefaults = {

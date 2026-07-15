@@ -359,7 +359,7 @@ async function main(): Promise<void> {
       res.setHeader('X-Frame-Options', 'DENY');
       res.setHeader(
         'Content-Security-Policy',
-        "default-src 'self'; img-src 'self' http: https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; img-src 'self' http: https: data:; media-src 'self' https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
       );
     },
   }));

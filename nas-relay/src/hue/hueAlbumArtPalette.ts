@@ -84,9 +84,13 @@ export async function paletteForSnapshot(
 }
 
 export function paletteFromAlbumArtBuffer(data: Buffer): HueRGBColor[] {
-  const colors = sampleImageColors(decodeImage(data));
+  const colors = sampleAlbumArtColors(data);
   const palette = extractPaletteFromColors(colors);
   return palette.length > 0 ? palette : fallbackPaletteFromAlbumColors(colors);
+}
+
+export function sampleAlbumArtColors(data: Buffer): HueRGBColor[] {
+  return sampleImageColors(decodeImage(data));
 }
 
 export function extractPaletteFromColors(

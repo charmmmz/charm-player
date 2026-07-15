@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#11100f">
   <title>Charm Relay Console</title>
+  <link rel="icon" type="image/png" href="./assets/charm-player-logo.png">
+  <link rel="apple-touch-icon" href="./assets/charm-player-logo.png">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -13,28 +15,28 @@
     <div class="login-glow login-glow-one"></div>
     <div class="login-glow login-glow-two"></div>
     <form class="login-card" id="login-form">
-      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <img class="relay-logo" src="./assets/charm-player-logo.png" alt="Charm Player">
       <p class="eyebrow">LAN CONTROL SURFACE</p>
       <h1 id="login-title">Charm Relay</h1>
-      <p class="login-copy">查看家中的 Sonos、Live Activity、Hue 与 MCP 状态，并进行轻量控制。</p>
+      <p class="login-copy">View and control Sonos, Live Activity, Hue, and MCP services across your home network.</p>
       <label for="login-token">Dashboard Token</label>
       <div class="token-field">
-        <input id="login-token" name="token" type="password" autocomplete="current-password" required placeholder="输入 DASHBOARD_TOKEN">
-        <button type="button" class="reveal-button" id="reveal-token" aria-label="显示或隐藏 token">显示</button>
+        <input id="login-token" name="token" type="password" autocomplete="current-password" required placeholder="Enter DASHBOARD_TOKEN">
+        <button type="button" class="reveal-button" id="reveal-token" aria-label="Show or hide token">Show</button>
       </div>
-      <button class="primary-button" type="submit">进入控制台 <span>→</span></button>
+      <button class="primary-button" type="submit">Open Console <span>→</span></button>
       <p class="form-message" id="login-message" role="alert"></p>
-      <p class="login-footnote">默认可使用 MCP_API_TOKEN；凭据只用于建立 HttpOnly 登录会话。</p>
+      <p class="login-footnote">MCP_API_TOKEN is accepted by default. Your credential is used only to establish an HttpOnly session.</p>
     </form>
   </section>
 
   <div class="app-shell" id="app-shell" hidden>
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="brand-mark small" aria-hidden="true"><span></span><span></span><span></span></div>
+        <img class="relay-logo small" src="./assets/charm-player-logo.png" alt="Charm Player">
         <div><strong>Charm Relay</strong><small>LAN CONSOLE</small></div>
       </div>
-      <nav class="navigation" aria-label="控制台页面">
+      <nav class="navigation" aria-label="Console pages">
         <button class="nav-item active" data-view="overview"><span class="nav-glyph">◉</span><span>Overview</span></button>
         <button class="nav-item" data-view="sonos"><span class="nav-glyph">◒</span><span>Sonos</span></button>
         <button class="nav-item" data-view="activity"><span class="nav-glyph">◫</span><span>Live Activity</span></button>
@@ -55,14 +57,14 @@
           <h1 id="view-title">Good evening.</h1>
         </div>
         <div class="topbar-actions">
-          <span class="updated-at" id="updated-at">等待状态…</span>
-          <button class="icon-button" id="refresh-button" title="刷新" aria-label="刷新">↻</button>
-          <button class="logout-button" id="logout-button">退出</button>
+          <span class="updated-at" id="updated-at">Waiting for status…</span>
+          <button class="icon-button" id="refresh-button" title="Refresh" aria-label="Refresh">↻</button>
+          <button class="logout-button" id="logout-button">Log out</button>
         </div>
       </header>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
-      <section class="view active" id="view-overview" data-view-panel="overview"><div class="loading-card">正在读取 relay 状态…</div></section>
+      <section class="view active" id="view-overview" data-view-panel="overview"><div class="loading-card">Loading relay status…</div></section>
       <section class="view" id="view-sonos" data-view-panel="sonos"></section>
       <section class="view" id="view-activity" data-view-panel="activity"></section>
       <section class="view" id="view-hue" data-view-panel="hue"></section>
