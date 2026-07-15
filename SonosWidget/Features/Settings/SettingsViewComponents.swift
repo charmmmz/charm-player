@@ -99,10 +99,7 @@ struct SettingsHubDestinationRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: destination.systemImage)
-                .font(.title3)
-                .foregroundStyle(.tint)
-                .frame(width: 28)
+            SettingsHubDestinationMark(destination: destination)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(destination.title)
@@ -120,6 +117,35 @@ struct SettingsHubDestinationRow: View {
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+private struct SettingsHubDestinationMark: View {
+    let destination: SettingsHubDestination
+
+    var body: some View {
+        Group {
+            switch destination {
+            case .sonos:
+                Image("SonosWordmark")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 1)
+            case .hueAmbience:
+                Image("PhilipsHueLogo")
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+            case .externalConnection, .diagnostics:
+                Image(systemName: destination.systemImage)
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+            }
+        }
+        .frame(width: 42, height: 28)
+        .accessibilityHidden(true)
     }
 }
 
