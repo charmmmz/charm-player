@@ -42,6 +42,9 @@ export interface SonosGroupSnapshot {
   albumArtUri?: string | null;
   albumArtFallbackUri?: string | null;
   isPlaying: boolean;
+  /// Group volume sampled from GroupRenderingControl. Optional for older
+  /// persisted/test snapshots and null when the coordinator does not expose it.
+  groupVolume?: number | null;
   playbackSourceRaw?: string | null;
   soundbarNightMode?: boolean | null;
   soundbarSpeechEnhancementRawLevel?: number | null;

@@ -14,8 +14,9 @@ APNs, and the Live Activity updates within another ~1–3 s.
 
 ## What it does
 
-- LAN-only HTTP (no general HTTP auth or TLS, so keep it inside a trusted home
-  LAN or tailnet).
+- LAN-only HTTP. MCP uses bearer authentication and the management dashboard
+  uses an HttpOnly login session; the app-facing relay APIs do not have
+  general HTTP auth or TLS, so keep the whole service inside a trusted home LAN.
 - Relay discovery is automatic on the local subnet: the relay publishes a
   Bonjour service (`_charmrelay._tcp`) and the iOS app can find it without a
   manually entered URL.
@@ -37,6 +38,63 @@ APNs, and the Live Activity updates within another ~1–3 s.
 External access (DDNS IPv6 / Cloudflare Tunnel / Tailscale) is intentionally
 out of scope here. Bring up the LAN path first, then add an external transport
 only if your deployment needs one.
+
+## LAN management dashboard
+
+Open `http://<nas-host>:8787/dashboard/` to use the built-in management page.
+It shows relay health, current Sonos playback and room controls, sanitized Live
+Activity registrations, Hue Ambience runtime state, MCP setup, and recent relay
+and iOS device logs. The dashboard never returns push tokens, APNs credentials,
+Hue application keys, or the MCP bearer token.
+
+Set a dedicated login token, or leave it blank to reuse `MCP_API_TOKEN`:
+
+```env
+DASHBOARD_TOKEN=generate-another-long-random-secret
+DASHBOARD_SESSION_HOURS=12
+```
+
+Login creates a `SameSite=Strict`, HttpOnly cookie held in relay memory. A
+relay restart signs out existing browser sessions. Keep
+`DASHBOARD_SECURE_COOKIE=false` for direct HTTP access on a trusted LAN; only
+enable it when the dashboard is actually served through HTTPS.
+
+## LAN MCP endpoint
+
+The relay exposes its existing Sonos controller to MCP-compatible agents at
+`http://<nas-host>:8787/mcp`. It uses stateless Streamable HTTP, so the relay
+does not host an LLM and does not need an OpenAI, Anthropic, or other model API
+key. The external MCP host owns natural-language interpretation and tool
+selection.
+
+Set a dedicated token before connecting a client:
+
+```env
+MCP_API_TOKEN=generate-a-long-random-secret
+MCP_MAX_VOLUME=70
+```
+
+Clients must send `Authorization: Bearer <MCP_API_TOKEN>` on every MCP
+request. If `MCP_API_TOKEN` is blank, `/mcp` returns 503. Keep this token
+separate from `INTERNAL_API_TOKEN`, which only protects the legacy
+`/internal/*` adapter API.
+
+The first tool set is deliberately small:
+
+- `sonos_list_groups` and `sonos_get_state`
+- `sonos_play`, `sonos_pause`, `sonos_next`, and `sonos_previous`
+- `sonos_set_volume`, capped by `MCP_MAX_VOLUME` (default 70)
+- `sonos_set_night_mode` and `sonos_set_speech_enhancement`
+
+Tools accept a room name returned by `sonos_list_groups` or a coordinator
+`groupId`. The read-only `sonos://groups` resource exposes the cached group
+snapshots.
+
+Desktop and CLI MCP clients normally omit the HTTP `Origin` header and work
+without extra configuration. Browser-based clients are rejected unless their
+exact origin is listed in `MCP_ALLOWED_ORIGINS` as a comma-separated value.
+This prevents an arbitrary web page from using the browser to reach the LAN
+endpoint.
 
 ## Docker Compose deployment
 
@@ -62,6 +120,9 @@ services:
     network_mode: host
     environment:
       LOG_LEVEL: info
+      MCP_API_TOKEN: "${MCP_API_TOKEN:-}"
+      MCP_MAX_VOLUME: "${MCP_MAX_VOLUME:-70}"
+      DASHBOARD_TOKEN: "${DASHBOARD_TOKEN:-}"
       APNS_BUNDLE_ID: com.charm.SonosWidget
       APNS_TEAM_ID: 3MSS7DJGVR
       APNS_KEY_PATH: /app/data/AuthKey_4K6LLXCPPN.p8
@@ -83,6 +144,9 @@ services:
     environment:
       LOG_LEVEL: debug
       RELAY_PORT: "8789"
+      MCP_API_TOKEN: "${DEBUG_MCP_API_TOKEN:-${MCP_API_TOKEN:-}}"
+      MCP_MAX_VOLUME: "${DEBUG_MCP_MAX_VOLUME:-${MCP_MAX_VOLUME:-70}}"
+      DASHBOARD_TOKEN: "${DEBUG_DASHBOARD_TOKEN:-${DASHBOARD_TOKEN:-}}"
       APNS_BUNDLE_ID: com.charm.SonosWidget
       APNS_TEAM_ID: 3MSS7DJGVR
       APNS_KEY_PATH: /app/data/AuthKey_M8FQR2H6DD.p8
@@ -245,6 +309,7 @@ artwork lookup as long as it can reach Apple Music endpoints.
 | Method | Path                                  | Body / Params                                                   | Description                                              |
 |--------|---------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------|
 | GET    | `/api/health`                         | —                                                               | Liveness, discovery/APNs status, and current group snapshots |
+| POST   | `/mcp`                                | MCP Streamable HTTP JSON-RPC; Bearer token required              | LAN-only stateless MCP tools and resources                   |
 | GET    | `/api/animated-artwork/url`           | query: `url=<apple-music-album-url>&country=<storefront?>`      | Resolves cached Apple Music animated artwork by album URL |
 | GET    | `/api/animated-artwork/search`        | query: `artist=<artist>&album=<album>&country=<storefront?>`    | Resolves cached Apple Music animated artwork by metadata |
 | GET    | `/api/playback-state`                 | query: `groupId=<group-id>`                                    | Returns the cached playback snapshot for one group       |
@@ -296,13 +361,14 @@ nas-relay/
     ├── diagnostics/        # iOS device-log ingestion and streaming
     ├── hue/                # Hue ambience, CLIP, and Entertainment streaming
     ├── live-activity/      # APNs, token stores, start/update policy, and tests
+    ├── mcp/                # LAN-only MCP transport, auth, tools, and resources
     ├── sonos/              # Sonos bridge, snapshots, playback, and internal API
     └── transport/          # Bonjour advertisement and HTTP log policy
 ```
 
 ## Possible future work
 
-- External access through Tailscale, DDNS IPv6, or another private transport.
+- External MCP access through Tailscale, DDNS IPv6, or another private transport.
 - Further ActivityKit token-rotation and multi-device hardening.
 - Auth: shared-secret header on register/unregister once we leave the LAN.
 - Observability: Prometheus `/metrics` if it ever feels needed.

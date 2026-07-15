@@ -116,6 +116,19 @@ export class StartTokenStore {
     return this.tokens.size;
   }
 
+  summaries(): Array<Omit<PushToStartTokenEntry, 'token' | 'activeActivityIds'>> {
+    return Array.from(this.tokens.values(), entry => ({
+      groupId: entry.groupId,
+      clientId: entry.clientId,
+      speakerName: entry.speakerName,
+      liveActivityStyleRaw: entry.liveActivityStyleRaw,
+      clearDismissalSuppression: entry.clearDismissalSuppression,
+      registeredAt: entry.registeredAt,
+      lastStartAt: entry.lastStartAt,
+      startAttemptCount: entry.startAttemptCount,
+    }));
+  }
+
   private markDirty(): void {
     this.dirty = true;
     void this.flush();

@@ -14,6 +14,8 @@ const REGISTER_PUSH_TO_START_PATH = '/api/register-push-to-start';
 const DEVICE_LOGS_PATH = '/api/device-logs';
 const DEVICE_LOGS_RECENT_PATH = '/api/device-logs/recent';
 const DEVICE_LOGS_STREAM_PATH = '/api/device-logs/stream';
+const DASHBOARD_STATE_PATH = '/api/dashboard/state';
+const DASHBOARD_LOGS_PATH = '/api/dashboard/logs';
 
 export function shouldIgnoreHttpAutoLog(req: HttpAutoLogRequest): boolean {
   const path = pathFromUrl(req.url);
@@ -28,7 +30,9 @@ export function shouldIgnoreHttpAutoLog(req: HttpAutoLogRequest): boolean {
     || path === REGISTER_PUSH_TO_START_PATH
     || path === DEVICE_LOGS_PATH
     || path === DEVICE_LOGS_RECENT_PATH
-    || path === DEVICE_LOGS_STREAM_PATH;
+    || path === DEVICE_LOGS_STREAM_PATH
+    || path === DASHBOARD_STATE_PATH
+    || path === DASHBOARD_LOGS_PATH;
 }
 
 function pathFromUrl(url: string | undefined): string {

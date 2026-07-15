@@ -106,6 +106,18 @@ export class TokenStore {
     return this.tokens.size;
   }
 
+  summaries(): Array<Omit<TokenEntry, 'token' | 'lastSentHash'> & { hasLastSentState: boolean }> {
+    return Array.from(this.tokens.values(), entry => ({
+      groupId: entry.groupId,
+      clientId: entry.clientId,
+      activityId: entry.activityId,
+      liveActivityStyleRaw: entry.liveActivityStyleRaw,
+      attributes: entry.attributes,
+      registeredAt: entry.registeredAt,
+      hasLastSentState: Boolean(entry.lastSentHash),
+    }));
+  }
+
   /// Update the cached "last shipped hash" so we can skip no-op pushes. Done
   /// atomically with a debounced flush since this is a write-heavy field.
   recordSent(token: string, hash: string): void {

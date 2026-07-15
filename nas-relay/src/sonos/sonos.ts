@@ -517,6 +517,8 @@ export class SonosBridge extends EventEmitter {
       }
       const soundbarEQ = await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw);
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+      const groupVolume = await this.groupVolumeForSnapshot(coordinator, previousSnapshot?.groupVolume);
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
       // current song in r:streamContent while sonos-ts may cache that raw
@@ -689,6 +691,7 @@ export class SonosBridge extends EventEmitter {
         albumArtUri,
         albumArtFallbackUri,
         isPlaying,
+        groupVolume,
         playbackSourceRaw,
         soundbarNightMode: soundbarEQ.soundbarNightMode,
         soundbarSpeechEnhancementRawLevel: soundbarEQ.soundbarSpeechEnhancementRawLevel,
@@ -722,6 +725,23 @@ export class SonosBridge extends EventEmitter {
   private snapshotGroupId(device: any): string | null {
     const coordinator = device?.Coordinator ?? device;
     return firstNonEmpty(coordinator?.Host, device?.Host, device?.Uuid);
+  }
+
+  private async groupVolumeForSnapshot(
+    coordinator: any,
+    previousVolume?: number | null,
+  ): Promise<number | null> {
+    const service = coordinator?.GroupRenderingControlService;
+    if (typeof service?.GetGroupVolume !== 'function') return previousVolume ?? null;
+
+    try {
+      const response = await service.GetGroupVolume({ InstanceID: 0 });
+      const volume = Number(response?.CurrentVolume);
+      return Number.isFinite(volume) ? Math.min(100, Math.max(0, Math.round(volume))) : previousVolume ?? null;
+    } catch (err) {
+      this.log.debug({ err, groupId: coordinator?.Host ?? null }, 'group volume snapshot failed');
+      return previousVolume ?? null;
+    }
   }
 
   private beginRefresh(groupId: string): number {

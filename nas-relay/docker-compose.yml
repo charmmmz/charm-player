@@ -41,6 +41,14 @@ services:
       # Shared secret for `/internal/*` (Python agent). Optional if you don't run nas-agent.
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:-}"
 
+      # LAN-only MCP endpoint (`/mcp`). Disabled when MCP_API_TOKEN is blank.
+      MCP_API_TOKEN: "${MCP_API_TOKEN:-}"
+      MCP_MAX_VOLUME: "${MCP_MAX_VOLUME:-70}"
+      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-}"
+      # LAN web console (`/dashboard/`). Blank reuses MCP_API_TOKEN.
+      DASHBOARD_TOKEN: "${DASHBOARD_TOKEN:-}"
+      DASHBOARD_SESSION_HOURS: "${DASHBOARD_SESSION_HOURS:-12}"
+
       # Hue Ambience — the iOS app uploads the actual Bridge app key and
       # assignments to this file through /api/hue-ambience/config.
       HUE_AMBIENCE_ENABLED: "${HUE_AMBIENCE_ENABLED:-true}"
@@ -95,6 +103,11 @@ services:
       # relying on Bonjour auto-discovery.
       SONOS_SEED_IP: "${DEBUG_SONOS_SEED_IP:-${SONOS_SEED_IP:-}}"
       INTERNAL_API_TOKEN: "${DEBUG_INTERNAL_API_TOKEN:-${INTERNAL_API_TOKEN:-}}"
+      MCP_API_TOKEN: "${DEBUG_MCP_API_TOKEN:-${MCP_API_TOKEN:-}}"
+      MCP_MAX_VOLUME: "${DEBUG_MCP_MAX_VOLUME:-${MCP_MAX_VOLUME:-70}}"
+      MCP_ALLOWED_ORIGINS: "${DEBUG_MCP_ALLOWED_ORIGINS:-${MCP_ALLOWED_ORIGINS:-}}"
+      DASHBOARD_TOKEN: "${DEBUG_DASHBOARD_TOKEN:-${DASHBOARD_TOKEN:-}}"
+      DASHBOARD_SESSION_HOURS: "${DEBUG_DASHBOARD_SESSION_HOURS:-${DASHBOARD_SESSION_HOURS:-12}}"
 
       HUE_AMBIENCE_ENABLED: "${DEBUG_HUE_AMBIENCE_ENABLED:-${HUE_AMBIENCE_ENABLED:-true}}"
       HUE_AMBIENCE_CONFIG_PATH: "${DEBUG_HUE_AMBIENCE_CONFIG_PATH:-/app/data/hue-ambience-config.json}"

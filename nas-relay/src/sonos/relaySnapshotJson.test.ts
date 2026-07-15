@@ -10,12 +10,14 @@ test('relay snapshot JSON includes TV soundbar state for command responses', () 
     audioQualityLabel: 'Dolby Atmos · MAT',
     soundbarNightMode: true,
     soundbarSpeechEnhancementRawLevel: 3,
+    groupVolume: 34,
   }));
 
   assert.equal(json.playbackSourceRaw, 'tv');
   assert.equal(json.audioQualityLabel, 'Dolby Atmos · MAT');
   assert.equal(json.soundbarNightMode, true);
   assert.equal(json.soundbarSpeechEnhancementRawLevel, 3);
+  assert.equal(json.groupVolume, 34);
 });
 
 function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapshot {

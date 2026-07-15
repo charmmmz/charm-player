@@ -113,6 +113,14 @@ export class LiveActivityDismissalStore {
     return count;
   }
 
+  activeSummaries(now = new Date()): PushToStartSuppressionEntry[] {
+    const summaries: PushToStartSuppressionEntry[] = [];
+    for (const entry of this.entries.values()) {
+      if (Date.parse(entry.suppressUntil) > now.getTime()) summaries.push({ ...entry });
+    }
+    return summaries;
+  }
+
   private markDirty(): void {
     this.dirty = true;
     void this.flush();

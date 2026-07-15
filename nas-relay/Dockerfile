@@ -34,6 +34,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
+COPY public ./public
 
 # Persistent storage for tokens.json, the APNs `.p8` key, and Hue ambience
 # config. Mounted via docker-compose so they survive container rebuilds.

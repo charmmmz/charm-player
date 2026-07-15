@@ -2,6 +2,7 @@ import express from 'express';
 import pino from 'pino';
 import pinoHttp from 'pino-http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { SonosBridge, type SonosSnapshotChangeContext } from './sonos/sonos.js';
 import { createInternalSonosRouter, internalAuthMiddleware } from './sonos/internalSonosRoutes.js';
@@ -15,8 +16,13 @@ import { AnimatedAppleMusicArtworkResolver } from './artwork/animatedAppleMusicA
 import { createAnimatedArtworkRouter } from './artwork/animatedArtworkRoutes.js';
 import { createPlaybackStateRouter } from './sonos/playbackStateRoutes.js';
 import { DeviceLogService } from './diagnostics/deviceLogs.js';
+import { RelayLogBuffer } from './diagnostics/relayLogs.js';
 import { createDeviceLogRouter } from './diagnostics/deviceLogRoutes.js';
 import { shouldIgnoreHttpAutoLog } from './transport/httpLogging.js';
+import {
+  createSonosMcpRouter,
+  sonosMcpOptionsFromEnv,
+} from './mcp/sonosMcpRouter.js';
 import {
   buildLiveActivityContentState,
   hashLiveActivityContentState,
@@ -35,6 +41,7 @@ import { snapshotJson } from './sonos/relaySnapshotJson.js';
 import { publishRelayBonjour, type RelayBonjourAdvertisement } from './transport/bonjour.js';
 import { StartTokenStore } from './live-activity/startTokenStore.js';
 import { LiveActivityDismissalStore } from './live-activity/liveActivityDismissalStore.js';
+import { createDashboardRouter, dashboardOptionsFromEnv } from './dashboard/dashboardRouter.js';
 import type {
   LiveActivityContentState,
   LiveActivityDismissedRequest,
@@ -45,9 +52,16 @@ import type {
   TokenEntry,
 } from './types.js';
 
+const relayLogs = new RelayLogBuffer();
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   transport: process.env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
+  hooks: {
+    logMethod(args, method, level) {
+      relayLogs.capture(level, [this.bindings(), ...args]);
+      method.apply(this, args);
+    },
+  },
 });
 
 const RELAY_PORT = Number(process.env.RELAY_PORT ?? 8787);
@@ -56,6 +70,10 @@ const DATA_DIR = process.env.DATA_DIR ?? '/app/data';
 const DEFAULT_APNS_BUNDLE_ID = 'com.charm.SonosWidget';
 const DEFAULT_APNS_TEAM_ID = '3MSS7DJGVR';
 const DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS = 30 * 60;
+const DASHBOARD_PUBLIC_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../public/dashboard',
+);
 
 async function main(): Promise<void> {
   // ---- core wiring ------------------------------------------------------
@@ -94,6 +112,8 @@ async function main(): Promise<void> {
 
   const sonos = new SonosBridge(log);
   await sonos.start(SEED_IP);
+  const mcpOptions = sonosMcpOptionsFromEnv();
+  const dashboardOptions = dashboardOptionsFromEnv(process.env, mcpOptions.token);
   const liveActivityPreferences = new LiveActivityPreferenceStore();
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
   const liveActivityArtworkLog = log.child({ module: 'live-activity-artwork' });
@@ -310,6 +330,19 @@ async function main(): Promise<void> {
   );
 
   app.use('/internal', internalAuthMiddleware(log), createInternalSonosRouter(sonos, log));
+  app.use('/mcp', createSonosMcpRouter(sonos, log, mcpOptions));
+  app.use('/api/dashboard', createDashboardRouter({
+    sonos,
+    hue: hueAmbience,
+    apns,
+    updateTokens: tokens,
+    startTokens,
+    dismissals: liveActivityDismissals,
+    deviceLogs,
+    relayLogs,
+    mcp: mcpOptions,
+    version: process.env.APP_VERSION?.trim() || '0.1.0',
+  }, log, dashboardOptions));
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createDeviceLogRouter(deviceLogs, log.child({ module: 'device-logs' })));
@@ -317,6 +350,20 @@ async function main(): Promise<void> {
     log.child({ module: 'animated-artwork' }),
     animatedArtwork,
   ));
+  app.use('/dashboard', express.static(DASHBOARD_PUBLIC_DIR, {
+    index: 'index.html',
+    maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+    setHeaders: res => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; img-src 'self' http: https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      );
+    },
+  }));
+  app.get('/', (_req, res) => res.redirect('/dashboard/'));
 
   app.get('/api/health', async (_req, res) => {
     const hueAmbienceStatus = hueAmbience.status();
@@ -328,12 +375,24 @@ async function main(): Promise<void> {
         discoveryStatus: sonos.discovery.status,
         discoveryError: sonos.discovery.error,
       },
+      mcp: {
+        enabled: Boolean(mcpOptions.token),
+        path: '/mcp',
+        transport: 'streamable-http',
+        scope: 'lan',
+        auth: 'bearer',
+        maxVolume: mcpOptions.maxVolume,
+      },
+      dashboard: {
+        enabled: Boolean(dashboardOptions.token),
+        path: '/dashboard/',
+      },
       apns: apns.status(),
-        liveActivity: {
-          startTokenCount: startTokens.count(),
-          updateTokenCount: tokens.count(),
-          dismissedSuppressionCount: liveActivityDismissals.count(),
-        },
+      liveActivity: {
+        startTokenCount: startTokens.count(),
+        updateTokenCount: tokens.count(),
+        dismissedSuppressionCount: liveActivityDismissals.count(),
+      },
       groups: sonos.allSnapshots().map(s => ({
         groupId: s.groupId,
         speakerName: s.speakerName,

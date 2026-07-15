@@ -33,3 +33,9 @@ test('ignores frequent sync and registration endpoints from HTTP auto logging', 
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/hue-ambience/config' }), true);
   assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/live-activity-command' }), false);
 });
+
+test('ignores dashboard polling but keeps dashboard controls in the HTTP log', () => {
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/dashboard/state' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/dashboard/logs?limit=350' }), true);
+  assert.equal(shouldIgnoreHttpAutoLog({ url: '/api/dashboard/sonos/pause' }), false);
+});

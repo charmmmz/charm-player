@@ -173,11 +173,16 @@ Use it when you want:
 - Relay-backed animated Apple Music artwork lookup and caching.
 - Background Hue Ambience.
 - Relay health, APNs status, and remote diagnostic logs.
+- LAN MCP control from compatible external agents without hosting an LLM on
+  the NAS.
+- A built-in LAN dashboard for status, playback, Hue, MCP, Live Activity, and
+  recent diagnostics at `http://<nas-host>:8787/dashboard/`.
 
 Quick start:
 
 1. Copy [`.env.stack.example`](.env.stack.example) to `.env`.
-2. Set the internal token, optional agent token, and APNs values.
+2. Set `MCP_API_TOKEN` (also used by the dashboard unless
+   `DASHBOARD_TOKEN` is set), the optional internal token, and APNs values.
 3. Leave `SONOS_SEED_IP` blank unless multicast discovery is blocked.
 4. Run `docker compose up -d --build`.
 

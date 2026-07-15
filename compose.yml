@@ -1,4 +1,4 @@
-# Charm for Sonos NAS stack: Live Activity relay (Node) + LLM agent (Python).
+# Charm for Sonos NAS stack: relay + LAN MCP endpoint.
 # Copy `.env.stack.example` → `.env` in this directory, fill in values, then:
 #   docker compose up -d --build
 #
@@ -11,18 +11,6 @@ services:
     container_name: sonos-live-activity-relay
     restart: unless-stopped
     network_mode: host
-    env_file: .env
+    env_file: ${NAS_STACK_ENV_FILE:-.env}
     volumes:
       - ./nas-relay/data:/app/data
-
-  agent:
-    build: ./nas-agent
-    image: sonos-nas-agent:latest
-    container_name: sonos-nas-agent
-    restart: unless-stopped
-    network_mode: host
-    env_file: .env
-    volumes:
-      - ./nas-agent/data:/app/data
-    depends_on:
-      - relay

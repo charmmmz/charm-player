@@ -10,6 +10,7 @@ export function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> 
     albumArtUri: snap.albumArtUri,
     albumArtFallbackUri: snap.albumArtFallbackUri ?? null,
     isPlaying: snap.isPlaying,
+    groupVolume: snap.groupVolume ?? null,
     playbackSourceRaw: snap.playbackSourceRaw ?? null,
     audioQualityLabel: snap.audioQualityLabel ?? null,
     soundbarNightMode: snap.soundbarNightMode ?? null,
