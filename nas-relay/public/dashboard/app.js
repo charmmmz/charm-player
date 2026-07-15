@@ -1,3 +1,5 @@
+import { selectAnimatedArtworkPlayback } from './hlsPlayback.js';
+
 const API = '/api/dashboard';
 
 const ui = {
@@ -127,7 +129,7 @@ document.addEventListener('click', async event => {
 });
 
 document.addEventListener('keydown', event => {
-  if (!event.target.matches('.now-playing-card[data-open-group]')) return;
+  if (!event.target.matches('[role="link"][data-open-group]')) return;
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
   openSonosGroup(event.target.dataset.openGroup);
@@ -532,7 +534,7 @@ function nowPlayingCard(group, maxVolume) {
   const volume = group.groupVolume ?? 0;
   return `<article class="now-playing-card album-themed-card is-clickable" style="${albumThemeStyle(group)}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(group.speakerName)} in Sonos">
     ${albumThemeBackdrop(group)}
-    <div class="artwork-wrap">${artwork(group, true)}</div>
+    <div class="artwork-wrap">${artwork(group, 'large')}</div>
     <div class="now-playing-content">
       <div class="card-kicker"><span>Now playing</span><span class="room-live">${escapeHtml(group.speakerName)} <span class="open-player-arrow">→</span></span></div>
       <div class="track-meta"><h2>${escapeHtml(group.trackTitle || 'Not playing')}</h2><p>${escapeHtml([group.artist, group.album].filter(Boolean).join(' · ') || 'No media metadata')}</p><div class="quality-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}${chip(`${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}`)}</div></div>
@@ -549,8 +551,17 @@ function emptyNowPlaying() {
 function roomCard(group, maxVolume) {
   const volume = Math.min(group.groupVolume ?? 0, maxVolume);
   const speechLevel = group.soundbarSpeechEnhancementRawLevel ?? 0;
-  return `<article class="room-card album-themed-card" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${escapeAttr(group.groupId)}">${albumThemeBackdrop(group)}<div class="room-top">${artwork(group, false)}<div class="room-info"><h3>${escapeHtml(group.speakerName)}</h3><p>${escapeHtml(group.trackTitle || 'Not playing')}${group.artist ? ` · ${escapeHtml(group.artist)}` : ''}</p><div class="room-source-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}</div><small>${group.isPlaying ? 'PLAYING' : 'PAUSED'} · ${group.groupMemberCount} MEMBERS</small></div><button class="room-detail-button" data-open-group="${escapeAttr(group.groupId)}" aria-label="Open player for ${escapeAttr(group.speakerName)}"><span aria-hidden="true">→</span></button></div>
-    <div class="room-controls"><div class="room-buttons">${playbackButtons(group)}</div><label class="volume-control" title="Group volume"><span>◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${escapeAttr(group.groupId)}"><span class="volume-value">${volume}%</span></label><span class="badge">max ${maxVolume}</span></div>
+  const target = escapeAttr(group.groupId);
+  const progress = progressPercent(group);
+  const trackLine = group.trackTitle && group.trackTitle !== 'Unknown'
+    ? `${escapeHtml(group.trackTitle)}${group.artist ? ` — ${escapeHtml(group.artist)}` : ''}`
+    : 'Idle';
+  return `<article class="room-card album-themed-card" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${target}">${albumThemeBackdrop(group)}
+    <div class="room-top">
+      <div class="room-open-button" data-open-group="${target}" role="link" tabindex="0" aria-label="Open player for ${escapeAttr(group.speakerName)}">${artwork(group, 'room')}<span class="room-info"><strong>${escapeHtml(group.speakerName)}</strong><span class="room-track">${trackLine}</span><span class="room-meta">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}<small>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}</small></span></span></div>
+      <button class="room-play-button" style="--room-progress:${progress * 3.6}deg" data-room-progress-group="${target}" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'} ${escapeAttr(group.speakerName)}" aria-label="${group.isPlaying ? 'Pause' : 'Play'} ${escapeAttr(group.speakerName)}"><span aria-hidden="true">${group.isPlaying ? 'Ⅱ' : '▶'}</span></button>
+    </div>
+    <label class="room-volume-control" title="Group volume"><span class="room-volume-icon" aria-hidden="true">◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${target}" aria-label="${escapeAttr(group.speakerName)} group volume"><span class="volume-value">${volume}</span></label>
     ${(group.soundbarNightMode !== null && group.soundbarNightMode !== undefined) || speechLevel > 0 ? `<div class="soundbar-controls"><button class="toggle-chip ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${escapeAttr(group.groupId)}" data-enabled="${group.soundbarNightMode === true}">Night sound</button><button class="toggle-chip ${speechLevel > 0 ? 'on' : ''}" data-command="speech-enhancement" data-target="${escapeAttr(group.groupId)}" data-level="${speechLevel > 0 ? 0 : 1}">Speech ${speechLevel > 0 ? `L${speechLevel}` : 'off'}</button></div>` : ''}
   </article>`;
 }
@@ -568,7 +579,7 @@ function playerDetail(group, maxVolume) {
     </div>
     <article class="player-detail-card album-themed-card" style="${albumThemeStyle(group)}">
       ${albumThemeBackdrop(group)}
-      <div class="player-detail-artwork artwork-wrap">${artwork(group, true)}</div>
+      <div class="player-detail-artwork artwork-wrap">${artwork(group, 'large')}</div>
       <div class="player-detail-content">
         <div class="card-kicker"><span>${escapeHtml(group.speakerName)}</span><span>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}</span></div>
         <div class="player-detail-track">
@@ -597,22 +608,29 @@ function playbackButtons(group) {
   return `<button class="control-button" data-command="previous" data-target="${target}" title="Previous track">‹</button><button class="control-button primary" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'}">${group.isPlaying ? 'Ⅱ' : '▶'}</button><button class="control-button" data-command="next" data-target="${target}" title="Next track">›</button>`;
 }
 
-function artwork(group, large) {
+function artwork(group, variant) {
+  const large = variant === 'large';
+  const room = variant === 'room';
   const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
   const staticArtwork = url
     ? `<img class="${large ? '' : 'room-art'}" src="${escapeAttr(url)}" alt="${escapeAttr(group.album || group.trackTitle || 'Album artwork')}" referrerpolicy="no-referrer">`
     : (large ? '<div class="artwork-fallback">◉</div>' : '<div class="room-art placeholder">◉</div>');
-  if (!large || !group.isPlaying || prefersReducedMotion()) return staticArtwork;
+  if ((!large && !room) || !group.isPlaying || prefersReducedMotion()) {
+    return room ? `<span class="room-artwork">${staticArtwork}</span>` : staticArtwork;
+  }
 
   const key = animatedArtworkKey(group);
   const resolution = key ? model.animatedArtwork.get(key) : null;
   const animatedUrl = resolution?.status === 'ready' && !resolution.unplayable
     ? safeUrl(resolution.url)
     : '';
-  if (!animatedUrl) return staticArtwork;
+  if (!animatedUrl) return room ? `<span class="room-artwork">${staticArtwork}</span>` : staticArtwork;
 
   const poster = url ? ` poster="${escapeAttr(url)}"` : '';
-  return `${staticArtwork}<video class="animated-artwork" data-animated-key="${escapeAttr(key)}" data-animated-src="${escapeAttr(animatedUrl)}"${poster} muted loop playsinline preload="metadata" aria-hidden="true"></video><span class="animated-artwork-badge" aria-hidden="true">Animated</span>`;
+  const animatedArtwork = `${staticArtwork}<video class="animated-artwork" data-animated-key="${escapeAttr(key)}" data-animated-src="${escapeAttr(animatedUrl)}"${poster} muted loop playsinline preload="metadata" aria-hidden="true"></video>`;
+  return room
+    ? `<span class="room-artwork">${animatedArtwork}</span>`
+    : `${animatedArtwork}<span class="animated-artwork-badge" aria-hidden="true">Animated</span>`;
 }
 
 function albumThemeBackdrop(group) {
@@ -730,7 +748,14 @@ function hydrateAnimatedArtwork(playbackTimes = new Map()) {
         }
       }, { once: true });
       video.addEventListener('playing', () => video.classList.add('ready'));
-      video.addEventListener('error', () => markAnimatedArtworkUnplayable(video), { once: true });
+      video.addEventListener('error', () => {
+        console.warn('[dashboard] animated artwork media error', {
+          key: video.dataset.animatedKey,
+          code: video.error?.code ?? null,
+          message: video.error?.message ?? '',
+        });
+        markAnimatedArtworkUnplayable(video);
+      }, { once: true });
       attachAnimatedArtworkSource(video);
     }
     if (!video.dataset.hlsPlayer) playAnimatedArtworkVideo(video);
@@ -740,14 +765,18 @@ function hydrateAnimatedArtwork(playbackTimes = new Map()) {
 function attachAnimatedArtworkSource(video) {
   const source = video.dataset.animatedSrc;
   if (!source) return;
-  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+  const Hls = window.Hls;
+  const playbackMethod = selectAnimatedArtworkPlayback(
+    Hls?.isSupported?.() === true,
+    Boolean(video.canPlayType('application/vnd.apple.mpegurl')),
+  );
+  if (playbackMethod === 'native') {
     video.src = source;
     video.load();
     return;
   }
 
-  const Hls = window.Hls;
-  if (!Hls?.isSupported?.()) {
+  if (playbackMethod === 'unsupported') {
     markAnimatedArtworkUnplayable(video);
     return;
   }
@@ -764,6 +793,11 @@ function attachAnimatedArtworkSource(video) {
   player.on(Hls.Events.MANIFEST_PARSED, () => playAnimatedArtworkVideo(video));
   player.on(Hls.Events.ERROR, (_event, data) => {
     if (!data?.fatal) return;
+    console.warn('[dashboard] animated artwork HLS error', {
+      key: video.dataset.animatedKey,
+      type: data.type,
+      details: data.details,
+    });
     markAnimatedArtworkUnplayable(video);
     player.destroy();
     model.animatedArtworkPlayers.delete(entry);
@@ -773,7 +807,14 @@ function attachAnimatedArtworkSource(video) {
 }
 
 function playAnimatedArtworkVideo(video) {
-  void video.play().catch(() => video.classList.remove('ready'));
+  void video.play().catch(error => {
+    console.warn('[dashboard] animated artwork playback rejected', {
+      key: video.dataset.animatedKey,
+      name: error?.name ?? 'Error',
+      message: error?.message ?? '',
+    });
+    video.classList.remove('ready');
+  });
 }
 
 function markAnimatedArtworkUnplayable(video) {
@@ -819,6 +860,11 @@ function tickPlaybackProgress() {
     const fill = container.querySelector('.progress-fill');
     if (fill) fill.style.width = `${progress}%`;
     container.querySelector('[data-progress-current]')?.replaceChildren(formatTime(position));
+  });
+  document.querySelectorAll('[data-room-progress-group]').forEach(button => {
+    const group = byId.get(button.dataset.roomProgressGroup);
+    if (!group) return;
+    button.style.setProperty('--room-progress', `${progressPercent(group, currentPosition(group)) * 3.6}deg`);
   });
 }
 

@@ -182,7 +182,7 @@ button { color: inherit; }
 .badge.warn { color: var(--yellow); }
 
 .room-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 15px; }
-.room-card { padding: 20px; transition: opacity .18s, transform .18s, border-color .18s, box-shadow .18s; }
+.room-card { padding: 0; border-radius: 14px; transition: opacity .18s, transform .18s, border-color .18s, box-shadow .18s; }
 .room-card[draggable="true"] { cursor: grab; }
 .room-card[draggable="true"]:active { cursor: grabbing; }
 .room-card.is-dragging { opacity: .38; transform: scale(.985); }
@@ -202,23 +202,32 @@ button { color: inherit; }
 .grouping-action-tray strong { font-size: 11px; }
 .grouping-action-tray small { margin-top: 2px; color: rgba(255,255,255,.55); font-size: 9px; }
 .sonos-grouping-busy .room-grid { opacity: .58; pointer-events: none; }
-.room-card .album-theme-backdrop img { opacity: .34; filter: blur(46px) saturate(1.12); }
-.room-card .album-theme-backdrop::after { background: linear-gradient(110deg, rgba(18,17,15,.56), rgba(18,17,15,.88)); }
-.room-top { display: flex; align-items: center; gap: 14px; }
-.room-art { width: 70px; height: 70px; flex: 0 0 auto; border-radius: 15px; object-fit: cover; background: linear-gradient(145deg,#493024,#1c1916); }
-.room-art.placeholder { display: grid; place-items: center; color: var(--accent-light); font-size: 23px; }
-.room-info { min-width: 0; }
-.room-info h3 { margin: 0 0 4px; font-size: 16px; }
-.room-info p { margin: 0; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.room-source-row { min-height: 23px; display: flex; align-items: center; gap: 6px; margin-top: 8px; }
-.room-info small { display: block; color: var(--dim); margin-top: 7px; font-size: 9px; }
-.room-detail-button { width: 38px; align-self: stretch; border: 0; border-left: 1px solid var(--line); background: transparent; padding: 0 0 0 12px; color: var(--muted); cursor: pointer; font-size: 18px; }
-.room-detail-button:hover { color: var(--accent-light); }
-.room-detail-button span { display: inline-block; transition: transform .18s; }
-.room-detail-button:hover span { transform: translateX(3px); }
-.room-controls { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
-.room-buttons { display: flex; gap: 6px; }
-.room-buttons .control-button { width: 33px; height: 33px; font-size: 11px; }
+.room-card .album-theme-backdrop img { opacity: .2; filter: blur(42px) saturate(1.08); }
+.room-card .album-theme-backdrop::after { background: linear-gradient(110deg, rgba(18,17,15,.72), rgba(18,17,15,.9)); }
+.room-top { display: flex; align-items: center; gap: 12px; padding: 14px 14px 10px; }
+.room-open-button { min-width: 0; flex: 1; display: flex; align-items: center; gap: 12px; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.room-open-button:focus-visible { outline: 2px solid var(--album-theme); outline-offset: 4px; border-radius: 9px; }
+.room-artwork { width: 44px; height: 44px; position: relative; display: block; flex: 0 0 auto; overflow: hidden; border-radius: 8px; background: linear-gradient(145deg,#493024,#1c1916); }
+.room-art { width: 100%; height: 100%; display: block; object-fit: cover; background: linear-gradient(145deg,#493024,#1c1916); }
+.room-art.placeholder { display: grid; place-items: center; color: var(--accent-light); font-size: 17px; }
+.room-info { min-width: 0; display: block; flex: 1; }
+.room-info strong, .room-info span { display: block; }
+.room-info strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.room-track { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.room-meta { min-height: 18px; display: flex !important; align-items: center; gap: 5px; margin-top: 4px; }
+.room-meta small { color: var(--dim); font-size: 8px; white-space: nowrap; }
+.room-meta .media-badge { min-height: 16px; padding: 2px 5px; }
+.room-meta .media-brand.wordmark { width: 38px; }
+.room-meta .mini-chip { min-height: 16px; padding: 2px 6px; font-size: 7px; }
+.room-play-button { --room-progress: 0deg; width: 32px; height: 32px; position: relative; display: grid; place-items: center; flex: 0 0 auto; border: 0; border-radius: 50%; padding: 0; background: conic-gradient(var(--album-theme) var(--room-progress), rgba(255,255,255,.13) 0); color: #fff; cursor: pointer; }
+.room-play-button::before { content: ""; position: absolute; inset: 2.5px; border-radius: inherit; background: rgba(24,22,20,.86); }
+.room-play-button span { position: relative; z-index: 1; padding-left: 1px; font-size: 10px; font-weight: 750; }
+.room-play-button:hover { filter: brightness(1.15); }
+.room-play-button:focus-visible { outline: 2px solid var(--album-theme); outline-offset: 3px; }
+.room-volume-control { display: grid; grid-template-columns: 24px minmax(0,1fr) 24px; align-items: center; gap: 9px; padding: 0 14px 10px; }
+.room-volume-icon { color: rgba(255,255,255,.4); font-size: 12px; text-align: center; }
+.room-volume-control .volume-value { width: auto; font-variant-numeric: tabular-nums; text-align: center; }
+.room-card > .soundbar-controls { margin: 0; padding: 0 14px 10px; }
 .volume-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 .volume-value { width: 28px; color: var(--muted); font-size: 10px; text-align: right; }
@@ -346,8 +355,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .brand-heading { align-items: flex-start; flex-direction: column; gap: 11px; }
   .log-entry { grid-template-columns: 65px 50px 1fr; }
   .log-source { display: none; }
-  .room-controls { grid-template-columns: 1fr; }
-  .room-detail-button { padding-left: 10px; }
   .player-detail-content { padding: 30px 24px; min-height: 470px; }
   .player-detail-track h2 { font-size: 34px; }
   .player-soundbar-controls { align-items: flex-start; flex-direction: column; }
