@@ -63,6 +63,7 @@ export class HueAmbienceService {
   private readonly sessions = new Map<string, HueAmbienceGroupSession>();
   private readonly latestSnapshots = new Map<string, HueSnapshot>();
   private lastError: string | null = null;
+  private runtimePaused = false;
 
   constructor(
     private readonly store: HueAmbienceConfigStore,
@@ -106,10 +107,18 @@ export class HueAmbienceService {
     await this.stopAllActive();
     await this.store.clear();
     this.config = null;
+    this.runtimePaused = false;
     this.lastError = null;
   }
 
+  async start(): Promise<void> {
+    this.runtimePaused = false;
+    this.lastError = null;
+    this.replaySnapshots([...this.latestSnapshots.values()]);
+  }
+
   async stop(): Promise<void> {
+    this.runtimePaused = true;
     this.cancelAllScheduledStops();
     this.cancelAllPendingWork();
     await this.stopAllActive();
@@ -135,6 +144,7 @@ export class HueAmbienceService {
     return {
       ...this.store.status(),
       runtimeActive: activeGroups.length > 0,
+      runtimePaused: this.runtimePaused,
       activeGroupId: primaryGroup?.groupId ?? null,
       lastTrackKey: primaryGroup?.lastTrackKey ?? null,
       lastError: this.lastError,
@@ -200,6 +210,10 @@ export class HueAmbienceService {
       this.cancelAllScheduledStops();
       this.cancelAllPendingWork();
       void this.stopAllActive();
+      return;
+    }
+
+    if (this.runtimePaused) {
       return;
     }
 

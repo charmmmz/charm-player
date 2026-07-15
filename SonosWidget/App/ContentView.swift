@@ -44,6 +44,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             routePendingAppleMusicShareToHomeIfNeeded()
             syncPlayerOrientationPolicy()
+            Task {
+                await RelayManager.shared.probeNow()
+                MusicAmbienceManager.shared.refreshStatus()
+            }
         }
         .onChange(of: manager.isConfigured) { _, _ in
             syncPlayerOrientationPolicy()

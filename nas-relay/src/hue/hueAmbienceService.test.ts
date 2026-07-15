@@ -21,6 +21,40 @@ test('default stop grace buffers Sonos track-change transport gaps', () => {
   assert.equal(DEFAULT_STOP_GRACE_MS, 4_000);
 });
 
+test('manual stop remains paused across snapshots until start replays the latest playback', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(config);
+    const client = new RecordingHueLightClient();
+    const service = new HueAmbienceService(
+      store,
+      pino({ enabled: false }),
+      () => client,
+      () => [{ r: 1, g: 0, b: 0 }],
+      0,
+    );
+    await service.load();
+
+    service.receiveSnapshot(snapshot('/art-one.jpg'));
+    await waitFor(() => service.status().runtimeActive);
+
+    await service.stop();
+    assert.equal(service.status().runtimePaused, true);
+    assert.equal(service.status().runtimeActive, false);
+
+    service.receiveSnapshot(snapshot('/art-two.jpg'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(service.status().runtimeActive, false);
+
+    await service.start();
+    await waitFor(() => service.status().runtimeActive);
+    assert.equal(service.status().runtimePaused, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('saving config immediately reapplies the latest playing Hue ambience snapshot', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
   try {

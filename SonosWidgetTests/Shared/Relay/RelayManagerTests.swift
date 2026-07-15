@@ -569,6 +569,28 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertFalse(relay.shouldDeferLocalHueAmbience)
     }
 
+    func testPausedHueAmbienceRuntimeIsStoredSeparatelyFromConfiguration() async {
+        let relay = RelayManager.shared
+        await prepareUnavailableRelay(relay)
+        defer { resetRelay(relay) }
+
+        relay.updateHueAmbienceRuntimeStatus(
+            configured: true,
+            enabled: true,
+            runtimeActive: false,
+            runtimePaused: true
+        )
+
+        XCTAssertTrue(relay.isHueAmbienceRelayConfigured)
+        XCTAssertTrue(relay.isHueAmbienceRelayEnabled)
+        XCTAssertTrue(relay.isHueAmbienceRelayPaused)
+        XCTAssertEqual(relay.hueAmbienceRuntimeStatus, .ready("NAS ambience stopped"))
+        XCTAssertEqual(
+            relay.hueAmbienceRuntimeDetail,
+            "Start Hue Ambience from the app or relay dashboard."
+        )
+    }
+
     func testStreamingReadyRuntimeReportsClipFallbackDetail() async {
         let relay = RelayManager.shared
         await prepareUnavailableRelay(relay)

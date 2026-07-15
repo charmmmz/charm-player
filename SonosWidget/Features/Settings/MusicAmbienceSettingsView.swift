@@ -15,6 +15,33 @@ enum HueAmbienceSetupPresentation {
     static let updateLightsActionTitle = "Update Lights"
 }
 
+enum HueAmbienceEnableControlPolicy {
+    static func usesRelayRuntime(
+        relayAvailable: Bool,
+        relayConfigured: Bool,
+        relayEnabled: Bool
+    ) -> Bool {
+        relayAvailable && relayConfigured && relayEnabled
+    }
+
+    static func effectiveIsEnabled(
+        localEnabled: Bool,
+        relayAvailable: Bool,
+        relayConfigured: Bool,
+        relayEnabled: Bool,
+        relayPaused: Bool
+    ) -> Bool {
+        guard usesRelayRuntime(
+            relayAvailable: relayAvailable,
+            relayConfigured: relayConfigured,
+            relayEnabled: relayEnabled
+        ) else {
+            return localEnabled
+        }
+        return !relayPaused
+    }
+}
+
 @MainActor
 struct MusicAmbienceSettingsSyncActions {
     let refreshStatus: () -> Void
@@ -295,12 +322,21 @@ struct MusicAmbienceSettingsView: View {
     let playbackSnapshot: HueAmbiencePlaybackSnapshot?
     let presentSetup: () -> Void
     @Bindable private var relay = RelayManager.shared
+    @State private var isChangingRelayRuntime = false
+    @State private var pendingAmbienceEnabled: Bool?
 
     var body: some View {
         Group {
             statusOverviewSection
             setupSection
             musicSection
+        }
+        .task {
+            await relay.refreshHueAmbienceStatus()
+            manager.refreshStatus()
+        }
+        .onChange(of: relay.isHueAmbienceRelayPaused) {
+            manager.refreshStatus()
         }
     }
 
@@ -318,6 +354,7 @@ struct MusicAmbienceSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+
         }
     }
 
@@ -340,8 +377,12 @@ struct MusicAmbienceSettingsView: View {
 
     private var musicSection: some View {
         Section {
-            Toggle("Enable Album Ambience", isOn: $store.isEnabled)
-                .disabled(store.bridge == nil || store.mappings.isEmpty)
+            Toggle("Enable Album Ambience", isOn: ambienceEnabledBinding)
+                .disabled(
+                    store.bridge == nil
+                        || store.mappings.isEmpty
+                        || isChangingRelayRuntime
+                )
 
             if store.bridge != nil {
                 Picker("Group Playback", selection: $store.groupStrategy) {
@@ -448,6 +489,40 @@ struct MusicAmbienceSettingsView: View {
                     sonosSpeakers: sonosSpeakers
                 )
             }
+        )
+    }
+
+    private var ambienceEnabledBinding: Binding<Bool> {
+        Binding {
+            pendingAmbienceEnabled ?? HueAmbienceEnableControlPolicy.effectiveIsEnabled(
+                localEnabled: store.isEnabled,
+                relayAvailable: relay.isAvailable,
+                relayConfigured: relay.isHueAmbienceRelayConfigured,
+                relayEnabled: relay.isHueAmbienceRelayEnabled,
+                relayPaused: relay.isHueAmbienceRelayPaused
+            )
+        } set: { enabled in
+            guard usesRelayRuntimeControl else {
+                store.isEnabled = enabled
+                return
+            }
+
+            pendingAmbienceEnabled = enabled
+            isChangingRelayRuntime = true
+            Task {
+                await relay.setHueAmbienceRunning(enabled)
+                manager.refreshStatus()
+                pendingAmbienceEnabled = nil
+                isChangingRelayRuntime = false
+            }
+        }
+    }
+
+    private var usesRelayRuntimeControl: Bool {
+        HueAmbienceEnableControlPolicy.usesRelayRuntime(
+            relayAvailable: relay.isAvailable,
+            relayConfigured: relay.isHueAmbienceRelayConfigured,
+            relayEnabled: relay.isHueAmbienceRelayEnabled
         )
     }
 

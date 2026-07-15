@@ -4,6 +4,11 @@ import Observation
 @MainActor
 protocol HueAmbienceRelayRuntimeProviding {
     var shouldDeferLocalHueAmbience: Bool { get }
+    var isHueAmbienceRelayPaused: Bool { get }
+}
+
+extension HueAmbienceRelayRuntimeProviding {
+    var isHueAmbienceRelayPaused: Bool { false }
 }
 
 /// Optional NAS-side Live Activity relay. Runs as a global singleton because
@@ -56,6 +61,7 @@ final class RelayManager {
     private(set) var relayDiscoveryMessage: String?
     private(set) var isHueAmbienceRelayConfigured = false
     private(set) var isHueAmbienceRelayEnabled = false
+    private(set) var isHueAmbienceRelayPaused = false
     private(set) var hueAmbienceRuntimeStatus: HueLiveEntertainmentRuntimeStatus = .unavailable
     private(set) var hueAmbienceRuntimeDetail = "Sync Hue Ambience to NAS Relay to enable always-on ambience."
     private(set) var hueAmbienceActiveGroups: [HueAmbienceActiveSyncGroup] = []
@@ -226,6 +232,7 @@ final class RelayManager {
         enabled: Bool = true,
         renderMode: HueAmbienceRelayRenderMode? = nil,
         runtimeActive: Bool? = nil,
+        runtimePaused: Bool? = nil,
         activeTargetIds: [String]? = nil,
         activeGroups: [HueAmbienceActiveSyncGroup]? = nil,
         entertainmentTargetActive: Bool? = nil,
@@ -235,6 +242,7 @@ final class RelayManager {
     ) {
         isHueAmbienceRelayConfigured = configured
         isHueAmbienceRelayEnabled = configured && enabled
+        isHueAmbienceRelayPaused = configured && enabled && runtimePaused == true
         hueAmbienceSyncStatus = configured ? .synced(Date()) : .idle
         hueAmbienceActiveGroups = runtimeActive == true ? activeGroups ?? [] : []
 
@@ -247,6 +255,12 @@ final class RelayManager {
         guard enabled else {
             hueAmbienceRuntimeStatus = .ready("Album ambience disabled")
             hueAmbienceRuntimeDetail = "Enable album ambience to let NAS control your lights."
+            return
+        }
+
+        guard runtimePaused != true else {
+            hueAmbienceRuntimeStatus = .ready("NAS ambience stopped")
+            hueAmbienceRuntimeDetail = "Start Hue Ambience from the app or relay dashboard."
             return
         }
 
@@ -286,6 +300,7 @@ final class RelayManager {
             enabled: health.enabled != false,
             renderMode: health.renderMode,
             runtimeActive: health.runtimeActive,
+            runtimePaused: health.runtimePaused,
             activeTargetIds: health.activeTargetIds,
             activeGroups: health.activeGroups,
             entertainmentTargetActive: health.entertainmentTargetActive,

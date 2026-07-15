@@ -84,7 +84,7 @@ final class MusicAmbienceManager {
             setStatus(.unconfigured)
         } else if shouldDeferLocalHueAmbience {
             resetRenderState()
-            setStatus(.syncing(Self.relayControlStatusTitle))
+            setStatus(relayAmbienceStatus(isPlaying: nil))
         } else {
             refreshHueResourcesIfNeeded(for: store.mappings)
             setStatus(.idle)
@@ -124,7 +124,7 @@ final class MusicAmbienceManager {
         }
         guard !shouldDeferLocalHueAmbience else {
             resetRenderState()
-            setStatus(snapshot.isPlaying ? .syncing(Self.relayControlStatusTitle) : .idle)
+            setStatus(relayAmbienceStatus(isPlaying: snapshot.isPlaying))
             return
         }
         guard snapshot.isPlaying else {
@@ -323,6 +323,14 @@ final class MusicAmbienceManager {
 
     private var shouldDeferLocalHueAmbience: Bool {
         (relayRuntime ?? RelayManager.shared).shouldDeferLocalHueAmbience
+    }
+
+    private func relayAmbienceStatus(isPlaying: Bool?) -> Status {
+        let runtime = relayRuntime ?? RelayManager.shared
+        if runtime.isHueAmbienceRelayPaused {
+            return .paused("NAS Relay ambience stopped")
+        }
+        return isPlaying == false ? .idle : .syncing(Self.relayControlStatusTitle)
     }
 
     private func stopLocalAmbienceForCurrentControlMode() {

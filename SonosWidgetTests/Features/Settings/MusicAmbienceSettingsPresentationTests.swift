@@ -3,6 +3,38 @@ import XCTest
 
 @MainActor
 final class MusicAmbienceSettingsPresentationTests: XCTestCase {
+    func testEnableControlReflectsRelayPausedStateWhenRelayOwnsRuntime() {
+        XCTAssertFalse(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
+            localEnabled: true,
+            relayAvailable: true,
+            relayConfigured: true,
+            relayEnabled: true,
+            relayPaused: true
+        ))
+        XCTAssertTrue(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
+            localEnabled: true,
+            relayAvailable: true,
+            relayConfigured: true,
+            relayEnabled: true,
+            relayPaused: false
+        ))
+    }
+
+    func testEnableControlFallsBackToLocalSettingWithoutActiveRelayRuntime() {
+        XCTAssertTrue(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
+            localEnabled: true,
+            relayAvailable: false,
+            relayConfigured: true,
+            relayEnabled: true,
+            relayPaused: true
+        ))
+        XCTAssertFalse(HueAmbienceEnableControlPolicy.usesRelayRuntime(
+            relayAvailable: true,
+            relayConfigured: true,
+            relayEnabled: false
+        ))
+    }
+
     func testAmbienceSettingsSectionTitleUsesAmbienceLabel() {
         XCTAssertEqual(HueAmbienceStatusPresentation.ambienceSectionTitle, "Ambience")
     }

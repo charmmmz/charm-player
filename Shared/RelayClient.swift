@@ -110,6 +110,7 @@ enum RelayClient {
             let configured: Bool?
             let enabled: Bool?
             let runtimeActive: Bool?
+            let runtimePaused: Bool?
             let renderMode: HueAmbienceRelayRenderMode?
             let activeTargetIds: [String]?
             let activeGroups: [HueAmbienceActiveSyncGroup]?
@@ -122,6 +123,7 @@ enum RelayClient {
                 case configured
                 case enabled
                 case runtimeActive
+                case runtimePaused
                 case renderMode
                 case activeTargetIds
                 case activeGroups
@@ -136,6 +138,7 @@ enum RelayClient {
                 configured = try container.decodeIfPresent(Bool.self, forKey: .configured)
                 enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
                 runtimeActive = try container.decodeIfPresent(Bool.self, forKey: .runtimeActive)
+                runtimePaused = try container.decodeIfPresent(Bool.self, forKey: .runtimePaused)
                 renderMode = try container
                     .decodeIfPresent(String.self, forKey: .renderMode)
                     .flatMap(HueAmbienceRelayRenderMode.init(rawValue:))

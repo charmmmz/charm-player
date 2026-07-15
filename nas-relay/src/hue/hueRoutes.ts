@@ -11,6 +11,26 @@ export function createHueAmbienceRouter(service: HueAmbienceService, log: Logger
     res.json({ ok: true, status: service.status() });
   });
 
+  router.post('/hue-ambience/start', async (_req, res) => {
+    try {
+      await service.start();
+      res.json({ ok: true, status: service.status() });
+    } catch (err) {
+      log.warn({ err }, 'failed to start Hue ambience');
+      res.status(500).json({ ok: false, error: 'hue_start_failed' });
+    }
+  });
+
+  router.post('/hue-ambience/stop', async (_req, res) => {
+    try {
+      await service.stop();
+      res.json({ ok: true, status: service.status() });
+    } catch (err) {
+      log.warn({ err }, 'failed to stop Hue ambience');
+      res.status(500).json({ ok: false, error: 'hue_stop_failed' });
+    }
+  });
+
   router.put('/hue-ambience/config', async (req, res) => {
     const config = req.body as Partial<HueAmbienceRuntimeConfig>;
     const error = validateConfig(config);

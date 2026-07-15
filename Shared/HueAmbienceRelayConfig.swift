@@ -143,6 +143,7 @@ extension RelayClient {
             let lights: Int?
             let areas: Int?
             let runtimeActive: Bool?
+            let runtimePaused: Bool?
             let activeGroupId: String?
             let renderMode: HueAmbienceRelayRenderMode?
             let activeTargetIds: [String]?
@@ -160,6 +161,7 @@ extension RelayClient {
                 case lights
                 case areas
                 case runtimeActive
+                case runtimePaused
                 case activeGroupId
                 case renderMode
                 case activeTargetIds
@@ -179,6 +181,7 @@ extension RelayClient {
                 lights = try container.decodeIfPresent(Int.self, forKey: .lights)
                 areas = try container.decodeIfPresent(Int.self, forKey: .areas)
                 runtimeActive = try container.decodeIfPresent(Bool.self, forKey: .runtimeActive)
+                runtimePaused = try container.decodeIfPresent(Bool.self, forKey: .runtimePaused)
                 activeGroupId = try container.decodeIfPresent(String.self, forKey: .activeGroupId)
                 renderMode = try container
                     .decodeIfPresent(String.self, forKey: .renderMode)
@@ -224,6 +227,16 @@ extension RelayClient {
         request.httpMethod = "DELETE"
         let (_, response) = try await noProxySession.data(for: request)
         try validate(response)
+    }
+
+    static func setHueAmbienceRunning(baseURL: URL, running: Bool) async throws -> HueAmbienceStatusResponse {
+        let action = running ? "start" : "stop"
+        let url = baseURL.appendingPathComponent("/api/hue-ambience/\(action)")
+        var request = URLRequest(url: url, timeoutInterval: 8)
+        request.httpMethod = "POST"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(HueAmbienceStatusResponse.self, from: data)
     }
 }
 
@@ -280,6 +293,33 @@ extension RelayManager {
                 enabled: response.status.enabled != false,
                 renderMode: response.status.renderMode,
                 runtimeActive: response.status.runtimeActive,
+                runtimePaused: response.status.runtimePaused,
+                activeTargetIds: response.status.activeTargetIds,
+                activeGroups: response.status.activeGroups,
+                entertainmentTargetActive: response.status.entertainmentTargetActive,
+                entertainmentMetadataComplete: response.status.entertainmentMetadataComplete,
+                lastFrameAt: response.status.lastFrameAt,
+                lastError: response.status.lastError
+            )
+        } catch {
+            hueAmbienceSyncStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func setHueAmbienceRunning(_ running: Bool) async {
+        guard let url else {
+            hueAmbienceSyncStatus = .failed("NAS Relay is not reachable yet")
+            return
+        }
+
+        do {
+            let response = try await RelayClient.setHueAmbienceRunning(baseURL: url, running: running)
+            updateHueAmbienceRuntimeStatus(
+                configured: response.status.configured,
+                enabled: response.status.enabled != false,
+                renderMode: response.status.renderMode,
+                runtimeActive: response.status.runtimeActive,
+                runtimePaused: response.status.runtimePaused,
                 activeTargetIds: response.status.activeTargetIds,
                 activeGroups: response.status.activeGroups,
                 entertainmentTargetActive: response.status.entertainmentTargetActive,

@@ -142,6 +142,7 @@ export interface HueAmbienceStatus {
 
 export interface HueAmbienceServiceStatus extends HueAmbienceStatus {
   runtimeActive: boolean;
+  runtimePaused: boolean;
   lastTrackKey?: string | null;
 }
 
