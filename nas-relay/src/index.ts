@@ -1,6 +1,7 @@
 import express from 'express';
 import pino from 'pino';
 import pinoHttp from 'pino-http';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -74,6 +75,7 @@ const DASHBOARD_PUBLIC_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../public/dashboard',
 );
+const HLS_JS_FILE = createRequire(import.meta.url).resolve('hls.js/dist/hls.min.js');
 
 async function main(): Promise<void> {
   // ---- core wiring ------------------------------------------------------
@@ -350,6 +352,12 @@ async function main(): Promise<void> {
     log.child({ module: 'animated-artwork' }),
     animatedArtwork,
   ));
+  app.get('/dashboard/vendor/hls.min.js', (_req, res) => {
+    res.type('application/javascript');
+    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(HLS_JS_FILE);
+  });
   app.use('/dashboard', express.static(DASHBOARD_PUBLIC_DIR, {
     index: 'index.html',
     maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
@@ -359,7 +367,7 @@ async function main(): Promise<void> {
       res.setHeader('X-Frame-Options', 'DENY');
       res.setHeader(
         'Content-Security-Policy',
-        "default-src 'self'; img-src 'self' http: https: data:; media-src 'self' https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; img-src 'self' http: https: data:; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
       );
     },
   }));

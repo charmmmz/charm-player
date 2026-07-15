@@ -24,6 +24,7 @@ const model = {
   groupingSourceGroupId: null,
   groupingDragBlocked: false,
   animatedArtwork: new Map(),
+  animatedArtworkPlayers: new Set(),
   artworkThemes: new Map(),
   stateTimer: null,
   progressTimer: null,
@@ -289,6 +290,7 @@ function leaveDashboard() {
   model.state = null;
   model.logs = [];
   model.animatedArtwork.clear();
+  destroyAnimatedArtworkPlayers();
   model.artworkThemes.clear();
   ui.appShell.hidden = true;
   showLogin('');
@@ -706,6 +708,7 @@ async function resolveAnimatedArtwork(groups) {
 }
 
 function hydrateAnimatedArtwork(playbackTimes = new Map()) {
+  destroyDisconnectedAnimatedArtworkPlayers();
   const reduceMotion = prefersReducedMotion();
   document.querySelectorAll('.animated-artwork').forEach(video => {
     const isVisible = video.closest('.view')?.classList.contains('active') === true;
@@ -727,17 +730,71 @@ function hydrateAnimatedArtwork(playbackTimes = new Map()) {
         }
       }, { once: true });
       video.addEventListener('playing', () => video.classList.add('ready'));
-      video.addEventListener('error', () => {
-        video.hidden = true;
-        video.parentElement?.querySelector('.animated-artwork-badge')?.setAttribute('hidden', '');
-        const resolution = model.animatedArtwork.get(video.dataset.animatedKey);
-        if (resolution?.status === 'ready') resolution.unplayable = true;
-      }, { once: true });
-      video.src = video.dataset.animatedSrc;
-      video.load();
+      video.addEventListener('error', () => markAnimatedArtworkUnplayable(video), { once: true });
+      attachAnimatedArtworkSource(video);
     }
-    void video.play().catch(() => video.classList.remove('ready'));
+    if (!video.dataset.hlsPlayer) playAnimatedArtworkVideo(video);
   });
+}
+
+function attachAnimatedArtworkSource(video) {
+  const source = video.dataset.animatedSrc;
+  if (!source) return;
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = source;
+    video.load();
+    return;
+  }
+
+  const Hls = window.Hls;
+  if (!Hls?.isSupported?.()) {
+    markAnimatedArtworkUnplayable(video);
+    return;
+  }
+
+  const player = new Hls({
+    enableWorker: true,
+    lowLatencyMode: false,
+    maxBufferLength: 12,
+    backBufferLength: 0,
+  });
+  const entry = { video, player };
+  model.animatedArtworkPlayers.add(entry);
+  video.dataset.hlsPlayer = 'true';
+  player.on(Hls.Events.MANIFEST_PARSED, () => playAnimatedArtworkVideo(video));
+  player.on(Hls.Events.ERROR, (_event, data) => {
+    if (!data?.fatal) return;
+    markAnimatedArtworkUnplayable(video);
+    player.destroy();
+    model.animatedArtworkPlayers.delete(entry);
+  });
+  player.loadSource(source);
+  player.attachMedia(video);
+}
+
+function playAnimatedArtworkVideo(video) {
+  void video.play().catch(() => video.classList.remove('ready'));
+}
+
+function markAnimatedArtworkUnplayable(video) {
+  video.hidden = true;
+  video.classList.remove('ready');
+  video.parentElement?.querySelector('.animated-artwork-badge')?.setAttribute('hidden', '');
+  const resolution = model.animatedArtwork.get(video.dataset.animatedKey);
+  if (resolution?.status === 'ready') resolution.unplayable = true;
+}
+
+function destroyDisconnectedAnimatedArtworkPlayers() {
+  for (const entry of model.animatedArtworkPlayers) {
+    if (entry.video.isConnected) continue;
+    entry.player.destroy();
+    model.animatedArtworkPlayers.delete(entry);
+  }
+}
+
+function destroyAnimatedArtworkPlayers() {
+  for (const entry of model.animatedArtworkPlayers) entry.player.destroy();
+  model.animatedArtworkPlayers.clear();
 }
 
 function captureAnimatedArtworkTimes() {
