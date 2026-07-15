@@ -393,12 +393,15 @@ private struct GroupVolumeBar: View {
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            // This is intentionally a tap-only ±2 control. A zero-distance
+            // DragGesture claims vertical touches before the surrounding Home
+            // ScrollView can scroll, even though horizontal drags were never
+            // used to set a continuous group volume here.
             .gesture(
-                DragGesture(minimumDistance: 0)
+                SpatialTapGesture()
                     .onEnded { gesture in
-                        guard abs(gesture.translation.width) < 6 else { return }
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        onStep(gesture.startLocation.x < thumbX ? -2 : 2)
+                        onStep(gesture.location.x < thumbX ? -2 : 2)
                     }
             )
         }
