@@ -21,9 +21,12 @@ const model = {
   logsSource: 'all',
   logsQuery: '',
   logsAutoRefresh: true,
+  groupingSourceGroupId: null,
+  groupingDragBlocked: false,
   animatedArtwork: new Map(),
   artworkThemes: new Map(),
   stateTimer: null,
+  progressTimer: null,
   logsTimer: null,
 };
 
@@ -79,20 +82,11 @@ document.querySelectorAll('.nav-item').forEach(button => {
 });
 
 document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-show-sonos], [data-open-group], [data-close-group], [data-command], [data-hue-action], [data-copy-mcp]');
+  const button = event.target.closest('[data-open-group], [data-close-group], [data-command], [data-hue-action], [data-copy-mcp]');
   if (!button) return;
 
-  if (button.dataset.showSonos !== undefined) {
-    model.selectedSonosGroupId = null;
-    showView('sonos');
-    renderSonos(model.state);
-    return;
-  }
-
   if (button.dataset.openGroup !== undefined) {
-    model.selectedSonosGroupId = button.dataset.openGroup;
-    showView('sonos');
-    renderSonos(model.state);
+    openSonosGroup(button.dataset.openGroup);
     return;
   }
 
@@ -130,6 +124,104 @@ document.addEventListener('click', async event => {
     body: JSON.stringify(body),
   }), commandLabel(command));
 });
+
+document.addEventListener('keydown', event => {
+  if (!event.target.matches('.now-playing-card[data-open-group]')) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  openSonosGroup(event.target.dataset.openGroup);
+});
+
+document.addEventListener('pointerdown', event => {
+  model.groupingDragBlocked = Boolean(
+    event.target.closest('.room-card button, .room-card input, .room-card label, .room-card a'),
+  );
+});
+
+document.addEventListener('pointerup', () => {
+  model.groupingDragBlocked = false;
+});
+
+document.addEventListener('dragstart', event => {
+  const card = event.target.closest('.room-card[data-drag-group]');
+  if (!card || model.groupingDragBlocked) {
+    event.preventDefault();
+    return;
+  }
+  const groupId = card.dataset.dragGroup;
+  if (!groupId || !event.dataTransfer) return;
+  model.groupingSourceGroupId = groupId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', groupId);
+  const group = model.state?.sonos?.groups?.find(candidate => candidate.groupId === groupId);
+  document.querySelector('#view-sonos')?.classList.add('sonos-grouping-active');
+  document.querySelector('[data-ungroup-drop]')?.classList.toggle('disabled', (group?.groupMemberCount ?? 1) <= 1);
+  requestAnimationFrame(() => card.classList.add('is-dragging'));
+});
+
+document.addEventListener('dragover', event => {
+  const sourceGroupId = model.groupingSourceGroupId;
+  if (!sourceGroupId) return;
+  const targetCard = event.target.closest('.room-card[data-drag-group]');
+  if (targetCard && targetCard.dataset.dragGroup !== sourceGroupId) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    clearGroupingDropTargets(targetCard);
+    targetCard.classList.add('is-group-drop-target');
+    const targetGroup = model.state?.sonos?.groups?.find(group => group.groupId === targetCard.dataset.dragGroup);
+    targetCard.dataset.dropLabel = `Group with ${targetGroup?.speakerName ?? 'this room'}`;
+    return;
+  }
+
+  const ungroupDrop = event.target.closest('[data-ungroup-drop]');
+  if (ungroupDrop && !ungroupDrop.classList.contains('disabled')) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    clearGroupingDropTargets();
+    ungroupDrop.classList.add('is-group-drop-target');
+  }
+});
+
+document.addEventListener('dragleave', event => {
+  const dropTarget = event.target.closest('.room-card[data-drag-group], [data-ungroup-drop]');
+  if (!dropTarget || dropTarget.contains(event.relatedTarget)) return;
+  dropTarget.classList.remove('is-group-drop-target');
+  delete dropTarget.dataset.dropLabel;
+});
+
+document.addEventListener('drop', async event => {
+  const sourceGroupId = model.groupingSourceGroupId || event.dataTransfer?.getData('text/plain');
+  if (!sourceGroupId) return;
+  const targetCard = event.target.closest('.room-card[data-drag-group]');
+  if (targetCard && targetCard.dataset.dragGroup !== sourceGroupId) {
+    event.preventDefault();
+    const targetGroupId = targetCard.dataset.dragGroup;
+    endGroupingDrag();
+    await runGroupingAction(
+      () => request('/sonos/group', {
+        method: 'POST',
+        body: JSON.stringify({ source: sourceGroupId, into: targetGroupId }),
+      }),
+      `${groupName(model.state, sourceGroupId)} grouped with ${groupName(model.state, targetGroupId)}`,
+    );
+    return;
+  }
+
+  const ungroupDrop = event.target.closest('[data-ungroup-drop]');
+  if (ungroupDrop && !ungroupDrop.classList.contains('disabled')) {
+    event.preventDefault();
+    endGroupingDrag();
+    await runGroupingAction(
+      () => request('/sonos/ungroup', {
+        method: 'POST',
+        body: JSON.stringify({ target: sourceGroupId }),
+      }),
+      `${groupName(model.state, sourceGroupId)} ungrouped`,
+    );
+  }
+});
+
+document.addEventListener('dragend', endGroupingDrag);
 
 document.addEventListener('change', async event => {
   if (event.target.matches('[data-volume-target]')) {
@@ -181,8 +273,10 @@ async function enterDashboard() {
   ui.appShell.hidden = false;
   await refreshState(true);
   clearInterval(model.stateTimer);
+  clearInterval(model.progressTimer);
   clearInterval(model.logsTimer);
   model.stateTimer = setInterval(() => refreshState(false), 5_000);
+  model.progressTimer = setInterval(tickPlaybackProgress, 1_000);
   model.logsTimer = setInterval(() => {
     if (model.activeView === 'logs' && model.logsAutoRefresh) void refreshLogs();
   }, 3_000);
@@ -190,6 +284,7 @@ async function enterDashboard() {
 
 function leaveDashboard() {
   clearInterval(model.stateTimer);
+  clearInterval(model.progressTimer);
   clearInterval(model.logsTimer);
   model.state = null;
   model.logs = [];
@@ -238,7 +333,7 @@ function renderAll() {
   const state = model.state;
   if (!state) return;
   renderOverview(state);
-  renderSonos(state);
+  if (!model.groupingSourceGroupId) renderSonos(state);
   renderActivity(state);
   renderHue(state);
   renderMcp(state);
@@ -251,7 +346,6 @@ function renderOverview(state) {
   const playbackTimes = captureAnimatedArtworkTimes();
   const groups = state.sonos.groups ?? [];
   const featured = groups.find(group => group.isPlaying) ?? groups[0];
-  const otherPlaying = groups.filter(group => group.isPlaying && group.groupId !== featured?.groupId);
   const apnsReady = state.liveActivity.apns?.mode === 'ready';
   const hue = state.hue.ambience ?? {};
   const sessions = state.liveActivity.updateTokenCount ?? 0;
@@ -273,7 +367,6 @@ function renderOverview(state) {
           <div class="session-summary"><strong>${sessions}</strong><span>update sessions</span></div>
           <div class="session-bars">${Array.from({length:3}, (_, i) => `<span class="session-bar ${i < Math.min(sessions,3) ? 'on' : ''}"></span>`).join('')}</div>
         </article>
-        ${otherPlayingSummary(otherPlaying)}
       </div>
     </div>
     <div class="stat-grid">
@@ -302,7 +395,7 @@ function renderSonos(state) {
   }
   document.querySelector('#view-sonos').innerHTML = `
     <div class="section-header"><div class="brand-heading"><img class="integration-logo sonos-logo" src="/dashboard/assets/sonos-wordmark.svg" alt="Sonos"><div><h2>Discovered rooms</h2><p>Playback, volume, and soundbar controls</p></div></div><span class="badge ${state.sonos.discovery.status === 'ready' ? 'good' : 'warn'}">${groups.length} groups · ${escapeHtml(state.sonos.discovery.mode)}</span></div>
-    ${groups.length ? `<div class="room-grid">${groups.map(group => roomCard(group, state.mcp.maxVolume)).join('')}</div>` : emptyState('No Sonos groups discovered', state.sonos.discovery.error ?? 'Make sure the relay and Sonos are on the same LAN, or configure SONOS_SEED_IP.')}`;
+    ${groups.length ? `<div class="grouping-guide"><span class="grouping-guide-icon">⇄</span><span><strong>Group rooms by dragging</strong><small>Drop one speaker card onto another. Drop a grouped room into the tray to separate it.</small></span></div><div class="room-grid">${groups.map(group => roomCard(group, state.mcp.maxVolume)).join('')}</div><div class="grouping-action-tray" data-ungroup-drop><span class="grouping-tray-icon">−</span><span><strong>Ungroup</strong><small>Separate this room group</small></span></div>` : emptyState('No Sonos groups discovered', state.sonos.discovery.error ?? 'Make sure the relay and Sonos are on the same LAN, or configure SONOS_SEED_IP.')}`;
   hydrateAnimatedArtwork(playbackTimes);
   void resolveAnimatedArtwork(groups);
   void resolveArtworkThemes(groups);
@@ -425,16 +518,23 @@ function showView(view) {
   if (view === 'logs') void refreshLogs();
 }
 
+function openSonosGroup(groupId) {
+  if (!groupId || !model.state) return;
+  model.selectedSonosGroupId = groupId;
+  showView('sonos');
+  renderSonos(model.state);
+}
+
 function nowPlayingCard(group, maxVolume) {
   const progress = progressPercent(group);
   const volume = group.groupVolume ?? 0;
-  return `<article class="now-playing-card album-themed-card" style="${albumThemeStyle(group)}">
+  return `<article class="now-playing-card album-themed-card is-clickable" style="${albumThemeStyle(group)}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(group.speakerName)} in Sonos">
     ${albumThemeBackdrop(group)}
     <div class="artwork-wrap">${artwork(group, true)}</div>
     <div class="now-playing-content">
-      <div class="card-kicker"><span>Now playing</span><span class="room-live">${escapeHtml(group.speakerName)}</span></div>
+      <div class="card-kicker"><span>Now playing</span><span class="room-live">${escapeHtml(group.speakerName)} <span class="open-player-arrow">→</span></span></div>
       <div class="track-meta"><h2>${escapeHtml(group.trackTitle || 'Not playing')}</h2><p>${escapeHtml([group.artist, group.album].filter(Boolean).join(' · ') || 'No media metadata')}</p><div class="quality-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}${chip(`${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}`)}</div></div>
-      <div class="progress-row"><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><div class="progress-times"><span>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div></div>
+      <div class="progress-row" data-progress-group="${escapeAttr(group.groupId)}"><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><div class="progress-times"><span data-progress-current>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div></div>
       <div class="playback-controls">${playbackButtons(group)}<span class="volume-mini">VOL ${Math.min(volume,maxVolume)}%</span></div>
     </div>
   </article>`;
@@ -447,21 +547,9 @@ function emptyNowPlaying() {
 function roomCard(group, maxVolume) {
   const volume = Math.min(group.groupVolume ?? 0, maxVolume);
   const speechLevel = group.soundbarSpeechEnhancementRawLevel ?? 0;
-  return `<article class="room-card album-themed-card" style="${albumThemeStyle(group)}">${albumThemeBackdrop(group)}<div class="room-top">${artwork(group, false)}<div class="room-info"><h3>${escapeHtml(group.speakerName)}</h3><p>${escapeHtml(group.trackTitle || 'Not playing')}${group.artist ? ` · ${escapeHtml(group.artist)}` : ''}</p><small>${group.isPlaying ? 'PLAYING' : 'PAUSED'} · ${escapeHtml(group.playbackSourceRaw ?? 'unknown')} · ${group.groupMemberCount} MEMBERS</small></div><button class="room-detail-button" data-open-group="${escapeAttr(group.groupId)}" aria-label="Open player for ${escapeAttr(group.speakerName)}">Open <span>→</span></button></div>
+  return `<article class="room-card album-themed-card" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${escapeAttr(group.groupId)}">${albumThemeBackdrop(group)}<div class="room-top">${artwork(group, false)}<div class="room-info"><h3>${escapeHtml(group.speakerName)}</h3><p>${escapeHtml(group.trackTitle || 'Not playing')}${group.artist ? ` · ${escapeHtml(group.artist)}` : ''}</p><div class="room-source-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}</div><small>${group.isPlaying ? 'PLAYING' : 'PAUSED'} · ${group.groupMemberCount} MEMBERS</small></div><button class="room-detail-button" data-open-group="${escapeAttr(group.groupId)}" aria-label="Open player for ${escapeAttr(group.speakerName)}"><span aria-hidden="true">→</span></button></div>
     <div class="room-controls"><div class="room-buttons">${playbackButtons(group)}</div><label class="volume-control" title="Group volume"><span>◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${escapeAttr(group.groupId)}"><span class="volume-value">${volume}%</span></label><span class="badge">max ${maxVolume}</span></div>
     ${(group.soundbarNightMode !== null && group.soundbarNightMode !== undefined) || speechLevel > 0 ? `<div class="soundbar-controls"><button class="toggle-chip ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${escapeAttr(group.groupId)}" data-enabled="${group.soundbarNightMode === true}">Night sound</button><button class="toggle-chip ${speechLevel > 0 ? 'on' : ''}" data-command="speech-enhancement" data-target="${escapeAttr(group.groupId)}" data-level="${speechLevel > 0 ? 0 : 1}">Speech ${speechLevel > 0 ? `L${speechLevel}` : 'off'}</button></div>` : ''}
-  </article>`;
-}
-
-function otherPlayingSummary(groups) {
-  return `<article class="panel-card also-playing-card">
-    <div class="panel-heading"><div><h2>Also playing</h2><p>${groups.length ? `${groups.length} other active room${groups.length === 1 ? '' : 's'}` : 'No other rooms are active'}</p></div><button class="secondary-button" data-show-sonos>View Sonos</button></div>
-    ${groups.length ? `<div class="also-playing-list">${groups.map(group => `
-      <button class="also-playing-row" data-open-group="${escapeAttr(group.groupId)}">
-        ${artwork(group, false)}
-        <span><strong>${escapeHtml(group.speakerName)}</strong><small>${escapeHtml(group.trackTitle || 'Unknown track')}${group.artist ? ` · ${escapeHtml(group.artist)}` : ''}</small></span>
-        <span class="also-playing-arrow">→</span>
-      </button>`).join('')}</div>` : '<p class="also-playing-empty">Start playback in another room to see it here.</p>'}
   </article>`;
 }
 
@@ -485,11 +573,11 @@ function playerDetail(group, maxVolume) {
           <h2>${escapeHtml(group.trackTitle || 'Not playing')}</h2>
           <p>${escapeHtml(group.artist || 'Unknown artist')}</p>
           <small>${escapeHtml(group.album || 'No album metadata')}</small>
-          <div class="quality-row">${chip(group.playbackSourceRaw)}${chip(group.audioQualityLabel)}</div>
+          <div class="quality-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}</div>
         </div>
-        <div class="player-detail-progress">
+        <div class="player-detail-progress" data-progress-group="${escapeAttr(group.groupId)}">
           <div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div>
-          <div class="progress-times"><span>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div>
+          <div class="progress-times"><span data-progress-current>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div>
         </div>
         <div class="player-detail-controls">${playbackButtons(group)}</div>
         <label class="player-volume-control">
@@ -662,6 +750,21 @@ function captureAnimatedArtworkTimes() {
   return times;
 }
 
+function tickPlaybackProgress() {
+  const groups = model.state?.sonos?.groups ?? [];
+  if (!groups.length) return;
+  const byId = new Map(groups.map(group => [group.groupId, group]));
+  document.querySelectorAll('[data-progress-group]').forEach(container => {
+    const group = byId.get(container.dataset.progressGroup);
+    if (!group) return;
+    const position = currentPosition(group);
+    const progress = progressPercent(group, position);
+    const fill = container.querySelector('.progress-fill');
+    if (fill) fill.style.width = `${progress}%`;
+    container.querySelector('[data-progress-current]')?.replaceChildren(formatTime(position));
+  });
+}
+
 function animatedArtworkKey(group) {
   const artist = String(group.artist ?? '').trim().toLowerCase();
   const album = String(group.album ?? '').trim().toLowerCase();
@@ -693,7 +796,8 @@ function streamingServiceBadge(value) {
     youtubemusic: ['/dashboard/assets/brand-youtube-music.svg', 'YouTube Music', 'icon'],
     neteasemusic: ['/dashboard/assets/brand-netease-music.svg', 'NetEase Cloud Music', 'icon'],
   };
-  const brand = brands[key];
+  const brand = brands[key] ?? Object.entries(brands)
+    .find(([brandKey]) => key.startsWith(brandKey) || key.endsWith(brandKey))?.[1];
   if (!brand) return chip(value);
   return `<span class="media-badge"><img class="media-brand ${brand[2]}" src="${brand[0]}" alt="${brand[1]}"></span>`;
 }
@@ -735,6 +839,37 @@ async function runAction(element, operation, successMessage) {
   } finally {
     element.disabled = false;
   }
+}
+
+async function runGroupingAction(operation, successMessage) {
+  document.querySelector('#view-sonos')?.classList.add('sonos-grouping-busy');
+  try {
+    await operation();
+    showToast(successMessage);
+    model.selectedSonosGroupId = null;
+    await refreshState(false);
+  } catch (error) {
+    showToast(friendlyError(error), true);
+  } finally {
+    document.querySelector('#view-sonos')?.classList.remove('sonos-grouping-busy');
+  }
+}
+
+function clearGroupingDropTargets(except = null) {
+  document.querySelectorAll('.is-group-drop-target').forEach(element => {
+    if (element === except) return;
+    element.classList.remove('is-group-drop-target');
+    delete element.dataset.dropLabel;
+  });
+}
+
+function endGroupingDrag() {
+  model.groupingSourceGroupId = null;
+  model.groupingDragBlocked = false;
+  clearGroupingDropTargets();
+  document.querySelectorAll('.room-card.is-dragging').forEach(card => card.classList.remove('is-dragging'));
+  document.querySelector('#view-sonos')?.classList.remove('sonos-grouping-active');
+  document.querySelector('[data-ungroup-drop]')?.classList.remove('disabled');
 }
 
 async function request(path, options = {}) {
@@ -787,8 +922,8 @@ function shortId(value) { if (!value) return '—'; return value.length > 15 ? `
 function selected(value) { return model.logsSource === value ? 'selected' : ''; }
 function safeUrl(value) { try { const url = new URL(value); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } }
 function safeThemeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? String(value).toUpperCase() : ''; }
-function currentPosition(group) { if (!group.isPlaying) return group.positionSeconds ?? 0; const elapsed = Math.max(0, (Date.now() - Date.parse(group.sampledAt)) / 1000); return Math.min(group.durationSeconds || Infinity, (group.positionSeconds ?? 0) + elapsed); }
-function progressPercent(group) { return group.durationSeconds > 0 ? Math.min(100, Math.max(0, currentPosition(group) / group.durationSeconds * 100)) : 0; }
+function currentPosition(group) { if (!group.isPlaying) return group.positionSeconds ?? 0; const sampledAt = Date.parse(group.sampledAt); const elapsed = Number.isFinite(sampledAt) ? Math.max(0, (Date.now() - sampledAt) / 1000) : 0; return Math.min(group.durationSeconds || Infinity, (group.positionSeconds ?? 0) + elapsed); }
+function progressPercent(group, position = currentPosition(group)) { return group.durationSeconds > 0 ? Math.min(100, Math.max(0, position / group.durationSeconds * 100)) : 0; }
 function formatTime(seconds) { const safe = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0; return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2,'0')}`; }
 function formatClock(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
 function formatRelative(value) { const date = new Date(value); if (Number.isNaN(date.valueOf())) return '—'; const delta = Math.round((date.valueOf() - Date.now()) / 1000); const abs = Math.abs(delta); if (abs < 60) return delta < 0 ? `${abs}s ago` : `in ${abs}s`; if (abs < 3600) return delta < 0 ? `${Math.round(abs/60)}m ago` : `in ${Math.round(abs/60)}m`; if (abs < 86400) return delta < 0 ? `${Math.round(abs/3600)}h ago` : `in ${Math.round(abs/3600)}h`; return date.toLocaleDateString('en-US'); }

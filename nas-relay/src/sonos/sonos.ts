@@ -391,6 +391,56 @@ export class SonosBridge extends EventEmitter {
     await this.refreshSnapshot(coord);
   }
 
+  /// Moves every visible member of one Sonos group into another group.
+  async mergeGroups(sourceGroupId: string, intoGroupId: string): Promise<void> {
+    if (sourceGroupId === intoGroupId) {
+      throw new Error('same_group: source and destination groups must be different');
+    }
+
+    const groups = await this.loadAllZoneGroups();
+    const source = this.requireZoneGroup(groups, sourceGroupId);
+    const target = this.requireZoneGroup(groups, intoGroupId);
+    const targetCoordinatorUuid = firstObjectString(target.coordinator?.uuid);
+    if (!targetCoordinatorUuid) {
+      throw new Error(`missing_coordinator: no coordinator UUID for group ${intoGroupId}`);
+    }
+
+    const members = this.visibleZoneMembers(source);
+    if (!members.length) {
+      throw new Error(`empty_group: no visible members for group ${sourceGroupId}`);
+    }
+
+    for (const member of members) {
+      const device = this.requireZoneMemberDevice(member);
+      await device.AVTransportService.SetAVTransportURI({
+        InstanceID: 0,
+        CurrentURI: `x-rincon:${targetCoordinatorUuid}`,
+        CurrentURIMetaData: '',
+      });
+      if (members.length > 1) await topologyMutationDelay(300);
+    }
+
+    await this.refreshTopologyAfterMutation();
+  }
+
+  /// Separates every non-coordinator member, leaving each visible room standalone.
+  async separateGroup(groupId: string): Promise<void> {
+    const groups = await this.loadAllZoneGroups();
+    const source = this.requireZoneGroup(groups, groupId);
+    const coordinatorUuid = firstObjectString(source.coordinator?.uuid);
+    const members = this.visibleZoneMembers(source)
+      .filter(member => firstObjectString(member.uuid) !== coordinatorUuid);
+    if (!members.length) return;
+
+    for (const member of members) {
+      const device = this.requireZoneMemberDevice(member);
+      await device.AVTransportService.BecomeCoordinatorOfStandaloneGroup({ InstanceID: 0 });
+      if (members.length > 1) await topologyMutationDelay(300);
+    }
+
+    await this.refreshTopologyAfterMutation();
+  }
+
   async setSoundbarNightMode(groupId: string, enabled: boolean): Promise<void> {
     const coord = this.requireCoordinator(groupId);
     await this.setEQLevel(coord, 'NightMode', enabled ? 1 : 0);
@@ -416,6 +466,64 @@ export class SonosBridge extends EventEmitter {
       throw new Error(`unknown_group: no coordinator matches groupId ${groupId}`);
     }
     return coord;
+  }
+
+  private async loadAllZoneGroups(): Promise<ParsedZoneGroup[]> {
+    const manager = this.manager as unknown as {
+      LoadAllGroups?: () => Promise<ParsedZoneGroup[]>;
+    };
+    if (typeof manager.LoadAllGroups !== 'function') {
+      throw new Error('grouping_unavailable: Sonos topology service is unavailable');
+    }
+    return manager.LoadAllGroups.call(this.manager);
+  }
+
+  private requireZoneGroup(groups: ParsedZoneGroup[], groupId: string): ParsedZoneGroup {
+    const group = groups.find(candidate => zoneGroupMatchesCoordinator(candidate, groupId, groupId));
+    if (!group) throw new Error(`unknown_group: no Sonos topology group matches ${groupId}`);
+    return group;
+  }
+
+  private visibleZoneMembers(group: ParsedZoneGroup): NonNullable<ParsedZoneGroup['members']> {
+    return (group.members ?? [])
+      .filter(member => !isInvisibleDevice(member as unknown as Record<string, unknown>));
+  }
+
+  private requireZoneMemberDevice(member: NonNullable<ParsedZoneGroup['members']>[number]): SonosDevice {
+    const host = firstObjectString(member.host);
+    const uuid = firstObjectString(member.uuid);
+    const device = this.manager.Devices.find(candidate => (
+      (host && candidate.Host === host) || (uuid && candidate.Uuid === uuid)
+    ));
+    if (!device) {
+      throw new Error(`unknown_player: no Sonos device matches ${uuid || host || 'topology member'}`);
+    }
+    return device;
+  }
+
+  private async refreshTopologyAfterMutation(): Promise<void> {
+    await topologyMutationDelay(500);
+    const groups = await this.loadAllZoneGroups();
+    const activeGroupIds = new Set<string>();
+
+    for (const group of groups) {
+      const host = firstObjectString(group.coordinator?.host);
+      const uuid = firstObjectString(group.coordinator?.uuid);
+      if (host) activeGroupIds.add(host);
+      const coordinator = this.manager.Devices.find(device => (
+        (host && device.Host === host) || (uuid && device.Uuid === uuid)
+      ));
+      if (!coordinator) continue;
+      try {
+        await this.refreshSnapshot(coordinator);
+      } catch (err) {
+        this.log.debug({ err, groupId: host || uuid }, 'post-grouping Sonos snapshot refresh failed');
+      }
+    }
+
+    for (const groupId of this.snapshots.keys()) {
+      if (!activeGroupIds.has(groupId)) this.snapshots.delete(groupId);
+    }
   }
 
   // ---- internals --------------------------------------------------------
@@ -1175,6 +1283,10 @@ interface ParsedZoneGroup {
     uuid?: string;
     Invisible?: boolean;
   }>;
+}
+
+function topologyMutationDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata {

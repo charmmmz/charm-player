@@ -5,7 +5,6 @@ import pino from 'pino';
 
 import { DeviceLogService } from '../diagnostics/deviceLogs.js';
 import { RelayLogBuffer } from '../diagnostics/relayLogs.js';
-import type { SonosMcpController } from '../mcp/sonosMcpRouter.js';
 import type { SonosGroupSnapshot } from '../types.js';
 import {
   createDashboardRouter,
@@ -91,6 +90,24 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
     assert.equal(control.status, 200);
     assert.deepEqual(controller.calls, [{ action: 'pause', groupId: '192.168.50.25' }]);
 
+    const grouped = await fetch(`${service.baseURL}/api/dashboard/sonos/group`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'Kitchen', into: 'Living Room' }),
+    });
+    assert.equal(grouped.status, 200);
+
+    const ungrouped = await fetch(`${service.baseURL}/api/dashboard/sonos/ungroup`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'Living Room' }),
+    });
+    assert.equal(ungrouped.status, 200);
+    assert.deepEqual(controller.calls.slice(-2), [
+      { action: 'group', groupId: '192.168.50.30', intoGroupId: '192.168.50.25' },
+      { action: 'ungroup', groupId: '192.168.50.25' },
+    ]);
+
     const logsResponse = await fetch(`${service.baseURL}/api/dashboard/logs`, {
       headers: { Cookie: cookie },
     });
@@ -108,10 +125,14 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
   }
 });
 
-class FakeDashboardSonos implements SonosMcpController {
+class FakeDashboardSonos {
   readonly discovery = { mode: 'auto' as const, status: 'ready' as const, error: null };
-  readonly calls: Array<{ action: string; groupId: string }> = [];
-  private readonly snapshots = [snapshot()];
+  readonly calls: Array<{ action: string; groupId: string; intoGroupId?: string }> = [];
+  private readonly snapshots = [snapshot(), snapshot({
+    groupId: '192.168.50.30',
+    speakerName: 'Kitchen',
+    groupMemberCount: 1,
+  })];
 
   allSnapshots() { return this.snapshots; }
   current(groupId: string) { return this.snapshots.find(value => value.groupId === groupId); }
@@ -123,6 +144,8 @@ class FakeDashboardSonos implements SonosMcpController {
   async setGroupVolume(groupId: string) { this.calls.push({ action: 'volume', groupId }); }
   async setSoundbarNightMode(groupId: string) { this.calls.push({ action: 'night', groupId }); }
   async setSoundbarSpeechEnhancementRawLevel(groupId: string) { this.calls.push({ action: 'speech', groupId }); }
+  async mergeGroups(groupId: string, intoGroupId: string) { this.calls.push({ action: 'group', groupId, intoGroupId }); }
+  async separateGroup(groupId: string) { this.calls.push({ action: 'ungroup', groupId }); }
 }
 
 function fakeDependencies(
@@ -177,10 +200,11 @@ async function startDashboardServer(dependencies: DashboardDependencies) {
   };
 }
 
-function snapshot(): SonosGroupSnapshot {
+function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapshot {
   return {
     groupId: '192.168.50.25', speakerName: 'Living Room', trackTitle: 'Song', artist: 'Artist', album: 'Album',
     albumArtUri: 'https://example.com/cover.jpg', isPlaying: true, groupVolume: 28, playbackSourceRaw: 'appleMusic', positionSeconds: 10,
     durationSeconds: 200, groupMemberCount: 2, sampledAt: new Date('2026-07-15T00:00:00Z'),
+    ...overrides,
   };
 }

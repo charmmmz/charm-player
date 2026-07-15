@@ -26,7 +26,11 @@ interface DismissalSummaries {
 }
 
 export interface DashboardDependencies {
-  sonos: SonosMcpController & { discovery: SonosDiscoveryState };
+  sonos: SonosMcpController & {
+    discovery: SonosDiscoveryState;
+    mergeGroups(sourceGroupId: string, intoGroupId: string): Promise<void>;
+    separateGroup(groupId: string): Promise<void>;
+  };
   hue: {
     status(): HueAmbienceServiceStatus;
     entertainmentStatus(): Promise<HueEntertainmentStatus>;
@@ -225,6 +229,25 @@ export function createDashboardRouter(
     const action = req.params.action;
     const target = typeof req.body?.target === 'string' ? req.body.target : '';
     try {
+      if (action === 'group') {
+        const sourceTarget = typeof req.body?.source === 'string' ? req.body.source : '';
+        const intoTarget = typeof req.body?.into === 'string' ? req.body.into : '';
+        const snapshots = dependencies.sonos.allSnapshots();
+        const source = resolveMcpTarget(sourceTarget, snapshots);
+        const into = resolveMcpTarget(intoTarget, snapshots);
+        if (source.groupId === into.groupId) {
+          res.status(400).json({ ok: false, error: 'source and destination groups must be different' });
+          return;
+        }
+        await dependencies.sonos.mergeGroups(source.groupId, into.groupId);
+        dashboardLog.info(
+          { action, sourceGroupId: source.groupId, intoGroupId: into.groupId },
+          'dashboard Sonos grouping control',
+        );
+        res.json({ ok: true, groups: dependencies.sonos.allSnapshots().map(snapshotJson) });
+        return;
+      }
+
       const resolved = resolveMcpTarget(target, dependencies.sonos.allSnapshots());
       switch (action) {
       case 'play':
@@ -265,6 +288,9 @@ export function createDashboardRouter(
         await dependencies.sonos.setSoundbarSpeechEnhancementRawLevel(resolved.groupId, level);
         break;
       }
+      case 'ungroup':
+        await dependencies.sonos.separateGroup(resolved.groupId);
+        break;
       default:
         res.status(404).json({ ok: false, error: 'unsupported_action' });
         return;

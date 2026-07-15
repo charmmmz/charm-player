@@ -1105,6 +1105,61 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
   assert.equal(snapshot?.groupMemberCount, 2);
 });
 
+test('bridge merges every visible source member into the target coordinator', async () => {
+  const bridge = testBridge();
+  const calls: Array<{ host: string; uri: string }> = [];
+  const sourceCoordinator = groupingDevice('192.168.50.25', 'Playroom', 'rincon-playroom', calls);
+  const sourceMember = groupingDevice('192.168.50.26', 'Kitchen', 'rincon-kitchen', calls);
+  const targetCoordinator = groupingDevice('192.168.50.30', 'Office', 'rincon-office', calls);
+  const groups = [
+    {
+      coordinator: zoneMember(sourceCoordinator),
+      members: [zoneMember(sourceCoordinator), zoneMember(sourceMember)],
+    },
+    {
+      coordinator: zoneMember(targetCoordinator),
+      members: [zoneMember(targetCoordinator)],
+    },
+  ];
+  const manager = (bridge as unknown as {
+    manager: { devices: unknown[]; zoneService: unknown };
+  }).manager;
+  manager.devices = [sourceCoordinator, sourceMember, targetCoordinator];
+  manager.zoneService = { GetParsedZoneGroupState: async () => groups };
+  (bridge as unknown as { refreshTopologyAfterMutation: () => Promise<void> })
+    .refreshTopologyAfterMutation = async () => undefined;
+
+  await bridge.mergeGroups('192.168.50.25', '192.168.50.30');
+
+  assert.deepEqual(calls, [
+    { host: '192.168.50.25', uri: 'x-rincon:rincon-office' },
+    { host: '192.168.50.26', uri: 'x-rincon:rincon-office' },
+  ]);
+});
+
+test('bridge separates non-coordinator members from a Sonos group', async () => {
+  const bridge = testBridge();
+  const separated: string[] = [];
+  const coordinator = standaloneDevice('192.168.50.25', 'Playroom', 'rincon-playroom', separated);
+  const member = standaloneDevice('192.168.50.26', 'Kitchen', 'rincon-kitchen', separated);
+  const manager = (bridge as unknown as {
+    manager: { devices: unknown[]; zoneService: unknown };
+  }).manager;
+  manager.devices = [coordinator, member];
+  manager.zoneService = {
+    GetParsedZoneGroupState: async () => [{
+      coordinator: zoneMember(coordinator),
+      members: [zoneMember(coordinator), zoneMember(member)],
+    }],
+  };
+  (bridge as unknown as { refreshTopologyAfterMutation: () => Promise<void> })
+    .refreshTopologyAfterMutation = async () => undefined;
+
+  await bridge.separateGroup('192.168.50.25');
+
+  assert.deepEqual(separated, ['192.168.50.26']);
+});
+
 test('bridge prefers parsed ZoneGroup members over stale coordinator relationships', async () => {
   const bridge = testBridge();
   const coordinator = playbackDevice({
@@ -1260,6 +1315,42 @@ function playbackDevice(
     },
     ...fields,
   };
+}
+
+function groupingDevice(
+  host: string,
+  name: string,
+  uuid: string,
+  calls: Array<{ host: string; uri: string }>,
+): Record<string, unknown> {
+  return playbackDevice({
+    Host: host,
+    Name: name,
+    Uuid: uuid,
+    AVTransportService: {
+      SetAVTransportURI: async (input: { CurrentURI: string }) => {
+        calls.push({ host, uri: input.CurrentURI });
+      },
+    },
+  });
+}
+
+function standaloneDevice(
+  host: string,
+  name: string,
+  uuid: string,
+  separated: string[],
+): Record<string, unknown> {
+  return playbackDevice({
+    Host: host,
+    Name: name,
+    Uuid: uuid,
+    AVTransportService: {
+      BecomeCoordinatorOfStandaloneGroup: async () => {
+        separated.push(host);
+      },
+    },
+  });
 }
 
 function testBridge(): SonosBridge {
