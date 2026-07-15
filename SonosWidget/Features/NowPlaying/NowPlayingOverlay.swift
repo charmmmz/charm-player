@@ -64,18 +64,8 @@ struct NowPlayingOverlay: View {
         )
     }
 
-    var windowTopSafeAreaInset: CGFloat {
-        UIApplication.shared.sonosPresentationWindow?.safeAreaInsets.top ?? 0
-    }
-
     var windowBottomSafeAreaInset: CGFloat {
         UIApplication.shared.sonosPresentationWindow?.safeAreaInsets.bottom ?? 0
-    }
-
-    var dragHandleTopPadding: CGFloat {
-        NowPlayingOverlayPresentation.dragHandleTopPadding(
-            topSafeAreaInset: windowTopSafeAreaInset
-        )
     }
 
     func bottomActionsBottomPadding(geo: GeometryProxy) -> CGFloat {

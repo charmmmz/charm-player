@@ -62,12 +62,6 @@ extension NowPlayingOverlay {
             errorBanner
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Drag handle stays at the top of the player card. The card itself is
-        // already laid out below the window safe area.
-        .overlay(alignment: .top) {
-            dragHandle
-                .padding(.top, dragHandleTopPadding)
-        }
         .contentShape(Rectangle())
     }
 
@@ -118,10 +112,6 @@ extension NowPlayingOverlay {
             errorBanner
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .top) {
-            dragHandle
-                .padding(.top, dragHandleTopPadding)
-        }
         .overlay(alignment: .topLeading) {
             fullScreenAnimatedArtworkSourceBadge
                 .padding(.leading, 32)
@@ -139,11 +129,8 @@ extension NowPlayingOverlay {
         let artSz = max(80, min(leftW * 0.38, geo.size.height - topPad - fixedBelow))
 
         return HStack(spacing: 0) {
-            // ── Left panel: player (gesture lives here to avoid QueueView List interference) ──
+            // ── Left panel: player ──
             VStack(spacing: 0) {
-                dragHandle
-                    .padding(.top, dragHandleTopPadding)
-
                 Spacer(minLength: topPad)
 
                 HStack(alignment: .center, spacing: 16) {
@@ -226,14 +213,6 @@ extension NowPlayingOverlay {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Drag Handle
-
-    var dragHandle: some View {
-        Capsule()
-            .fill(.white.opacity(0.2))
-            .frame(width: 36, height: 5)
     }
 
     // MARK: - Background

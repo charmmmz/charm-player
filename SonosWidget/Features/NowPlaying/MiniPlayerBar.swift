@@ -96,6 +96,24 @@ nonisolated enum MiniPlayerDragPresentation {
         translationHeight < 0 ? translationHeight * rubberBandFactor : nil
     }
 
+    static func visualOffset(
+        dragOffset: CGFloat,
+        inSystemAccessory: Bool
+    ) -> CGFloat {
+        inSystemAccessory ? 0 : dragOffset
+    }
+
+    static func shouldOpenDuringDrag(
+        inSystemAccessory: Bool,
+        translationHeight: CGFloat,
+        predictedEndTranslationHeight: CGFloat
+    ) -> Bool {
+        inSystemAccessory && shouldOpenFullPlayer(
+            translationHeight: translationHeight,
+            predictedEndTranslationHeight: predictedEndTranslationHeight
+        )
+    }
+
     static func shouldOpenFullPlayer(
         translationHeight: CGFloat,
         predictedEndTranslationHeight: CGFloat
@@ -145,13 +163,11 @@ nonisolated enum NowPlayingOverlayPresentation {
     }
 
     static let horizontalPadding: CGFloat = 0
-    static let topPadding: CGFloat = 4
+    static let topPadding: CGFloat = 0
     static let restingCornerRadius: CGFloat = 0
     static let restingTopCornerRadius: CGFloat = 0
     static let maximumBottomCornerRadius: CGFloat = 0
     static let maximumDraggedCornerRadius: CGFloat = maximumBottomCornerRadius
-    static let dragDismissalResetDelayNanoseconds: UInt64 = 450_000_000
-    static let dragHandleTopMargin: CGFloat = 8
     static let bottomActionsBottomMargin: CGFloat = 22
     static let bottomActionsHomeIndicatorGap: CGFloat = 10
     static let backgroundSafeAreaMode: BackgroundSafeAreaMode = .clippedToRootCard
@@ -184,27 +200,10 @@ nonisolated enum NowPlayingOverlayPresentation {
         )
     }
 
-    static func dragHandleTopPadding(topSafeAreaInset: CGFloat) -> CGFloat {
-        dragHandleTopMargin
-    }
-
     static func bottomActionsBottomPadding(bottomSafeAreaInset: CGFloat) -> CGFloat {
         max(bottomActionsBottomMargin, max(0, bottomSafeAreaInset) + bottomActionsHomeIndicatorGap)
     }
 
-    static func shouldDismissFromDrag(
-        translationHeight: CGFloat,
-        predictedEndTranslationHeight: CGFloat
-    ) -> Bool {
-        translationHeight > 120 || predictedEndTranslationHeight > 300
-    }
-
-    static func shouldResetDragOffsetImmediately(
-        isFullPlayerVisible: Bool,
-        isDismissingFromDrag: Bool
-    ) -> Bool {
-        isFullPlayerVisible || !isDismissingFromDrag
-    }
 }
 
 nonisolated enum PlaybackControlPresentation {
@@ -250,9 +249,7 @@ struct MiniPlayerBar: View {
 
     var body: some View {
         Button {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                manager.showFullPlayer = true
-            }
+            openFullPlayer()
         } label: {
             HStack(spacing: 12) {
                 let isTV = manager.trackInfo?.source == .tv
@@ -329,10 +326,27 @@ struct MiniPlayerBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(y: dragOffset)
+        .offset(y: MiniPlayerDragPresentation.visualOffset(
+            dragOffset: dragOffset,
+            inSystemAccessory: inSystemAccessory
+        ))
         .simultaneousGesture(
             DragGesture(minimumDistance: MiniPlayerDragPresentation.gestureMinimumDistance)
                 .onChanged { value in
+                    if MiniPlayerDragPresentation.shouldOpenDuringDrag(
+                        inSystemAccessory: inSystemAccessory,
+                        translationHeight: value.translation.height,
+                        predictedEndTranslationHeight: value.predictedEndTranslation.height
+                    ) {
+                        openFullPlayer()
+                        return
+                    }
+
+                    if inSystemAccessory {
+                        dragOffset = 0
+                        return
+                    }
+
                     if let offset = MiniPlayerDragPresentation.offset(
                         forTranslationHeight: value.translation.height
                     ) {
@@ -344,10 +358,7 @@ struct MiniPlayerBar: View {
                         translationHeight: value.translation.height,
                         predictedEndTranslationHeight: value.predictedEndTranslation.height
                     ) {
-                        dragOffset = 0
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                            manager.showFullPlayer = true
-                        }
+                        openFullPlayer()
                     } else {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                             dragOffset = 0
@@ -355,6 +366,12 @@ struct MiniPlayerBar: View {
                     }
                 }
         )
+    }
+
+    private func openFullPlayer() {
+        guard !manager.showFullPlayer else { return }
+        dragOffset = 0
+        manager.showFullPlayer = true
     }
 
     /// Mini-player only lights up when the speaker is genuinely unreachable

@@ -233,7 +233,7 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
 
     func testNowPlayingOverlayChromeIsFlushToHorizontalScreenEdgesWhenResting() {
         XCTAssertEqual(NowPlayingOverlayPresentation.horizontalPadding, 0)
-        XCTAssertGreaterThanOrEqual(NowPlayingOverlayPresentation.topPadding, 0)
+        XCTAssertEqual(NowPlayingOverlayPresentation.topPadding, 0)
         XCTAssertEqual(
             NowPlayingOverlayPresentation.cornerRadius(forDragOffset: 0),
             0
@@ -261,63 +261,19 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
         XCTAssertEqual(radii.bottomTrailing, 0)
     }
 
-    func testNowPlayingDragHandleStaysAtCardTop() {
+    func testNowPlayingSheetContentExtendsIntoBottomSafeArea() {
         XCTAssertEqual(
-            NowPlayingOverlayPresentation.dragHandleTopPadding(topSafeAreaInset: 59),
-            NowPlayingOverlayPresentation.dragHandleTopMargin,
-            accuracy: 0.5
-        )
-        XCTAssertEqual(
-            NowPlayingOverlayPresentation.dragHandleTopPadding(topSafeAreaInset: 0),
-            8,
-            accuracy: 0.5
-        )
-    }
-
-    func testNowPlayingOverlayKeepsDragOffsetDuringDragDismissal() {
-        XCTAssertFalse(NowPlayingOverlayPresentation.shouldResetDragOffsetImmediately(
-            isFullPlayerVisible: false,
-            isDismissingFromDrag: true
-        ))
-        XCTAssertTrue(NowPlayingOverlayPresentation.shouldResetDragOffsetImmediately(
-            isFullPlayerVisible: false,
-            isDismissingFromDrag: false
-        ))
-        XCTAssertTrue(NowPlayingOverlayPresentation.shouldResetDragOffsetImmediately(
-            isFullPlayerVisible: true,
-            isDismissingFromDrag: true
-        ))
-    }
-
-    func testNowPlayingOverlayHostIgnoresHorizontalAndBottomSafeAreaWhenFullPlayerIsVisible() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.ignoredSafeAreaEdges(isFullPlayerVisible: true),
-            [.horizontal, .bottom]
-        )
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.ignoredSafeAreaEdges(isFullPlayerVisible: false),
-            .horizontal
-        )
-    }
-
-    func testNowPlayingOverlayHostMountsOnTabViewOverlayLikePreviousImplementation() {
-        XCTAssertEqual(
-            String(describing: NowPlayingOverlayHostPresentation.mountTarget),
-            "tabViewOverlay"
-        )
-    }
-
-    func testNowPlayingOverlayHostOwnsDismissDragOffset() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.overlayOffset(
-                screenHeight: 852,
-                miniPlayerDragOffset: 0,
-                isFullPlayerVisible: true,
-                dismissDragOffset: 44
+            NowPlayingSheetLayout.contentFrameSize(
+                containerSize: CGSize(width: 402, height: 776),
+                bottomSafeAreaInset: 34
             ),
-            44,
-            accuracy: 0.5
+            CGSize(width: 402, height: 880)
         )
+        XCTAssertEqual(NowPlayingSheetLayout.bottomEdgeOverscan, 36)
+    }
+
+    func testNowPlayingSheetBackgroundCoversPresentationChrome() {
+        XCTAssertTrue(NowPlayingSheetLayout.backgroundCoversPresentationChrome)
     }
 
     func testMiniPlayerInteractiveDragStateIsOwnedByPresentationLayer() throws {
@@ -334,79 +290,30 @@ final class AnimatedArtworkPlayerViewTests: XCTestCase {
             translationHeight: -20,
             predictedEndTranslationHeight: -80
         ))
-    }
-
-    func testNowPlayingOverlayHostKeepsDismissDragOffsetWhileAnimatingOffscreen() {
         XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.overlayOffset(
-                screenHeight: 852,
-                miniPlayerDragOffset: 0,
-                isFullPlayerVisible: false,
-                dismissDragOffset: 120
+            MiniPlayerDragPresentation.visualOffset(
+                dragOffset: -44,
+                inSystemAccessory: true
             ),
-            972,
-            accuracy: 0.5
+            0
         )
-    }
-
-    func testNowPlayingOverlayHostExpandsSafeAreaAtGeometryLevel() {
         XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.safeAreaExpansionTarget,
-            .hostGeometry
-        )
-    }
-
-    func testNowPlayingDismissUsesSlideOnlyTransition() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.dismissTransition,
-            .slideOnly
-        )
-    }
-
-    func testNowPlayingOverlayHostAddsBottomSafeAreaToRootCardFrame() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.cardSize(
-                containerSize: CGSize(width: 402, height: 740),
-                bottomSafeAreaInset: 34
+            MiniPlayerDragPresentation.visualOffset(
+                dragOffset: -44,
+                inSystemAccessory: false
             ),
-            CGSize(width: 402, height: 844)
+            -44
         )
-    }
-
-    func testNowPlayingOverlayHostAllowsInternalBackgroundBottomSafeAreaExpansion() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.cardSize(
-                containerSize: CGSize(width: 402, height: 740),
-                bottomSafeAreaInset: 34
-            ).height,
-            844,
-            accuracy: 0.5
-        )
-    }
-
-    func testNowPlayingOverlayHostKeepsBottomOverscanWhileRootClipIsRemoved() {
-        XCTAssertEqual(NowPlayingOverlayHostPresentation.bottomEdgeOverscan, 36)
-    }
-
-    func testNowPlayingOverlayHostUsesUnclippedRootCardForDragPerformanceProbe() {
-        XCTAssertEqual(
-            String(describing: NowPlayingOverlayHostPresentation.rootCardCompositingMode),
-            "unclipped"
-        )
-    }
-
-    func testNowPlayingDismissGestureIsOwnedByRootCard() {
-        XCTAssertEqual(
-            NowPlayingOverlayHostPresentation.dismissGestureAttachment,
-            .rootCard
-        )
-    }
-
-    func testNowPlayingCardClippingIsDisabledForDragPerformanceProbe() {
-        XCTAssertEqual(
-            String(describing: NowPlayingOverlayHostPresentation.clipOwner),
-            "none"
-        )
+        XCTAssertTrue(MiniPlayerDragPresentation.shouldOpenDuringDrag(
+            inSystemAccessory: true,
+            translationHeight: -44,
+            predictedEndTranslationHeight: -80
+        ))
+        XCTAssertFalse(MiniPlayerDragPresentation.shouldOpenDuringDrag(
+            inSystemAccessory: false,
+            translationHeight: -44,
+            predictedEndTranslationHeight: -240
+        ))
     }
 
     func testNowPlayingInternalBackgroundDoesNotEscapeRootCard() {
