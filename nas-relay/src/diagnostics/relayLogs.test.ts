@@ -17,3 +17,36 @@ test('relay log buffer bounds entries and recursively redacts credential-shaped 
   });
   assert.deepEqual(recent[1]?.context, { authorization: '[redacted]' });
 });
+
+test('relay log buffer returns JSON-safe copies for request-like contexts', () => {
+  const logs = new RelayLogBuffer();
+  const requestLike: Record<string, unknown> = {
+    handler: Array.prototype.push,
+    sequence: 42n,
+    marker: Symbol('request'),
+  };
+  requestLike.self = requestLike;
+  Object.defineProperty(requestLike, 'socket', {
+    enumerable: true,
+    get() {
+      throw new Error('socket getter should not run');
+    },
+  });
+
+  assert.doesNotThrow(() => logs.capture(30, [requestLike, 'request completed']));
+  const recent = logs.recent();
+  assert.doesNotThrow(() => JSON.stringify(recent));
+  assert.deepEqual(recent[0]?.context, {
+    handler: '[function push]',
+    sequence: '42',
+    marker: 'Symbol(request)',
+    self: {
+      handler: '[function push]',
+      sequence: '42',
+      marker: 'Symbol(request)',
+      self: '[circular]',
+      socket: '[getter]',
+    },
+    socket: '[getter]',
+  });
+});
