@@ -1,4 +1,15 @@
 import { selectAnimatedArtworkPlayback } from './hlsPlayback.js';
+import {
+  groupDisplayName,
+  groupPlaybackSubtitle,
+  groupPlaybackTitle,
+  groupSourceState,
+  isGroupPlaying,
+  isActivePlaybackGroup,
+  isLiveStreamGroup,
+  isTVGroup,
+  tvAudioPresentation,
+} from './sonosPresentation.js';
 
 const API = '/api/dashboard';
 
@@ -25,6 +36,8 @@ const model = {
   logsAutoRefresh: true,
   groupingSourceGroupId: null,
   groupingDragBlocked: false,
+  expandedMemberGroups: new Set(),
+  speakerOrder: loadSpeakerOrder(),
   animatedArtwork: new Map(),
   animatedArtworkPlayers: new Set(),
   artworkThemes: new Map(),
@@ -85,7 +98,7 @@ document.querySelectorAll('.nav-item').forEach(button => {
 });
 
 document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-open-group], [data-close-group], [data-command], [data-hue-action], [data-copy-mcp]');
+  const button = event.target.closest('[data-open-group], [data-close-group], [data-command], [data-members-toggle], [data-hue-action], [data-copy-mcp]');
   if (!button) return;
 
   if (button.dataset.openGroup !== undefined) {
@@ -106,6 +119,14 @@ document.addEventListener('click', async event => {
     return;
   }
 
+  if (button.dataset.membersToggle !== undefined) {
+    const groupId = button.dataset.membersToggle;
+    if (model.expandedMemberGroups.has(groupId)) model.expandedMemberGroups.delete(groupId);
+    else model.expandedMemberGroups.add(groupId);
+    renderSonos(model.state);
+    return;
+  }
+
   if (button.dataset.hueAction !== undefined) {
     const action = button.dataset.hueAction;
     if (action === 'stop' && !window.confirm('Stop Hue ambience? Lights will follow the configured stop behavior.')) return;
@@ -122,10 +143,11 @@ document.addEventListener('click', async event => {
   const body = { target };
   if (command === 'night-mode') body.enabled = button.dataset.enabled !== 'true';
   if (command === 'speech-enhancement') body.level = Number(button.dataset.level);
+  const rollback = applyOptimisticPlaybackCommand(command, target);
   await runAction(button, () => request(`/sonos/${command}`, {
     method: 'POST',
     body: JSON.stringify(body),
-  }), commandLabel(command));
+  }), commandLabel(command), rollback);
 });
 
 document.addEventListener('keydown', event => {
@@ -172,7 +194,16 @@ document.addEventListener('dragover', event => {
     clearGroupingDropTargets(targetCard);
     targetCard.classList.add('is-group-drop-target');
     const targetGroup = model.state?.sonos?.groups?.find(group => group.groupId === targetCard.dataset.dragGroup);
-    targetCard.dataset.dropLabel = `Group with ${targetGroup?.speakerName ?? 'this room'}`;
+    const rect = targetCard.getBoundingClientRect();
+    const relativeY = event.clientY - rect.top;
+    const edge = rect.height * 0.25;
+    const intent = relativeY < edge ? 'before' : (relativeY > rect.height - edge ? 'after' : 'group');
+    targetCard.dataset.dropIntent = intent;
+    targetCard.classList.toggle('is-reorder-before', intent === 'before');
+    targetCard.classList.toggle('is-reorder-after', intent === 'after');
+    targetCard.dataset.dropLabel = intent === 'group'
+      ? `Group with ${targetGroup ? groupDisplayName(targetGroup) : 'this room'}`
+      : `Move ${intent} ${targetGroup ? groupDisplayName(targetGroup) : 'this room'}`;
     return;
   }
 
@@ -188,8 +219,9 @@ document.addEventListener('dragover', event => {
 document.addEventListener('dragleave', event => {
   const dropTarget = event.target.closest('.room-card[data-drag-group], [data-ungroup-drop]');
   if (!dropTarget || dropTarget.contains(event.relatedTarget)) return;
-  dropTarget.classList.remove('is-group-drop-target');
+  dropTarget.classList.remove('is-group-drop-target', 'is-reorder-before', 'is-reorder-after');
   delete dropTarget.dataset.dropLabel;
+  delete dropTarget.dataset.dropIntent;
 });
 
 document.addEventListener('drop', async event => {
@@ -199,6 +231,14 @@ document.addEventListener('drop', async event => {
   if (targetCard && targetCard.dataset.dragGroup !== sourceGroupId) {
     event.preventDefault();
     const targetGroupId = targetCard.dataset.dragGroup;
+    const intent = targetCard.dataset.dropIntent;
+    if (intent === 'before' || intent === 'after') {
+      endGroupingDrag();
+      reorderSpeakerGroup(sourceGroupId, targetGroupId, intent);
+      showToast(`${groupName(model.state, sourceGroupId)} moved ${intent} ${groupName(model.state, targetGroupId)}`);
+      renderSonos(model.state);
+      return;
+    }
     endGroupingDrag();
     await runGroupingAction(
       () => request('/sonos/group', {
@@ -227,6 +267,39 @@ document.addEventListener('drop', async event => {
 document.addEventListener('dragend', endGroupingDrag);
 
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-speech-level]')) {
+    const select = event.target;
+    const target = select.dataset.speechLevel;
+    const level = Number(select.value);
+    await runAction(select, () => request('/sonos/speech-enhancement', {
+      method: 'POST',
+      body: JSON.stringify({ target, level }),
+    }), `Speech Enhancement set to ${speechLevelLabel(level)}`);
+    return;
+  }
+  if (event.target.matches('[data-hue-mapping-group]')) {
+    const select = event.target;
+    const groupId = select.dataset.hueMappingGroup;
+    const target = hueMappingTargetFromValue(model.state, select.value);
+    await runAction(select, () => request('/hue/mapping', {
+      method: 'PUT',
+      body: JSON.stringify({ groupId, target }),
+    }), target ? 'Hue group assignment saved' : 'Hue group assignment removed');
+    return;
+  }
+  if (event.target.matches('[data-member-volume-target]')) {
+    const input = event.target;
+    const target = input.dataset.memberVolumeTarget;
+    const memberId = input.dataset.memberId;
+    const volume = Number(input.value);
+    input.closest('.member-volume-row')?.querySelector('.volume-value')?.replaceChildren(`${volume}`);
+    updateOptimisticMemberVolume(target, memberId, volume);
+    await runAction(input, () => request('/sonos/member-volume', {
+      method: 'POST',
+      body: JSON.stringify({ target, memberId, volume }),
+    }), `${input.dataset.memberName || 'Room'} volume set to ${volume}%`);
+    return;
+  }
   if (event.target.matches('[data-volume-target]')) {
     const input = event.target;
     const target = input.dataset.volumeTarget;
@@ -251,6 +324,10 @@ document.addEventListener('input', event => {
   if (event.target.matches('[data-volume-target]')) {
     event.target.closest('.volume-control, .player-volume-control')?.querySelector('.volume-value')
       .replaceChildren(`${event.target.value}%`);
+  }
+  if (event.target.matches('[data-member-volume-target]')) {
+    event.target.closest('.member-volume-row')?.querySelector('.volume-value')
+      ?.replaceChildren(`${event.target.value}`);
   }
 });
 
@@ -339,7 +416,7 @@ function renderAll() {
   renderOverview(state);
   if (!model.groupingSourceGroupId) renderSonos(state);
   renderActivity(state);
-  renderHue(state);
+  if (!document.activeElement?.matches('[data-hue-mapping-group]:not(:disabled)')) renderHue(state);
   renderMcp(state);
   if (model.activeView === 'logs') void refreshLogs();
   ui.updatedAt.textContent = `Updated ${formatClock(state.generatedAt)}`;
@@ -348,8 +425,8 @@ function renderAll() {
 
 function renderOverview(state) {
   const playbackTimes = captureAnimatedArtworkTimes();
-  const groups = state.sonos.groups ?? [];
-  const featured = groups.find(group => group.isPlaying) ?? groups[0];
+  const groups = orderedSonosGroups(state.sonos.groups ?? []);
+  const featured = groups.find(isActivePlaybackGroup) ?? groups[0];
   const apnsReady = state.liveActivity.apns?.mode === 'ready';
   const hue = state.hue.ambience ?? {};
   const sessions = state.liveActivity.updateTokenCount ?? 0;
@@ -374,7 +451,7 @@ function renderOverview(state) {
       </div>
     </div>
     <div class="stat-grid">
-      ${statCard('Sonos groups', groups.length, `${groups.filter(g => g.isPlaying).length} currently playing`)}
+      ${statCard('Sonos groups', groups.length, `${groups.filter(isActivePlaybackGroup).length} currently playing`)}
       ${statCard('Start tokens', state.liveActivity.startTokenCount, `${state.liveActivity.dismissedSuppressionCount} suppressed`)}
       ${statCard('Hue ambience', hue.runtimeActive ? 'Active' : (hue.configured ? 'Standby' : 'Off'), hue.renderMode ?? hue.motionStyle ?? 'not configured')}
       ${statCard('MCP', state.mcp.enabled ? 'Ready' : 'Disabled', `${state.mcp.transport} · max ${state.mcp.maxVolume}%`)}
@@ -387,7 +464,7 @@ function renderOverview(state) {
 
 function renderSonos(state) {
   const playbackTimes = captureAnimatedArtworkTimes();
-  const groups = state.sonos.groups ?? [];
+  const groups = orderedSonosGroups(state.sonos.groups ?? []);
   const selected = groups.find(group => group.groupId === model.selectedSonosGroupId);
   if (model.selectedSonosGroupId && !selected) model.selectedSonosGroupId = null;
   if (selected) {
@@ -442,14 +519,16 @@ function renderActivity(state) {
 function renderHue(state) {
   const hue = state.hue.ambience ?? {};
   const entertainment = state.hue.entertainment ?? {};
+  const mappingSetup = state.hue.mappingSetup ?? { targets: [], assignments: [] };
   if (!hue.configured) {
-    document.querySelector('#view-hue').innerHTML = `<div class="section-header"><div class="brand-heading"><img class="integration-logo hue-logo" src="/dashboard/assets/philips-hue-logo.svg" alt="Philips Hue"><div><h2>Lighting setup</h2><p>Sonos ambience lighting</p></div></div></div>${emptyState('Hue is not configured', 'Pair a Hue Bridge and map rooms in the iOS app. The relay will show the configuration here automatically.')}`;
+    document.querySelector('#view-hue').innerHTML = `<div class="section-header"><div class="brand-heading"><img class="integration-logo hue-logo" src="/dashboard/assets/philips-hue-logo.svg" alt="Philips Hue"><div><h2>Lighting setup</h2><p>Sonos ambience lighting</p></div></div></div>${emptyState('Hue is not configured', 'Pair a Hue Bridge in the iOS app first. Sonos-to-Hue assignments can then be managed here.')}`;
     return;
   }
   const activeGroups = hue.activeGroups ?? [];
+  const ambienceRunning = hue.enabled !== false && hue.runtimePaused !== true;
   document.querySelector('#view-hue').innerHTML = `
     <article class="hue-hero">
-      <div class="hue-hero-top"><div><img class="integration-logo hue-logo hue-hero-logo" src="/dashboard/assets/philips-hue-logo.svg" alt="Philips Hue"><p class="eyebrow">${hue.runtimePaused ? 'AMBIENCE STOPPED' : (hue.runtimeActive ? 'AMBIENCE ACTIVE' : 'AMBIENCE STANDBY')}</p><h2>${escapeHtml(hue.bridge?.name ?? 'Hue Bridge')}</h2><p>${escapeHtml(hue.bridge?.ipAddress ?? '')} · ${hue.mappings ?? 0} Sonos mappings · ${hue.lights ?? 0} lights</p></div><button class="secondary-button ${hue.runtimePaused ? '' : 'danger'}" data-hue-action="${hue.runtimePaused ? 'start' : 'stop'}">${hue.runtimePaused ? 'Start ambience' : 'Stop ambience'}</button></div>
+      <div class="hue-hero-top"><div><img class="integration-logo hue-logo hue-hero-logo" src="/dashboard/assets/philips-hue-logo.svg" alt="Philips Hue"><p class="eyebrow">${!ambienceRunning ? 'AMBIENCE STOPPED' : (hue.runtimeActive ? 'AMBIENCE ACTIVE' : 'AMBIENCE STANDBY')}</p><h2>${escapeHtml(hue.bridge?.name ?? 'Hue Bridge')}</h2><p>${escapeHtml(hue.bridge?.ipAddress ?? '')} · ${hue.mappings ?? 0} Sonos mappings · ${hue.lights ?? 0} lights</p></div><button class="secondary-button ${ambienceRunning ? 'danger' : ''}" data-hue-action="${ambienceRunning ? 'stop' : 'start'}">${ambienceRunning ? 'Stop ambience' : 'Start ambience'}</button></div>
     </article>
     <div class="detail-grid">
       ${detailCard('Bridge & resources', [
@@ -466,7 +545,63 @@ function renderHue(state) {
       ])}
       ${detailCard('Active groups', activeGroups.length ? activeGroups.map(group => [group.speakerName ?? groupName(state, group.groupId), group.renderMode ?? 'active']) : [['Status', 'No active group']])}
     </div>
+    ${hueMappingEditor(state, mappingSetup)}
     ${hue.lastError || entertainment.lastError ? `<div class="security-note">Latest error: ${escapeHtml(hue.lastError ?? entertainment.lastError)}</div>` : ''}`;
+}
+
+function hueMappingEditor(state, mappingSetup) {
+  const groups = orderedSonosGroups(state.sonos.groups ?? []);
+  const targets = mappingSetup.targets ?? [];
+  const assignments = mappingSetup.assignments ?? [];
+  const assignedCount = groups.filter(group => hueAssignmentForGroup(assignments, group)).length;
+  if (!groups.length) {
+    return `<section class="hue-mapping-panel"><div class="hue-mapping-header"><div><p class="eyebrow">ROOM ASSIGNMENTS</p><h2>Sonos groups → Hue groups</h2><p>Assign each discovered Sonos group to an Entertainment Area, Room, or Zone.</p></div></div>${emptyState('No Sonos groups discovered', 'Wait for LAN discovery before configuring room assignments.')}</section>`;
+  }
+  if (!targets.length) {
+    return `<section class="hue-mapping-panel"><div class="hue-mapping-header"><div><p class="eyebrow">ROOM ASSIGNMENTS</p><h2>Sonos groups → Hue groups</h2><p>Assign each discovered Sonos group to an Entertainment Area, Room, or Zone.</p></div></div>${emptyState('No Hue groups available', 'Refresh Hue resources from the iOS app, then return here to configure assignments.')}</section>`;
+  }
+  return `<section class="hue-mapping-panel">
+    <div class="hue-mapping-header"><div><p class="eyebrow">ROOM ASSIGNMENTS</p><h2>Sonos groups → Hue groups</h2><p>Assignments are saved directly on this relay and take effect immediately.</p></div><span class="badge ${assignedCount === groups.length ? 'good' : ''}">${assignedCount} of ${groups.length} assigned</span></div>
+    <div class="hue-mapping-list">${groups.map(group => hueMappingRow(group, targets, assignments)).join('')}</div>
+  </section>`;
+}
+
+function hueMappingRow(group, targets, assignments) {
+  const assignment = hueAssignmentForGroup(assignments, group);
+  const displayName = groupDisplayName(group);
+  const selectedTarget = assignment?.target ? hueTargetValue(assignment.target) : '';
+  const targetOptions = targets.map(target => {
+    const value = hueTargetValue(target);
+    const details = `${hueTargetKindLabel(target.kind)} · ${target.lightCount} light${target.lightCount === 1 ? '' : 's'}`;
+    return `<option value="${escapeAttr(value)}" ${value === selectedTarget ? 'selected' : ''}>${escapeHtml(target.name)} · ${escapeHtml(details)}</option>`;
+  }).join('');
+  return `<label class="hue-mapping-row">
+    <span class="hue-mapping-room"><span class="hue-mapping-icon" aria-hidden="true">◉</span><span><strong>${escapeHtml(displayName)}</strong><small>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'} · ${escapeHtml(groupSourceState(group).toLowerCase())}</small></span></span>
+    <span class="hue-mapping-field"><span class="hue-mapping-field-label">Hue group</span><select class="select-field hue-mapping-select" data-hue-mapping-group="${escapeAttr(group.groupId)}" aria-label="Hue group for ${escapeAttr(displayName)}"><option value="">No Hue group</option>${targetOptions}</select></span>
+  </label>`;
+}
+
+function hueAssignmentForGroup(assignments, group) {
+  return assignments.find(assignment => (
+    assignment.relayGroupID === group.groupId
+    || assignment.sonosID === group.groupId
+    || assignment.sonosName === group.speakerName
+  ));
+}
+
+function hueMappingTargetFromValue(state, value) {
+  if (!value) return null;
+  const target = (state?.hue?.mappingSetup?.targets ?? [])
+    .find(candidate => hueTargetValue(candidate) === value);
+  return target ? { kind: target.kind, id: target.id } : null;
+}
+
+function hueTargetValue(target) {
+  return `${target.kind}:${target.id}`;
+}
+
+function hueTargetKindLabel(kind) {
+  return ({ entertainmentArea: 'Entertainment Area', room: 'Room', zone: 'Zone' })[kind] ?? 'Group';
 }
 
 function renderMcp(state) {
@@ -530,16 +665,18 @@ function openSonosGroup(groupId) {
 }
 
 function nowPlayingCard(group, maxVolume) {
-  const progress = progressPercent(group);
   const volume = group.groupVolume ?? 0;
-  return `<article class="now-playing-card album-themed-card is-clickable" style="${albumThemeStyle(group)}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(group.speakerName)} in Sonos">
+  const displayName = groupDisplayName(group);
+  const tv = isTVGroup(group);
+  const sourceClass = isTVGroup(group) ? ' tv-source' : (isLiveStreamGroup(group) ? ' live-source' : '');
+  return `<article class="now-playing-card album-themed-card is-clickable${sourceClass}" style="${albumThemeStyle(group)}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(displayName)} in Sonos">
     ${albumThemeBackdrop(group)}
     <div class="artwork-wrap">${artwork(group, 'large')}</div>
     <div class="now-playing-content">
-      <div class="card-kicker"><span>Now playing</span><span class="room-live">${escapeHtml(group.speakerName)} <span class="open-player-arrow">→</span></span></div>
-      <div class="track-meta"><h2>${escapeHtml(group.trackTitle || 'Not playing')}</h2><p>${escapeHtml([group.artist, group.album].filter(Boolean).join(' · ') || 'No media metadata')}</p><div class="quality-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}${chip(`${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}`)}</div></div>
-      <div class="progress-row" data-progress-group="${escapeAttr(group.groupId)}"><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><div class="progress-times"><span data-progress-current>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div></div>
-      <div class="playback-controls">${playbackButtons(group)}<span class="volume-mini">VOL ${Math.min(volume,maxVolume)}%</span></div>
+      <div class="card-kicker"><span>${tv ? 'TV input' : 'Now playing'}</span><span class="room-live">${escapeHtml(displayName)} <span class="open-player-arrow">→</span></span></div>
+      <div class="track-meta"><h2>${escapeHtml(groupPlaybackTitle(group))}</h2>${tv ? '' : `<p>${escapeHtml(groupPlaybackSubtitle(group))}</p><div class="quality-row">${sourceBadges(group)}${chip(groupSourceState(group))}</div>`}</div>
+      ${playbackProgress(group, 'overview')}
+      <div class="playback-controls ${tv ? 'tv-summary-controls' : ''}">${playbackButtons(group)}<span class="volume-mini">VOL ${Math.min(volume,maxVolume)}%</span></div>
     </div>
   </article>`;
 }
@@ -552,65 +689,150 @@ function roomCard(group, maxVolume) {
   const volume = Math.min(group.groupVolume ?? 0, maxVolume);
   const speechLevel = group.soundbarSpeechEnhancementRawLevel ?? 0;
   const target = escapeAttr(group.groupId);
-  const progress = progressPercent(group);
-  const trackLine = group.trackTitle && group.trackTitle !== 'Unknown'
-    ? `${escapeHtml(group.trackTitle)}${group.artist ? ` — ${escapeHtml(group.artist)}` : ''}`
-    : 'Idle';
-  return `<article class="room-card album-themed-card" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${target}">${albumThemeBackdrop(group)}
+  const displayName = groupDisplayName(group);
+  const sourceClass = isTVGroup(group) ? ' tv-source' : (isLiveStreamGroup(group) ? ' live-source' : '');
+  const title = groupPlaybackTitle(group);
+  const subtitle = groupPlaybackSubtitle(group, { compact: true });
+  const trackLine = title === 'Not playing' ? 'Idle' : `${escapeHtml(title)} — ${escapeHtml(subtitle)}`;
+  const members = visibleGroupMembers(group);
+  const membersExpanded = members.length > 1 && model.expandedMemberGroups.has(group.groupId);
+  return `<article class="room-card album-themed-card${sourceClass}" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${target}">${albumThemeBackdrop(group)}
     <div class="room-top">
-      <div class="room-open-button" data-open-group="${target}" role="link" tabindex="0" aria-label="Open player for ${escapeAttr(group.speakerName)}">${artwork(group, 'room')}<span class="room-info"><strong>${escapeHtml(group.speakerName)}</strong><span class="room-track">${trackLine}</span><span class="room-meta">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}<small>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}</small></span></span></div>
-      <button class="room-play-button" style="--room-progress:${progress * 3.6}deg" data-room-progress-group="${target}" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'} ${escapeAttr(group.speakerName)}" aria-label="${group.isPlaying ? 'Pause' : 'Play'} ${escapeAttr(group.speakerName)}"><span aria-hidden="true">${group.isPlaying ? 'Ⅱ' : '▶'}</span></button>
+      <div class="room-open-button" data-open-group="${target}" role="link" tabindex="0" aria-label="Open player for ${escapeAttr(displayName)}">${artwork(group, 'room')}<span class="room-info"><strong>${escapeHtml(displayName)}</strong><span class="room-track">${trackLine}</span><span class="room-meta">${isTVGroup(group) ? '' : sourceBadges(group)}<small>${escapeHtml(groupSourceState(group))}</small></span></span></div>
+      ${roomPrimaryControl(group)}
     </div>
-    <label class="room-volume-control" title="Group volume"><span class="room-volume-icon" aria-hidden="true">◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${target}" aria-label="${escapeAttr(group.speakerName)} group volume"><span class="volume-value">${volume}</span></label>
-    ${(group.soundbarNightMode !== null && group.soundbarNightMode !== undefined) || speechLevel > 0 ? `<div class="soundbar-controls"><button class="toggle-chip ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${escapeAttr(group.groupId)}" data-enabled="${group.soundbarNightMode === true}">Night sound</button><button class="toggle-chip ${speechLevel > 0 ? 'on' : ''}" data-command="speech-enhancement" data-target="${escapeAttr(group.groupId)}" data-level="${speechLevel > 0 ? 0 : 1}">Speech ${speechLevel > 0 ? `L${speechLevel}` : 'off'}</button></div>` : ''}
+    <div class="room-volume-section"><label class="room-volume-control" title="Group volume"><span class="room-volume-icon" aria-hidden="true">◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${target}" aria-label="${escapeAttr(displayName)} group volume"><span class="volume-value">${volume}</span></label>${members.length > 1 ? `<button class="member-volume-toggle ${membersExpanded ? 'expanded' : ''}" data-members-toggle="${target}" title="${membersExpanded ? 'Hide' : 'Show'} room volumes" aria-label="${membersExpanded ? 'Hide' : 'Show'} room volumes">⌄</button>` : ''}</div>
+    ${membersExpanded ? memberVolumePanel(group, maxVolume) : ''}
+    ${(group.soundbarNightMode !== null && group.soundbarNightMode !== undefined) || speechLevel > 0 ? `<div class="soundbar-controls"><button class="toggle-chip ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${escapeAttr(group.groupId)}" data-enabled="${group.soundbarNightMode === true}">Night sound</button><button class="toggle-chip ${speechLevel > 0 ? 'on' : ''}" data-command="speech-enhancement" data-target="${escapeAttr(group.groupId)}" data-level="${(speechLevel + 1) % 5}">Speech ${speechLevelLabel(speechLevel)}</button></div>` : ''}
   </article>`;
 }
 
+function visibleGroupMembers(group) {
+  const members = Array.isArray(group?.groupMembers) ? group.groupMembers : [];
+  return members
+    .filter(member => member && member.id && member.host)
+    .sort((left, right) => Number(right.isCoordinator) - Number(left.isCoordinator));
+}
+
+function memberVolumePanel(group, maxVolume, detailed = false) {
+  const target = escapeAttr(group.groupId);
+  const rows = visibleGroupMembers(group).map(member => {
+    const volume = Math.min(Number(member.volume ?? 0), maxVolume);
+    return `<label class="member-volume-row"><span class="member-volume-name">${escapeHtml(member.name)}</span><span class="room-volume-icon" aria-hidden="true">◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-member-volume-target="${target}" data-member-id="${escapeAttr(member.id)}" data-member-name="${escapeAttr(member.name)}" aria-label="${escapeAttr(member.name)} volume"><span class="volume-value">${volume}</span></label>`;
+  }).join('');
+  return `<section class="member-volume-panel ${detailed ? 'detailed' : ''}">${detailed ? '<div class="member-volume-heading"><strong>Room volumes</strong><small>Adjust each visible room independently</small></div>' : ''}${rows}</section>`;
+}
+
 function playerDetail(group, maxVolume) {
-  const progress = progressPercent(group);
   const volume = Math.min(group.groupVolume ?? 0, maxVolume);
   const speechLevel = group.soundbarSpeechEnhancementRawLevel ?? 0;
-  const hasSoundbar = group.soundbarNightMode !== null && group.soundbarNightMode !== undefined
+  const tv = isTVGroup(group);
+  const hasSoundbar = tv || group.soundbarNightMode !== null && group.soundbarNightMode !== undefined
     || group.soundbarSpeechEnhancementRawLevel !== null && group.soundbarSpeechEnhancementRawLevel !== undefined;
+  const displayName = groupDisplayName(group);
+  const sourceClass = isTVGroup(group) ? ' tv-source' : (isLiveStreamGroup(group) ? ' live-source' : '');
   return `
     <div class="player-detail-header">
       <button class="back-button" data-close-group>← All rooms</button>
-      <span class="badge ${group.isPlaying ? 'good' : ''}">${group.isPlaying ? 'Playing' : 'Paused'}</span>
+      <span class="badge ${groupSourceState(group) === 'LIVE' || groupSourceState(group) === 'PLAYING' ? 'good' : ''}">${escapeHtml(groupSourceState(group))}</span>
     </div>
-    <article class="player-detail-card album-themed-card" style="${albumThemeStyle(group)}">
+    <article class="player-detail-card album-themed-card${sourceClass}" style="${albumThemeStyle(group)}">
       ${albumThemeBackdrop(group)}
       <div class="player-detail-artwork artwork-wrap">${artwork(group, 'large')}</div>
       <div class="player-detail-content">
-        <div class="card-kicker"><span>${escapeHtml(group.speakerName)}</span><span>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}</span></div>
+        <div class="card-kicker"><span>${escapeHtml(displayName)}</span><span>${group.groupMemberCount} speaker${group.groupMemberCount === 1 ? '' : 's'}</span></div>
         <div class="player-detail-track">
-          <h2>${escapeHtml(group.trackTitle || 'Not playing')}</h2>
-          <p>${escapeHtml(group.artist || 'Unknown artist')}</p>
-          <small>${escapeHtml(group.album || 'No album metadata')}</small>
-          <div class="quality-row">${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}</div>
+          <h2>${escapeHtml(groupPlaybackTitle(group))}</h2>
+          ${isTVGroup(group) ? '' : `<p>${escapeHtml(groupPlaybackSubtitle(group))}</p>`}
+          ${isTVGroup(group) ? '' : `<small>${escapeHtml(group.album || 'No album metadata')}</small>`}
+          ${tv ? '' : `<div class="quality-row">${sourceBadges(group)}${chip(groupSourceState(group))}</div>`}
         </div>
-        <div class="player-detail-progress" data-progress-group="${escapeAttr(group.groupId)}">
-          <div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div>
-          <div class="progress-times"><span data-progress-current>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div>
-        </div>
-        <div class="player-detail-controls">${playbackButtons(group)}</div>
+        ${playbackProgress(group, 'detail')}
+        ${tv ? (hasSoundbar ? soundbarControlPanel(group, speechLevel) : '') : `<div class="player-detail-controls">${playbackButtons(group)}</div>`}
         <label class="player-volume-control">
           <span>Volume</span>
           <input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${escapeAttr(group.groupId)}">
           <strong class="volume-value">${volume}%</strong>
         </label>
-        ${hasSoundbar ? `<div class="player-soundbar-controls"><span>Soundbar</span><div class="soundbar-controls"><button class="toggle-chip ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${escapeAttr(group.groupId)}" data-enabled="${group.soundbarNightMode === true}">Night sound</button><button class="toggle-chip ${speechLevel > 0 ? 'on' : ''}" data-command="speech-enhancement" data-target="${escapeAttr(group.groupId)}" data-level="${speechLevel > 0 ? 0 : 1}">Speech ${speechLevel > 0 ? `L${speechLevel}` : 'off'}</button></div></div>` : ''}
+        ${visibleGroupMembers(group).length > 1 ? memberVolumePanel(group, maxVolume, true) : ''}
+        ${!tv && hasSoundbar ? soundbarControlPanel(group, speechLevel) : ''}
       </div>
     </article>`;
 }
 
 function playbackButtons(group) {
   const target = escapeAttr(group.groupId);
+  if (isTVGroup(group)) return '';
+  if (isLiveStreamGroup(group)) {
+    const label = group.isPlaying ? 'Stop live stream' : 'Play live stream';
+    return `<button class="control-button primary live-control" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${label}" aria-label="${label}">${group.isPlaying ? '■' : '▶'}</button>`;
+  }
   return `<button class="control-button" data-command="previous" data-target="${target}" title="Previous track">‹</button><button class="control-button primary" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'}">${group.isPlaying ? 'Ⅱ' : '▶'}</button><button class="control-button" data-command="next" data-target="${target}" title="Next track">›</button>`;
+}
+
+function roomPrimaryControl(group) {
+  const target = escapeAttr(group.groupId);
+  if (isTVGroup(group)) {
+    const live = tvAudioPresentation(group).hasSignal;
+    return `<span class="room-source-indicator ${live ? 'active' : ''}" title="${live ? 'TV audio live' : 'TV audio idle'}" aria-label="${live ? 'TV audio live' : 'TV audio idle'}"><span aria-hidden="true"></span></span>`;
+  }
+  const liveStream = isLiveStreamGroup(group);
+  const progress = liveStream ? 0 : progressPercent(group);
+  const label = liveStream
+    ? (group.isPlaying ? 'Stop live stream' : 'Play live stream')
+    : (group.isPlaying ? 'Pause' : 'Play');
+  return `<button class="room-play-button ${liveStream ? 'live-control' : ''}" style="--room-progress:${progress * 3.6}deg" ${liveStream ? '' : `data-room-progress-group="${target}"`} data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${label}" aria-label="${label}"><span aria-hidden="true">${group.isPlaying ? (liveStream ? '■' : 'Ⅱ') : '▶'}</span></button>`;
+}
+
+function playbackProgress(group, variant) {
+  const className = variant === 'detail' ? 'player-detail-progress' : 'progress-row';
+  if (isTVGroup(group)) {
+    return `<div class="${className} tv-format-progress">${tvFormatBadge(group)}</div>`;
+  }
+  if (isLiveStreamGroup(group)) {
+    return `<div class="${className} source-progress"><span></span><strong>${escapeHtml(groupSourceState(group))}</strong><span></span></div>`;
+  }
+  const progress = progressPercent(group);
+  return `<div class="${className}" data-progress-group="${escapeAttr(group.groupId)}"><div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div><div class="progress-times"><span data-progress-current>${formatTime(currentPosition(group))}</span><span>${formatTime(group.durationSeconds)}</span></div></div>`;
+}
+
+function sourceBadges(group) {
+  if (isTVGroup(group)) return tvFormatBadge(group);
+  return `${streamingServiceBadge(group.playbackSourceRaw)}${audioQualityBadge(group.audioQualityLabel)}`;
+}
+
+function soundbarControlPanel(group, speechLevel) {
+  const target = escapeAttr(group.groupId);
+  return `<div class="player-soundbar-panel">
+    <div class="soundbar-control-grid">
+      <button class="soundbar-control-card ${group.soundbarNightMode ? 'on' : ''}" data-command="night-mode" data-target="${target}" data-enabled="${group.soundbarNightMode === true}"><span class="soundbar-control-icon" aria-hidden="true">☾</span><strong>Night Sound</strong><small>${group.soundbarNightMode ? 'On' : 'Off'}</small></button>
+      <label class="soundbar-control-card soundbar-speech-card ${speechLevel > 0 ? 'on' : ''}"><span class="soundbar-control-icon" aria-hidden="true">≋</span><strong>Speech Enhancement</strong><span class="soundbar-select-value"><small>${speechLevelLabel(speechLevel)}</small><span aria-hidden="true">⌄</span></span><select class="soundbar-level-select" data-speech-level="${target}" aria-label="Speech Enhancement level">${[0,1,2,3,4].map(level => `<option value="${level}" ${level === speechLevel ? 'selected' : ''}>${speechLevelLabel(level)}</option>`).join('')}</select></label>
+    </div>
+  </div>`;
+}
+
+function speechLevelLabel(level) {
+  return ['Off', 'Low', 'Medium', 'High', 'Max'][Math.max(0, Math.min(4, Number(level) || 0))];
+}
+
+function tvFormatBadge(group) {
+  const format = tvAudioPresentation(group);
+  if (!format.hasSignal) return '<span class="tv-format-placeholder" aria-label="No TV signal"></span>';
+  if (format.isAtmos) {
+    return `<span class="tv-format-chip"><img src="/dashboard/assets/badge-dolby-atmos.png" alt="Dolby Atmos">${format.atmosVariant ? `<strong>${escapeHtml(format.atmosVariant)}</strong>` : ''}</span>`;
+  }
+  return `<span class="tv-format-chip"><strong>${escapeHtml(format.codec || format.label)}</strong>${format.channelLayout ? `<span>·</span><code>${escapeHtml(format.channelLayout)}</code>` : ''}</span>`;
 }
 
 function artwork(group, variant) {
   const large = variant === 'large';
   const room = variant === 'room';
+  if (isTVGroup(group)) {
+    const live = tvAudioPresentation(group).hasSignal;
+    const state = live ? 'LIVE' : 'IDLE';
+    const tvArtwork = `<div class="${large ? 'artwork-fallback ' : 'room-art placeholder '}tv-artwork ${live ? 'has-signal' : ''}" role="img" aria-label="TV audio ${state.toLowerCase()}"><span class="tv-screen" aria-hidden="true"><span></span></span>${large ? `<span class="tv-signal-badge ${live ? 'live' : ''}"><i aria-hidden="true"></i>${state}</span>` : ''}</div>`;
+    return room ? `<span class="room-artwork">${tvArtwork}</span>` : tvArtwork;
+  }
   const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
   const staticArtwork = url
     ? `<img class="${large ? '' : 'room-art'}" src="${escapeAttr(url)}" alt="${escapeAttr(group.album || group.trackTitle || 'Album artwork')}" referrerpolicy="no-referrer">`
@@ -634,12 +856,21 @@ function artwork(group, variant) {
 }
 
 function albumThemeBackdrop(group) {
+  if (isTVGroup(group)) {
+    return `<div class="album-theme-backdrop tv-theme-backdrop ${tvAudioPresentation(group).hasSignal ? 'has-signal' : ''}" aria-hidden="true"></div>`;
+  }
   const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
   if (!url) return '';
   return `<div class="album-theme-backdrop" aria-hidden="true"><img src="${escapeAttr(url)}" alt="" referrerpolicy="no-referrer"></div>`;
 }
 
 function albumThemeStyle(group) {
+  if (isTVGroup(group)) {
+    const atmos = tvAudioPresentation(group).isAtmos;
+    return atmos
+      ? '--album-theme:#86A9E8;--tv-glow-rgb:134,169,232'
+      : '--album-theme:#E1E1DD;--tv-glow-rgb:225,225,221';
+  }
   const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
   const theme = safeThemeColor(model.artworkThemes.get(url)?.color) || '#FF9C6F';
   return `--album-theme:${theme}`;
@@ -931,17 +1162,71 @@ function logEntry(entry) {
   return `<div class="log-entry"><span class="log-time">${formatClock(entry.timestamp)}</span><span class="log-level ${escapeAttr(entry.level)}">${escapeHtml(entry.level)}</span><span class="log-source">${escapeHtml(entry.source)}</span><div class="log-message">${escapeHtml(entry.message)}${Object.keys(context).length ? `<div class="log-context">${escapeHtml(JSON.stringify(context))}</div>` : ''}</div></div>`;
 }
 
-async function runAction(element, operation, successMessage) {
+async function runAction(element, operation, successMessage, rollback = null) {
   element.disabled = true;
   try {
     await operation();
     showToast(successMessage);
     await refreshState(false);
   } catch (error) {
+    rollback?.();
     showToast(friendlyError(error), true);
   } finally {
     element.disabled = false;
   }
+}
+
+function applyOptimisticPlaybackCommand(command, groupId) {
+  if (!['play', 'pause'].includes(command) || !model.state) return null;
+  const group = model.state.sonos?.groups?.find(candidate => candidate.groupId === groupId);
+  if (!group) return null;
+  const previous = { isPlaying: group.isPlaying, transportStateRaw: group.transportStateRaw };
+  group.isPlaying = command === 'play';
+  group.transportStateRaw = command === 'play' ? 'PLAYING' : 'PAUSED_PLAYBACK';
+  renderOverview(model.state);
+  renderSonos(model.state);
+  return () => {
+    group.isPlaying = previous.isPlaying;
+    group.transportStateRaw = previous.transportStateRaw;
+    renderOverview(model.state);
+    renderSonos(model.state);
+  };
+}
+
+function updateOptimisticMemberVolume(groupId, memberId, volume) {
+  const group = model.state?.sonos?.groups?.find(candidate => candidate.groupId === groupId);
+  const member = group?.groupMembers?.find(candidate => candidate.id === memberId || candidate.host === memberId);
+  if (member) member.volume = volume;
+}
+
+function loadSpeakerOrder() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('charm-relay-speaker-order') || '[]');
+    return Array.isArray(parsed) ? parsed.filter(value => typeof value === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function orderedSonosGroups(groups) {
+  const positions = new Map(model.speakerOrder.map((groupId, index) => [groupId, index]));
+  return [...groups].sort((left, right) => {
+    const leftIndex = positions.get(left.groupId) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = positions.get(right.groupId) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex;
+  });
+}
+
+function reorderSpeakerGroup(sourceGroupId, targetGroupId, placement) {
+  const ids = orderedSonosGroups(model.state?.sonos?.groups ?? []).map(group => group.groupId);
+  const sourceIndex = ids.indexOf(sourceGroupId);
+  if (sourceIndex < 0) return;
+  ids.splice(sourceIndex, 1);
+  const targetIndex = ids.indexOf(targetGroupId);
+  if (targetIndex < 0) return;
+  ids.splice(placement === 'before' ? targetIndex : targetIndex + 1, 0, sourceGroupId);
+  model.speakerOrder = ids;
+  localStorage.setItem('charm-relay-speaker-order', JSON.stringify(ids));
 }
 
 async function runGroupingAction(operation, successMessage) {
@@ -962,7 +1247,9 @@ function clearGroupingDropTargets(except = null) {
   document.querySelectorAll('.is-group-drop-target').forEach(element => {
     if (element === except) return;
     element.classList.remove('is-group-drop-target');
+    element.classList.remove('is-reorder-before', 'is-reorder-after');
     delete element.dataset.dropLabel;
+    delete element.dataset.dropIntent;
   });
 }
 
@@ -1016,16 +1303,20 @@ function friendlyError(error) {
     dashboard_auth_required: 'Your session has expired. Sign in again.',
     origin_not_allowed: 'The request origin does not match the relay address.',
     state_unavailable: 'Relay status is temporarily unavailable.',
+    unknown_sonos_group: 'This Sonos group is no longer available. Refresh and try again.',
+    hue_not_configured: 'Pair and sync the Hue Bridge before configuring assignments.',
+    unknown_hue_group: 'This Hue group is no longer available. Refresh Hue resources and try again.',
+    hue_mapping_save_failed: 'The Hue assignment could not be saved.',
   };
   return messages[error.message] ?? error.message ?? 'Request failed';
 }
 
-function groupName(state, groupId) { return state.sonos.groups.find(group => group.groupId === groupId)?.speakerName ?? groupId ?? '—'; }
+function groupName(state, groupId) { const group = state.sonos.groups.find(candidate => candidate.groupId === groupId); return group ? groupDisplayName(group) : (groupId ?? '—'); }
 function shortId(value) { if (!value) return '—'; return value.length > 15 ? `${value.slice(0,7)}…${value.slice(-5)}` : value; }
 function selected(value) { return model.logsSource === value ? 'selected' : ''; }
 function safeUrl(value) { try { const url = new URL(value); return ['http:','https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } }
 function safeThemeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? String(value).toUpperCase() : ''; }
-function currentPosition(group) { if (!group.isPlaying) return group.positionSeconds ?? 0; const sampledAt = Date.parse(group.sampledAt); const elapsed = Number.isFinite(sampledAt) ? Math.max(0, (Date.now() - sampledAt) / 1000) : 0; return Math.min(group.durationSeconds || Infinity, (group.positionSeconds ?? 0) + elapsed); }
+function currentPosition(group) { if (!isGroupPlaying(group)) return group.positionSeconds ?? 0; const sampledAt = Date.parse(group.sampledAt); const elapsed = Number.isFinite(sampledAt) ? Math.max(0, (Date.now() - sampledAt) / 1000) : 0; return Math.min(group.durationSeconds || Infinity, (group.positionSeconds ?? 0) + elapsed); }
 function progressPercent(group, position = currentPosition(group)) { return group.durationSeconds > 0 ? Math.min(100, Math.max(0, position / group.durationSeconds * 100)) : 0; }
 function formatTime(seconds) { const safe = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0; return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2,'0')}`; }
 function formatClock(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }

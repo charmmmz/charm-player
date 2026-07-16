@@ -31,6 +31,17 @@ export interface LiveActivityContentState {
   audioQualityLabel?: string | null;
 }
 
+export interface SonosGroupMemberSnapshot {
+  /// Stable Sonos UUID when available, otherwise the member LAN address.
+  id: string;
+  name: string;
+  host: string;
+  isCoordinator: boolean;
+  /// Individual RenderingControl volume. Null when the member does not expose
+  /// a readable volume endpoint.
+  volume?: number | null;
+}
+
 /// Minimal projection of what we keep in memory per Sonos coordinator. Built
 /// from sonos-ts AVTransport / RenderingControl events.
 export interface SonosGroupSnapshot {
@@ -42,10 +53,25 @@ export interface SonosGroupSnapshot {
   albumArtUri?: string | null;
   albumArtFallbackUri?: string | null;
   isPlaying: boolean;
+  /// Full Sonos AVTransport state. `isPlaying` remains for backwards
+  /// compatibility, while clients that care about paused/stopped/transitioning
+  /// can preserve the richer state.
+  transportStateRaw?: string | null;
   /// Group volume sampled from GroupRenderingControl. Optional for older
   /// persisted/test snapshots and null when the coordinator does not expose it.
   groupVolume?: number | null;
   playbackSourceRaw?: string | null;
+  /// Raw DeviceProperties.GetZoneInfo HTAudioIn value for TV playback.
+  /// Kept so clients can preserve unknown formats instead of relying on a
+  /// lossy display label.
+  tvAudioFormatRawCode?: number | null;
+  /// Full Sonos TV audio format label before it is compacted for display.
+  /// Examples: "Dolby Atmos (MAT 2.0)" and "PCM 2.0 no audio".
+  tvAudioFormatLabel?: string | null;
+  /// Whether HTAudioIn reports an active TV audio signal. This deliberately
+  /// differs from `isPlaying`, which reflects AVTransport state and may stay
+  /// PLAYING while HDMI/eARC is silent.
+  tvHasSignal?: boolean | null;
   soundbarNightMode?: boolean | null;
   soundbarSpeechEnhancementRawLevel?: number | null;
   liveActivityStyleRaw?: string | null;
@@ -54,6 +80,9 @@ export interface SonosGroupSnapshot {
   positionSeconds: number;
   durationSeconds: number;
   groupMemberCount: number;
+  /// Visible rooms only. Bonded surrounds, stereo partners and Subs are
+  /// intentionally excluded to match the iOS Home-card topology.
+  groupMembers?: SonosGroupMemberSnapshot[];
   /// Wall-clock time at which `positionSeconds` was sampled. Used to derive
   /// the Swift-encoded `startedAt` / `endsAt` for the progress timer.
   sampledAt: Date;

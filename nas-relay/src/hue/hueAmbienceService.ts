@@ -10,6 +10,7 @@ import { createHueEntertainmentStreamingRenderer, type HueEntertainmentControlCl
 import { resolveHueTargets } from './hueRenderer.js';
 import type {
   HueAmbienceActiveGroupStatus,
+  HueAmbienceMappingConfiguration,
   HueAmbienceRenderMode,
   HueAmbienceRuntimeConfig,
   HueAmbienceServiceStatus,
@@ -88,6 +89,7 @@ export class HueAmbienceService {
 
   async load(): Promise<void> {
     this.config = await this.store.load();
+    this.runtimePaused = this.config?.enabled === false;
   }
 
   async saveConfig(config: HueAmbienceRuntimeConfig): Promise<void> {
@@ -97,8 +99,25 @@ export class HueAmbienceService {
     await this.stopAllActive();
     await this.store.save(config);
     this.config = this.store.current;
+    this.runtimePaused = this.config?.enabled === false;
     this.lastError = null;
     this.replaySnapshots(snapshotsToReplay);
+  }
+
+  mappingConfiguration(): HueAmbienceMappingConfiguration | null {
+    if (!this.config) return null;
+    return {
+      resources: this.config.resources,
+      mappings: this.config.mappings,
+    };
+  }
+
+  async saveMappings(mappings: HueAmbienceRuntimeConfig['mappings']): Promise<void> {
+    if (!this.config) throw new Error('hue_not_configured');
+    await this.saveConfig({
+      ...this.config,
+      mappings,
+    });
   }
 
   async clearConfig(): Promise<void> {
@@ -112,16 +131,22 @@ export class HueAmbienceService {
   }
 
   async start(): Promise<void> {
-    this.runtimePaused = false;
-    this.lastError = null;
-    this.replaySnapshots([...this.latestSnapshots.values()]);
+    const config = this.config;
+    if (!config) {
+      this.runtimePaused = false;
+      this.lastError = null;
+      return;
+    }
+    await this.saveConfig({ ...config, enabled: true });
   }
 
   async stop(): Promise<void> {
-    this.runtimePaused = true;
-    this.cancelAllScheduledStops();
-    this.cancelAllPendingWork();
-    await this.stopAllActive();
+    const config = this.config;
+    if (!config) {
+      this.runtimePaused = true;
+      return;
+    }
+    await this.saveConfig({ ...config, enabled: false });
   }
 
   async pauseForExternalRenderer(): Promise<void> {

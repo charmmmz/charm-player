@@ -1,13 +1,19 @@
 import Foundation
 import Observation
 
+extension Notification.Name {
+    static let hueAmbienceRelayEnabledChanged = Notification.Name("hueAmbienceRelayEnabledChanged")
+}
+
 @MainActor
 protocol HueAmbienceRelayRuntimeProviding {
     var shouldDeferLocalHueAmbience: Bool { get }
+    var isHueAmbienceRelayEnabled: Bool { get }
     var isHueAmbienceRelayPaused: Bool { get }
 }
 
 extension HueAmbienceRelayRuntimeProviding {
+    var isHueAmbienceRelayEnabled: Bool { true }
     var isHueAmbienceRelayPaused: Bool { false }
 }
 
@@ -108,7 +114,7 @@ final class RelayManager {
     }
 
     var shouldDeferLocalHueAmbience: Bool {
-        isAvailable && isHueAmbienceRelayConfigured && isHueAmbienceRelayEnabled
+        isAvailable && isHueAmbienceRelayConfigured
     }
 
     private init() {
@@ -199,10 +205,17 @@ final class RelayManager {
             startRelayDiscovery()
         }
         periodicTask = Task { [weak self] in
+            var secondsSinceFullProbe = 30
             while !Task.isCancelled {
                 guard let self else { return }
-                await probeNow()
-                try? await Task.sleep(for: .seconds(30))
+                if secondsSinceFullProbe >= 30 {
+                    await probeNow()
+                    secondsSinceFullProbe = 0
+                } else if isAvailable {
+                    await refreshHueAmbienceRuntimeOnly()
+                }
+                try? await Task.sleep(for: .seconds(5))
+                secondsSinceFullProbe += 5
             }
         }
     }
@@ -211,6 +224,29 @@ final class RelayManager {
         periodicTask?.cancel()
         periodicTask = nil
         discovery.stop()
+    }
+
+    private func refreshHueAmbienceRuntimeOnly() async {
+        guard let url else { return }
+        do {
+            let response = try await RelayClient.hueAmbienceStatus(baseURL: url)
+            let status = response.status
+            updateHueAmbienceRuntimeStatus(
+                configured: status.configured,
+                enabled: status.enabled != false,
+                renderMode: status.renderMode,
+                runtimeActive: status.runtimeActive,
+                runtimePaused: status.runtimePaused,
+                activeTargetIds: status.activeTargetIds,
+                activeGroups: status.activeGroups,
+                entertainmentTargetActive: status.entertainmentTargetActive,
+                entertainmentMetadataComplete: status.entertainmentMetadataComplete,
+                lastFrameAt: status.lastFrameAt,
+                lastError: status.lastError
+            )
+        } catch {
+            SonosLog.debug(.relay, "Hue ambience status poll failed error=\(error)")
+        }
     }
 
     private func startRelayDiscovery() {
@@ -240,9 +276,17 @@ final class RelayManager {
         lastFrameAt: String? = nil,
         lastError: String? = nil
     ) {
+        let wasConfigured = isHueAmbienceRelayConfigured
+        let wasEnabled = isHueAmbienceRelayEnabled
         isHueAmbienceRelayConfigured = configured
         isHueAmbienceRelayEnabled = configured && enabled
-        isHueAmbienceRelayPaused = configured && enabled && runtimePaused == true
+        isHueAmbienceRelayPaused = configured && runtimePaused == true
+        if configured && (!wasConfigured || wasEnabled != isHueAmbienceRelayEnabled) {
+            NotificationCenter.default.post(
+                name: .hueAmbienceRelayEnabledChanged,
+                object: isHueAmbienceRelayEnabled
+            )
+        }
         hueAmbienceSyncStatus = configured ? .synced(Date()) : .idle
         hueAmbienceActiveGroups = runtimeActive == true ? activeGroups ?? [] : []
 

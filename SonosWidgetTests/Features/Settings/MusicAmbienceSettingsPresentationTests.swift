@@ -28,10 +28,17 @@ final class MusicAmbienceSettingsPresentationTests: XCTestCase {
             relayEnabled: true,
             relayPaused: true
         ))
-        XCTAssertFalse(HueAmbienceEnableControlPolicy.usesRelayRuntime(
+        XCTAssertTrue(HueAmbienceEnableControlPolicy.usesRelayRuntime(
             relayAvailable: true,
             relayConfigured: true,
             relayEnabled: false
+        ))
+        XCTAssertFalse(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
+            localEnabled: true,
+            relayAvailable: true,
+            relayConfigured: true,
+            relayEnabled: false,
+            relayPaused: false
         ))
     }
 

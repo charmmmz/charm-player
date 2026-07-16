@@ -41,7 +41,13 @@ test('manual stop remains paused across snapshots until start replays the latest
 
     await service.stop();
     assert.equal(service.status().runtimePaused, true);
+    assert.equal(service.status().enabled, false);
     assert.equal(service.status().runtimeActive, false);
+
+    const reloadedService = new HueAmbienceService(store, pino({ enabled: false }));
+    await reloadedService.load();
+    assert.equal(reloadedService.status().runtimePaused, true);
+    assert.equal(reloadedService.status().enabled, false);
 
     service.receiveSnapshot(snapshot('/art-two.jpg'));
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -50,6 +56,7 @@ test('manual stop remains paused across snapshots until start replays the latest
     await service.start();
     await waitFor(() => service.status().runtimeActive);
     assert.equal(service.status().runtimePaused, false);
+    assert.equal(service.status().enabled, true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -80,6 +87,29 @@ test('saving config immediately reapplies the latest playing Hue ambience snapsh
 
     assert.equal(service.status().runtimeActive, true);
     assert.notDeepEqual(client.updates[0]!.body, client.updates[1]!.body);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('saving dashboard mappings preserves the rest of the Hue runtime config', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hue-service-'));
+  try {
+    const store = new HueAmbienceConfigStore(dir);
+    await store.save(config);
+    const service = new HueAmbienceService(store, pino({ enabled: false }));
+    await service.load();
+
+    await service.saveMappings([{
+      ...config.mappings[0]!,
+      relayGroupID: '192.168.50.30',
+      sonosName: 'Kitchen',
+    }]);
+
+    assert.equal(store.current?.applicationKey, 'secret-key');
+    assert.equal(store.current?.bridge.id, 'bridge-1');
+    assert.equal(store.current?.mappings[0]?.relayGroupID, '192.168.50.30');
+    assert.equal(service.mappingConfiguration()?.mappings[0]?.sonosName, 'Kitchen');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

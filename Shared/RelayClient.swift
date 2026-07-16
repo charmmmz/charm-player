@@ -10,6 +10,86 @@ import Foundation
 /// or just be logged.
 enum RelayClient {
 
+    struct HueAmbienceStatusResponse: Decodable, Sendable {
+        struct Status: Decodable, Sendable {
+            struct Bridge: Decodable, Sendable {
+                let id: String
+                let ipAddress: String
+                let name: String
+            }
+
+            let configured: Bool
+            let enabled: Bool?
+            let bridge: Bridge?
+            let mappings: Int?
+            let lights: Int?
+            let areas: Int?
+            let runtimeActive: Bool?
+            let runtimePaused: Bool?
+            let activeGroupId: String?
+            let renderMode: HueAmbienceRelayRenderMode?
+            let activeTargetIds: [String]?
+            let activeGroups: [HueAmbienceActiveSyncGroup]?
+            let entertainmentTargetActive: Bool?
+            let entertainmentMetadataComplete: Bool?
+            let lastFrameAt: String?
+            let lastError: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case configured
+                case enabled
+                case bridge
+                case mappings
+                case lights
+                case areas
+                case runtimeActive
+                case runtimePaused
+                case activeGroupId
+                case renderMode
+                case activeTargetIds
+                case activeGroups
+                case entertainmentTargetActive
+                case entertainmentMetadataComplete
+                case lastFrameAt
+                case lastError
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                configured = try container.decode(Bool.self, forKey: .configured)
+                enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+                bridge = try container.decodeIfPresent(Bridge.self, forKey: .bridge)
+                mappings = try container.decodeIfPresent(Int.self, forKey: .mappings)
+                lights = try container.decodeIfPresent(Int.self, forKey: .lights)
+                areas = try container.decodeIfPresent(Int.self, forKey: .areas)
+                runtimeActive = try container.decodeIfPresent(Bool.self, forKey: .runtimeActive)
+                runtimePaused = try container.decodeIfPresent(Bool.self, forKey: .runtimePaused)
+                activeGroupId = try container.decodeIfPresent(String.self, forKey: .activeGroupId)
+                renderMode = try container
+                    .decodeIfPresent(String.self, forKey: .renderMode)
+                    .flatMap(HueAmbienceRelayRenderMode.init(rawValue:))
+                activeTargetIds = try container.decodeIfPresent([String].self, forKey: .activeTargetIds)
+                activeGroups = try container.decodeIfPresent([HueAmbienceActiveSyncGroup].self, forKey: .activeGroups)
+                entertainmentTargetActive = try container.decodeIfPresent(Bool.self, forKey: .entertainmentTargetActive)
+                entertainmentMetadataComplete = try container.decodeIfPresent(Bool.self, forKey: .entertainmentMetadataComplete)
+                lastFrameAt = try container.decodeIfPresent(String.self, forKey: .lastFrameAt)
+                lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+            }
+        }
+
+        let ok: Bool
+        let status: Status
+    }
+
+    static func hueAmbienceStatus(baseURL: URL) async throws -> HueAmbienceStatusResponse {
+        let url = baseURL.appendingPathComponent("/api/hue-ambience/status")
+        var request = URLRequest(url: url, timeoutInterval: 3)
+        request.httpMethod = "GET"
+        let (data, response) = try await noProxySession.data(for: request)
+        try validate(response)
+        return try JSONDecoder().decode(HueAmbienceStatusResponse.self, from: data)
+    }
+
     struct LiveActivityCommandRoute: Equatable, Sendable {
         let baseURL: URL
         let groupId: String

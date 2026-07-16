@@ -371,6 +371,33 @@ final class MusicAmbienceManagerTests: XCTestCase {
         XCTAssertEqual(manager.status, .paused("NAS Relay ambience stopped"))
     }
 
+    func testDisabledRelayRuntimeKeepsLocalRendererDeferredAndIsPresentedAsStopped() {
+        let store = makeStore()
+        store.isEnabled = true
+        store.bridge = HueBridgeInfo(id: "bridge-1", ipAddress: "192.168.1.20", name: "Home Hue")
+        store.upsertMapping(HueSonosMapping(
+            sonosID: "living",
+            sonosName: "Living",
+            preferredTarget: .room("room-1")
+        ))
+
+        let renderer = RecordingAmbienceRendering()
+        let manager = MusicAmbienceManager(
+            store: store,
+            renderer: renderer,
+            targetResolver: StaticHueTargetResolving(targets: [makeTarget()]),
+            relayRuntime: StaticHueAmbienceRelayRuntime(
+                shouldDeferLocalHueAmbience: true,
+                isHueAmbienceRelayEnabled: false
+            )
+        )
+
+        manager.receive(snapshot: makePlayingSnapshot(trackTitle: "Disabled Relay Song"))
+
+        XCTAssertEqual(renderer.applyCount, 0)
+        XCTAssertEqual(manager.status, .paused("NAS Relay ambience stopped"))
+    }
+
     func testFlowingMotionReappliesRotatedPaletteWhilePlaying() async {
         let store = makeStore()
         store.isEnabled = true
@@ -1173,11 +1200,13 @@ private struct StaticHueTargetResolving: HueTargetResolving {
 
 private struct StaticHueAmbienceRelayRuntime: HueAmbienceRelayRuntimeProviding {
     var shouldDeferLocalHueAmbience: Bool
+    var isHueAmbienceRelayEnabled = true
     var isHueAmbienceRelayPaused = false
 }
 
 private final class MutableHueAmbienceRelayRuntime: HueAmbienceRelayRuntimeProviding {
     var shouldDeferLocalHueAmbience: Bool
+    var isHueAmbienceRelayEnabled = true
     var isHueAmbienceRelayPaused = false
 
     init(shouldDeferLocalHueAmbience: Bool) {

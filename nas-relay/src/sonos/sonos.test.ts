@@ -8,6 +8,7 @@ import {
   albumArtUriFromMetadata,
   isMusicAmbienceEligibleForSnapshot,
   localPlaybackQualityFromPlaybackMetadata,
+  playbackSourceFromServiceName,
   playbackSourceFromTrackUri,
   SonosBridge,
   trackMetadataFromMetadata,
@@ -99,6 +100,12 @@ test('playback source extraction identifies TV input as non-music ambience', () 
   }), false);
 });
 
+test('playback source extraction falls back to a local Control service name', () => {
+  assert.equal(playbackSourceFromServiceName('网易云音乐'), 'neteaseMusic');
+  assert.equal(playbackSourceFromServiceName('Apple Music'), 'appleMusic');
+  assert.equal(playbackSourceFromServiceName('Unknown regional service'), null);
+});
+
 test('music ambience eligibility still allows music metadata without a known source', () => {
   assert.equal(isMusicAmbienceEligibleForSnapshot({
     trackTitle: 'Blue Train',
@@ -135,6 +142,25 @@ test('bridge debounces snapshot refreshes when the Sonos library emits event bur
   await delay(20);
   assert.deepEqual(refreshedDevices, ['Office']);
   bridge.stop();
+});
+
+test('bridge refreshes authoritative topology when a coordinator changes', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    eventRefreshDebounceMs: 5,
+  });
+  const events = new EventEmitter();
+  let topologyRefreshes = 0;
+  const device = { Name: 'Office', Host: '192.168.50.40', Uuid: 'rincon-office', Events: events };
+  (bridge as unknown as { refreshTopologySnapshots: () => Promise<void> }).refreshTopologySnapshots = async () => {
+    topologyRefreshes += 1;
+  };
+  (bridge as unknown as { attachDeviceListeners: (device: unknown) => void }).attachDeviceListeners(device);
+
+  events.emit(SonosEvents.Coordinator);
+  await delay(20);
+
+  assert.equal(topologyRefreshes, 1);
 });
 
 test('bridge starts with SSDP discovery when no Sonos seed IP is configured', async () => {
@@ -528,7 +554,34 @@ test('bridge snapshots TV audio format from HTAudioIn instead of music quality m
   const snapshot = bridge.current('192.168.50.25');
   assert.equal(snapshot?.playbackSourceRaw, 'tv');
   assert.equal(snapshot?.audioQualityLabel, 'Dolby Atmos · MAT');
+  assert.equal(snapshot?.tvAudioFormatRawCode, 63);
+  assert.equal(snapshot?.tvAudioFormatLabel, 'Dolby Atmos (MAT 2.0)');
+  assert.equal(snapshot?.tvHasSignal, true);
   assert.deepEqual(calls, []);
+});
+
+test('bridge distinguishes PLAYING TV transport from an HTAudioIn no-audio signal', async () => {
+  const bridge = testBridge();
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    DevicePropertiesService: {
+      GetZoneInfo: async () => ({ HTAudioIn: 33554454 }),
+    },
+  }, tvPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.isPlaying, true);
+  assert.equal(snapshot?.playbackSourceRaw, 'tv');
+  assert.equal(snapshot?.tvAudioFormatRawCode, 33554454);
+  assert.equal(snapshot?.tvAudioFormatLabel, 'PCM 2.0 no audio');
+  assert.equal(snapshot?.tvHasSignal, false);
+  assert.equal(snapshot?.audioQualityLabel, 'PCM · 2.0');
 });
 
 test('bridge writes Night Sound through RenderingControl EQ', async () => {
@@ -882,6 +935,34 @@ test('local Control API playback metadata maps lossless and immersive quality la
   })?.label, 'Dolby Atmos');
 });
 
+test('bridge uses local Control service name when the transport URI has an unknown SID', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: {
+      playbackMetadata: async () => ({
+        service: { name: '网易云音乐' },
+        track: {
+          name: 'Blue Train',
+          service: { name: '网易云音乐' },
+          quality: { lossless: true, bitDepth: 16, sampleRate: 44_100 },
+        },
+      }),
+      playbackQuality: async () => null,
+    },
+    artworkResolver: null,
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25', Name: 'Playroom', Uuid: 'rincon-playroom',
+  }, {
+    ...positionInfo('Blue Train'),
+    TrackURI: 'x-sonos-http:track?sid=999&flags=8224&sn=1',
+  });
+
+  await (bridge as unknown as { refreshSnapshot: (device: unknown) => Promise<void> })
+    .refreshSnapshot(device);
+
+  assert.equal(bridge.current('192.168.50.25')?.playbackSourceRaw, 'neteaseMusic');
+});
+
 test('local Control API playback metadata accepts currentItem track quality shape', () => {
   assert.deepEqual(localPlaybackQualityFromPlaybackMetadata({
     container: {
@@ -1094,6 +1175,12 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
     Uuid: 'rincon-kitchen',
     Coordinator: coordinator,
   });
+  coordinator.RenderingControlService = {
+    GetVolume: async () => ({ CurrentVolume: 18 }),
+  };
+  member.RenderingControlService = {
+    GetVolume: async () => ({ CurrentVolume: 24 }),
+  };
   (bridge as unknown as { manager: { devices: unknown[] } }).manager.devices = [coordinator, member];
 
   await (bridge as unknown as {
@@ -1103,6 +1190,106 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
   const snapshot = bridge.current('192.168.50.25');
   assert.equal(snapshot?.speakerName, 'Playroom');
   assert.equal(snapshot?.groupMemberCount, 2);
+  assert.deepEqual(snapshot?.groupMembers, [
+    { id: 'rincon-playroom', name: 'Playroom', host: '192.168.50.25', isCoordinator: true, volume: 18 },
+    { id: 'rincon-kitchen', name: 'Kitchen', host: '192.168.50.26', isCoordinator: false, volume: 24 },
+  ]);
+});
+
+test('bridge writes an individual visible member volume', async () => {
+  const bridge = testBridge();
+  let desiredVolume: number | null = null;
+  const coordinator = playbackDevice({
+    Host: '192.168.50.25', Name: 'Playroom', Uuid: 'rincon-playroom',
+  });
+  coordinator.Coordinator = coordinator;
+  const member = playbackDevice({
+    Host: '192.168.50.26', Name: 'Kitchen', Uuid: 'rincon-kitchen', Coordinator: coordinator,
+    RenderingControlService: {
+      GetVolume: async () => ({ CurrentVolume: 22 }),
+      SetVolume: async (input: { DesiredVolume: number }) => { desiredVolume = input.DesiredVolume; },
+    },
+  });
+  const manager = (bridge as unknown as { manager: { devices: unknown[]; zoneService: unknown } }).manager;
+  manager.devices = [coordinator, member];
+  manager.zoneService = {
+    GetParsedZoneGroupState: async () => [{
+      coordinator: zoneMember(coordinator),
+      members: [zoneMember(coordinator), zoneMember(member)],
+    }],
+  };
+
+  await bridge.setMemberVolume('192.168.50.25', 'rincon-kitchen', 31);
+
+  assert.equal(desiredVolume, 31);
+});
+
+test('bridge topology snapshots exclude invisible stereo and Sub members', async () => {
+  const bridge = testBridge();
+  const playroom = playbackDevice({
+    Host: '192.168.50.249',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom-left',
+  });
+  const pairedPlayroom = playbackDevice({
+    Host: '192.168.50.9',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom-right',
+  });
+  const subMini = playbackDevice({
+    Host: '192.168.50.122',
+    Name: 'Sub Mini',
+    Uuid: 'rincon-sub-mini',
+  });
+  playroom.Coordinator = playroom;
+  pairedPlayroom.Coordinator = pairedPlayroom;
+  subMini.Coordinator = subMini;
+
+  const manager = (bridge as unknown as {
+    manager: { devices: unknown[]; zoneService: unknown };
+  }).manager;
+  manager.devices = [playroom, pairedPlayroom, subMini];
+  manager.zoneService = {
+    GetParsedZoneGroupState: async () => [{
+      coordinator: zoneMember(playroom),
+      members: [
+        zoneMember(playroom),
+        zoneMember(pairedPlayroom, '1'),
+        zoneMember(subMini, true),
+      ],
+    }],
+  };
+
+  // Reproduce the old startup path: every discovered device could create an
+  // independent snapshot before topology filtering was applied.
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(pairedPlayroom);
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(subMini);
+  assert.deepEqual(
+    bridge.allSnapshots().map(snapshot => snapshot.speakerName).sort(),
+    ['Playroom', 'Sub Mini'],
+  );
+
+  await (bridge as unknown as {
+    refreshTopologySnapshots: (trigger: 'initial-prime') => Promise<void>;
+  }).refreshTopologySnapshots('initial-prime');
+
+  assert.deepEqual(
+    bridge.allSnapshots().map(snapshot => ({
+      groupId: snapshot.groupId,
+      speakerName: snapshot.speakerName,
+      groupMemberCount: snapshot.groupMemberCount,
+    })),
+    [{ groupId: '192.168.50.249', speakerName: 'Playroom', groupMemberCount: 1 }],
+  );
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(subMini);
+  assert.deepEqual(bridge.allSnapshots().map(snapshot => snapshot.groupId), ['192.168.50.249']);
 });
 
 test('bridge merges every visible source member into the target coordinator', async () => {
@@ -1376,12 +1563,12 @@ function zoneGroup(device: Record<string, unknown>) {
   };
 }
 
-function zoneMember(device: Record<string, unknown>) {
+function zoneMember(device: Record<string, unknown>, invisible: boolean | string = false) {
   return {
     host: String(device.Host),
     port: 1400,
     uuid: String(device.Uuid),
     name: String(device.Name),
-    Invisible: false,
+    Invisible: invisible,
   };
 }

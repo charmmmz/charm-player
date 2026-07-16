@@ -88,6 +88,11 @@ export interface HueAmbienceRuntimeConfig {
   toneControl?: HueAmbienceToneControl;
 }
 
+export interface HueAmbienceMappingConfiguration {
+  resources: HueBridgeResources;
+  mappings: HueSonosMapping[];
+}
+
 export interface HueRGBColor {
   r: number;
   g: number;

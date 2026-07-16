@@ -5,7 +5,14 @@ import type { Logger } from 'pino';
 import { fetchAlbumArt } from '../artwork/albumArtFetchCache.js';
 import type { DeviceLogService } from '../diagnostics/deviceLogs.js';
 import type { RelayLogBuffer } from '../diagnostics/relayLogs.js';
-import type { HueAmbienceServiceStatus, HueEntertainmentStatus } from '../hue/hueTypes.js';
+import type {
+  HueAmbienceCapability,
+  HueAmbienceMappingConfiguration,
+  HueAmbienceServiceStatus,
+  HueAmbienceTarget,
+  HueEntertainmentStatus,
+  HueSonosMapping,
+} from '../hue/hueTypes.js';
 import type { ApnsStatus } from '../live-activity/apns.js';
 import { resolveMcpTarget, type SonosMcpController, type SonosMcpOptions } from '../mcp/sonosMcpRouter.js';
 import { snapshotJson } from '../sonos/relaySnapshotJson.js';
@@ -30,10 +37,13 @@ export interface DashboardDependencies {
     discovery: SonosDiscoveryState;
     mergeGroups(sourceGroupId: string, intoGroupId: string): Promise<void>;
     separateGroup(groupId: string): Promise<void>;
+    setMemberVolume(groupId: string, memberId: string, volume: number): Promise<void>;
   };
   hue: {
     status(): HueAmbienceServiceStatus;
     entertainmentStatus(): Promise<HueEntertainmentStatus>;
+    mappingConfiguration(): HueAmbienceMappingConfiguration | null;
+    saveMappings(mappings: HueSonosMapping[]): Promise<void>;
     start(): Promise<void>;
     stop(): Promise<void>;
   };
@@ -153,6 +163,7 @@ export function createDashboardRouter(
 
   router.get('/state', async (_req, res) => {
     try {
+      const sonosSnapshots = dependencies.sonos.allSnapshots();
       const [hueEntertainment] = await Promise.all([
         dependencies.hue.entertainmentStatus(),
       ]);
@@ -166,7 +177,7 @@ export function createDashboardRouter(
         },
         sonos: {
           discovery: dependencies.sonos.discovery,
-          groups: dependencies.sonos.allSnapshots().map(snapshotJson),
+          groups: sonosSnapshots.map(snapshotJson),
         },
         liveActivity: {
           updateTokenCount: dependencies.updateTokens.count(),
@@ -180,6 +191,7 @@ export function createDashboardRouter(
         hue: {
           ambience: dependencies.hue.status(),
           entertainment: hueEntertainment,
+          mappingSetup: dashboardHueMappingSetup(dependencies.hue.mappingConfiguration()),
         },
         mcp: {
           enabled: Boolean(dependencies.mcp.token),
@@ -271,6 +283,20 @@ export function createDashboardRouter(
         await dependencies.sonos.setGroupVolume(resolved.groupId, volume);
         break;
       }
+      case 'member-volume': {
+        const memberId = typeof req.body?.memberId === 'string' ? req.body.memberId.trim() : '';
+        const volume = Number(req.body?.volume);
+        if (!memberId) {
+          res.status(400).json({ ok: false, error: 'memberId is required' });
+          return;
+        }
+        if (!Number.isInteger(volume) || volume < 0 || volume > dependencies.mcp.maxVolume) {
+          res.status(400).json({ ok: false, error: `volume must be an integer from 0 to ${dependencies.mcp.maxVolume}` });
+          return;
+        }
+        await dependencies.sonos.setMemberVolume(resolved.groupId, memberId, volume);
+        break;
+      }
       case 'night-mode': {
         if (typeof req.body?.enabled !== 'boolean') {
           res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
@@ -320,6 +346,43 @@ export function createDashboardRouter(
     } catch (error) {
       dashboardLog.warn({ err: error, action }, 'dashboard Hue ambience control failed');
       res.status(500).json({ ok: false, error: `hue_${action}_failed` });
+    }
+  });
+
+  router.put('/hue/mapping', sameOriginOnly, async (req, res) => {
+    const groupId = typeof req.body?.groupId === 'string' ? req.body.groupId.trim() : '';
+    const group = dependencies.sonos.allSnapshots().find(snapshot => snapshot.groupId === groupId);
+    if (!group) {
+      res.status(404).json({ ok: false, error: 'unknown_sonos_group' });
+      return;
+    }
+
+    const config = dependencies.hue.mappingConfiguration();
+    if (!config) {
+      res.status(409).json({ ok: false, error: 'hue_not_configured' });
+      return;
+    }
+
+    const targetResult = dashboardHueTarget(req.body?.target, config);
+    if (!targetResult.ok) {
+      res.status(400).json({ ok: false, error: targetResult.error });
+      return;
+    }
+
+    try {
+      const mappings = updateDashboardHueMapping(config, group, targetResult.target);
+      await dependencies.hue.saveMappings(mappings);
+      dashboardLog.info(
+        { groupId, target: targetResult.target },
+        'dashboard Hue mapping updated',
+      );
+      res.json({
+        ok: true,
+        mappingSetup: dashboardHueMappingSetup(dependencies.hue.mappingConfiguration()),
+      });
+    } catch (error) {
+      dashboardLog.warn({ err: error, groupId }, 'dashboard Hue mapping update failed');
+      res.status(500).json({ ok: false, error: 'hue_mapping_save_failed' });
     }
   });
 
@@ -414,6 +477,115 @@ function rememberArtworkTheme(cache: Map<string, string>, url: string, color: st
     if (!oldest) return;
     cache.delete(oldest);
   }
+}
+
+function dashboardHueMappingSetup(config: HueAmbienceMappingConfiguration | null) {
+  if (!config) return { targets: [], assignments: [] };
+  const targets = config.resources.areas
+    .filter(area => area.kind !== 'light')
+    .map(area => ({
+      id: area.id,
+      name: area.name,
+      kind: area.kind,
+      lightCount: area.childLightIDs.length,
+      capability: capabilityForHueArea(area, config),
+    }))
+    .sort((left, right) => {
+      const kindOrder = { entertainmentArea: 0, room: 1, zone: 2 } as const;
+      const rank = kindOrder[left.kind as keyof typeof kindOrder] - kindOrder[right.kind as keyof typeof kindOrder];
+      return rank || left.name.localeCompare(right.name);
+    });
+  const assignments = config.mappings.flatMap(mapping => {
+    const target = effectiveHueMappingTarget(mapping);
+    if (!target || target.kind === 'light') return [];
+    return [{
+      sonosID: mapping.sonosID,
+      sonosName: mapping.sonosName,
+      relayGroupID: mapping.relayGroupID ?? null,
+      target,
+      capability: mapping.capability,
+    }];
+  });
+  return { targets, assignments };
+}
+
+function dashboardHueTarget(
+  value: unknown,
+  config: HueAmbienceMappingConfiguration,
+): { ok: true; target: HueAmbienceTarget | null } | { ok: false; error: string } {
+  if (value === null) return { ok: true, target: null };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, error: 'target must be a Hue group or null' };
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.kind !== 'string' || typeof record.id !== 'string') {
+    return { ok: false, error: 'target kind and id are required' };
+  }
+  const area = config.resources.areas.find(candidate => (
+    candidate.kind !== 'light'
+    && candidate.kind === record.kind
+    && candidate.id === record.id
+  ));
+  if (!area) return { ok: false, error: 'unknown_hue_group' };
+  return { ok: true, target: { kind: area.kind, id: area.id } };
+}
+
+function updateDashboardHueMapping(
+  config: HueAmbienceMappingConfiguration,
+  group: ReturnType<DashboardDependencies['sonos']['allSnapshots']>[number],
+  target: HueAmbienceTarget | null,
+): HueSonosMapping[] {
+  const matchingIndex = config.mappings.findIndex(mapping => mappingMatchesSonosGroup(mapping, group));
+  if (!target) {
+    return config.mappings.filter((_mapping, index) => index !== matchingIndex);
+  }
+
+  const area = config.resources.areas.find(candidate => candidate.kind === target.kind && candidate.id === target.id)!;
+  const current = matchingIndex >= 0 ? config.mappings[matchingIndex] : null;
+  const currentTarget = current ? effectiveHueMappingTarget(current) : null;
+  const targetUnchanged = currentTarget?.kind === target.kind && currentTarget.id === target.id;
+  const mapping: HueSonosMapping = {
+    sonosID: current?.sonosID ?? group.groupId,
+    sonosName: group.speakerName,
+    relayGroupID: group.groupId,
+    preferredTarget: target,
+    fallbackTarget: null,
+    includedLightIDs: target.kind === 'entertainmentArea' || !targetUnchanged
+      ? []
+      : current?.includedLightIDs ?? [],
+    excludedLightIDs: target.kind === 'entertainmentArea' || !targetUnchanged
+      ? []
+      : current?.excludedLightIDs ?? [],
+    capability: capabilityForHueArea(area, config),
+  };
+  if (matchingIndex < 0) return [...config.mappings, mapping];
+  return config.mappings.map((existing, index) => index === matchingIndex ? mapping : existing);
+}
+
+function mappingMatchesSonosGroup(
+  mapping: HueSonosMapping,
+  group: ReturnType<DashboardDependencies['sonos']['allSnapshots']>[number],
+): boolean {
+  return mapping.relayGroupID === group.groupId
+    || mapping.sonosID === group.groupId
+    || mapping.sonosName === group.speakerName;
+}
+
+function effectiveHueMappingTarget(mapping: HueSonosMapping): HueAmbienceTarget | null {
+  const preferred = mapping.preferredTarget?.kind === 'light' ? null : mapping.preferredTarget;
+  const fallback = mapping.fallbackTarget?.kind === 'light' ? null : mapping.fallbackTarget;
+  return preferred ?? fallback ?? null;
+}
+
+function capabilityForHueArea(
+  area: HueAmbienceMappingConfiguration['resources']['areas'][number],
+  config: HueAmbienceMappingConfiguration,
+): HueAmbienceCapability {
+  if (area.kind === 'entertainmentArea') return 'liveEntertainment';
+  const childLightIDs = new Set(area.childLightIDs);
+  return config.resources.lights.some(light => childLightIDs.has(light.id) && light.supportsGradient)
+    ? 'gradientReady'
+    : 'basic';
 }
 
 export const dashboardDefaults = {

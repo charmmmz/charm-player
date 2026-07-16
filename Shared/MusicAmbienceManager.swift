@@ -76,15 +76,15 @@ final class MusicAmbienceManager {
     }
 
     func refreshStatus() {
-        if !store.isEnabled {
+        if shouldDeferLocalHueAmbience {
+            resetRenderState()
+            setStatus(relayAmbienceStatus(isPlaying: nil))
+        } else if !store.isEnabled {
             stopLocalAmbienceForCurrentControlMode()
             setStatus(.disabled)
         } else if store.bridge == nil || store.mappings.isEmpty {
             stopLocalAmbienceForCurrentControlMode()
             setStatus(.unconfigured)
-        } else if shouldDeferLocalHueAmbience {
-            resetRenderState()
-            setStatus(relayAmbienceStatus(isPlaying: nil))
         } else {
             refreshHueResourcesIfNeeded(for: store.mappings)
             setStatus(.idle)
@@ -112,6 +112,11 @@ final class MusicAmbienceManager {
     }
 
     func receive(snapshot: HueAmbiencePlaybackSnapshot) {
+        if shouldDeferLocalHueAmbience {
+            resetRenderState()
+            setStatus(relayAmbienceStatus(isPlaying: snapshot.isPlaying))
+            return
+        }
         guard store.isEnabled else {
             stopLocalAmbienceForCurrentControlMode()
             setStatus(.disabled)
@@ -120,11 +125,6 @@ final class MusicAmbienceManager {
         guard store.bridge != nil else {
             stopLocalAmbienceForCurrentControlMode()
             setStatus(.unconfigured)
-            return
-        }
-        guard !shouldDeferLocalHueAmbience else {
-            resetRenderState()
-            setStatus(relayAmbienceStatus(isPlaying: snapshot.isPlaying))
             return
         }
         guard snapshot.isPlaying else {
@@ -327,7 +327,7 @@ final class MusicAmbienceManager {
 
     private func relayAmbienceStatus(isPlaying: Bool?) -> Status {
         let runtime = relayRuntime ?? RelayManager.shared
-        if runtime.isHueAmbienceRelayPaused {
+        if !runtime.isHueAmbienceRelayEnabled || runtime.isHueAmbienceRelayPaused {
             return .paused("NAS Relay ambience stopped")
         }
         return isPlaying == false ? .idle : .syncing(Self.relayControlStatusTitle)

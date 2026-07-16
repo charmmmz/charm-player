@@ -5,6 +5,7 @@ import pino from 'pino';
 
 import { DeviceLogService } from '../diagnostics/deviceLogs.js';
 import { RelayLogBuffer } from '../diagnostics/relayLogs.js';
+import type { HueAmbienceMappingConfiguration, HueSonosMapping } from '../hue/hueTypes.js';
 import type { SonosGroupSnapshot } from '../types.js';
 import {
   createDashboardRouter,
@@ -61,6 +62,8 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
     assert.equal(state.sonos.groups[0].groupVolume, 28);
     assert.equal(state.liveActivity.updateTokenCount, 1);
     assert.equal(state.mcp.maxVolume, 70);
+    assert.deepEqual(state.hue.mappingSetup.targets.map((target: { id: string }) => target.id), ['ent-1', 'room-1']);
+    assert.equal(state.hue.mappingSetup.assignments[0].relayGroupID, '192.168.50.25');
 
     const themeResponse = await fetch(
       `${service.baseURL}/api/dashboard/artwork-theme?url=${encodeURIComponent('https://example.com/cover.jpg')}`,
@@ -90,6 +93,16 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
     assert.equal(control.status, 200);
     assert.deepEqual(controller.calls, [{ action: 'pause', groupId: '192.168.50.25' }]);
 
+    const memberVolume = await fetch(`${service.baseURL}/api/dashboard/sonos/member-volume`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'Living Room', memberId: 'uuid-living', volume: 24 }),
+    });
+    assert.equal(memberVolume.status, 200);
+    assert.deepEqual(controller.calls.slice(-1), [
+      { action: 'member-volume', groupId: '192.168.50.25' },
+    ]);
+
     const grouped = await fetch(`${service.baseURL}/api/dashboard/sonos/group`, {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -114,6 +127,54 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
     const logsText = await logsResponse.text();
     assert.doesNotMatch(logsText, /relay-log-secret/);
     assert.match(logsText, /\[redacted\]/);
+
+    const savedMapping = await fetch(`${service.baseURL}/api/dashboard/hue/mapping`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: '192.168.50.30',
+        target: { kind: 'room', id: 'room-1' },
+      }),
+    });
+    assert.equal(savedMapping.status, 200);
+    const kitchenMapping = dependencies.hue.mappingConfiguration()?.mappings
+      .find(mapping => mapping.relayGroupID === '192.168.50.30');
+    assert.deepEqual(kitchenMapping, {
+      sonosID: '192.168.50.30',
+      sonosName: 'Kitchen',
+      relayGroupID: '192.168.50.30',
+      preferredTarget: { kind: 'room', id: 'room-1' },
+      fallbackTarget: null,
+      includedLightIDs: [],
+      excludedLightIDs: [],
+      capability: 'gradientReady',
+    });
+
+    const changedMapping = await fetch(`${service.baseURL}/api/dashboard/hue/mapping`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: '192.168.50.25',
+        target: { kind: 'entertainmentArea', id: 'ent-1' },
+      }),
+    });
+    assert.equal(changedMapping.status, 200);
+    const livingMapping = dependencies.hue.mappingConfiguration()?.mappings
+      .find(mapping => mapping.relayGroupID === '192.168.50.25');
+    assert.equal(livingMapping?.sonosID, 'uuid-living');
+    assert.equal(livingMapping?.capability, 'liveEntertainment');
+    assert.deepEqual(livingMapping?.includedLightIDs, []);
+    assert.deepEqual(livingMapping?.excludedLightIDs, []);
+
+    const invalidMapping = await fetch(`${service.baseURL}/api/dashboard/hue/mapping`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId: '192.168.50.25',
+        target: { kind: 'light', id: 'light-1' },
+      }),
+    });
+    assert.equal(invalidMapping.status, 400);
 
     const rejectedOrigin = await fetch(`${service.baseURL}/api/dashboard/hue/stop`, {
       method: 'POST',
@@ -142,10 +203,67 @@ class FakeDashboardSonos {
   async next(groupId: string) { this.calls.push({ action: 'next', groupId }); }
   async previous(groupId: string) { this.calls.push({ action: 'previous', groupId }); }
   async setGroupVolume(groupId: string) { this.calls.push({ action: 'volume', groupId }); }
+  async setMemberVolume(groupId: string) { this.calls.push({ action: 'member-volume', groupId }); }
   async setSoundbarNightMode(groupId: string) { this.calls.push({ action: 'night', groupId }); }
   async setSoundbarSpeechEnhancementRawLevel(groupId: string) { this.calls.push({ action: 'speech', groupId }); }
   async mergeGroups(groupId: string, intoGroupId: string) { this.calls.push({ action: 'group', groupId, intoGroupId }); }
   async separateGroup(groupId: string) { this.calls.push({ action: 'ungroup', groupId }); }
+}
+
+class FakeDashboardHue {
+  private config: HueAmbienceMappingConfiguration = {
+    resources: {
+      lights: [{
+        id: 'light-1',
+        name: 'Floor lamp',
+        supportsColor: true,
+        supportsGradient: true,
+        supportsEntertainment: true,
+        function: 'decorative' as const,
+        functionMetadataResolved: true,
+      }],
+      areas: [{
+        id: 'room-1', name: 'Living Room', kind: 'room' as const, childLightIDs: ['light-1'],
+      }, {
+        id: 'ent-1', name: 'TV Area', kind: 'entertainmentArea' as const, childLightIDs: ['light-1'],
+      }],
+    },
+    mappings: [{
+      sonosID: 'uuid-living',
+      sonosName: 'Living Room',
+      relayGroupID: '192.168.50.25',
+      preferredTarget: { kind: 'room' as const, id: 'room-1' },
+      fallbackTarget: null,
+      includedLightIDs: ['light-1'],
+      excludedLightIDs: ['light-1'],
+      capability: 'gradientReady' as const,
+    }],
+  };
+
+  status() {
+    return {
+      configured: true,
+      enabled: true,
+      runtimeActive: false,
+      runtimePaused: false,
+      mappings: this.config.mappings.length,
+      lights: this.config.resources.lights.length,
+      areas: this.config.resources.areas.length,
+    };
+  }
+
+  async entertainmentStatus() {
+    return { configured: true, bridgeReachable: true, streaming: 'free' as const, lastError: null };
+  }
+
+  mappingConfiguration() { return this.config; }
+
+  async saveMappings(mappings: HueSonosMapping[]) {
+    this.config = { ...this.config, mappings };
+  }
+
+  async start() { return undefined; }
+  async stop() { return undefined; }
 }
 
 function fakeDependencies(
@@ -156,12 +274,7 @@ function fakeDependencies(
   deviceLogs.receive({ entries: [{ level: 'info', category: 'Relay', message: 'device ready' }] });
   return {
     sonos,
-    hue: {
-      status: () => ({ configured: true, enabled: true, runtimeActive: false, runtimePaused: false }),
-      entertainmentStatus: async () => ({ configured: true, bridgeReachable: true, streaming: 'free', lastError: null }),
-      start: async () => undefined,
-      stop: async () => undefined,
-    },
+    hue: new FakeDashboardHue(),
     apns: {
       status: () => ({
         mode: 'ready', environment: 'production', bundleId: 'com.charm.SonosWidget',

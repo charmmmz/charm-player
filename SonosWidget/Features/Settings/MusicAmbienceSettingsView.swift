@@ -19,9 +19,9 @@ enum HueAmbienceEnableControlPolicy {
     static func usesRelayRuntime(
         relayAvailable: Bool,
         relayConfigured: Bool,
-        relayEnabled: Bool
+        relayEnabled _: Bool
     ) -> Bool {
-        relayAvailable && relayConfigured && relayEnabled
+        relayAvailable && relayConfigured
     }
 
     static func effectiveIsEnabled(
@@ -38,7 +38,7 @@ enum HueAmbienceEnableControlPolicy {
         ) else {
             return localEnabled
         }
-        return !relayPaused
+        return relayEnabled && !relayPaused
     }
 }
 
@@ -338,6 +338,9 @@ struct MusicAmbienceSettingsView: View {
         .onChange(of: relay.isHueAmbienceRelayPaused) {
             manager.refreshStatus()
         }
+        .onChange(of: relay.isHueAmbienceRelayEnabled) {
+            manager.refreshStatus()
+        }
     }
 
     private var statusOverviewSection: some View {
@@ -420,12 +423,6 @@ struct MusicAmbienceSettingsView: View {
         } footer: {
             Text("Album colors drive the assigned Hue targets.")
         }
-        .onChange(of: store.isEnabled) {
-            let actions = syncActions
-            Task {
-                await actions.enabledChanged()
-            }
-        }
         .onChange(of: store.flowSpeed) {
             let actions = syncActions
             Task {
@@ -504,6 +501,10 @@ struct MusicAmbienceSettingsView: View {
         } set: { enabled in
             guard usesRelayRuntimeControl else {
                 store.isEnabled = enabled
+                let actions = syncActions
+                Task {
+                    await actions.enabledChanged()
+                }
                 return
             }
 

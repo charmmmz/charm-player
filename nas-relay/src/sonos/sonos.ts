@@ -7,7 +7,7 @@ import {
   type ITunesArtworkLookupClient,
   type SonosArtworkResolver,
 } from '../artwork/sonosArtworkResolver.js';
-import type { SonosGroupSnapshot } from '../types.js';
+import type { SonosGroupMemberSnapshot, SonosGroupSnapshot } from '../types.js';
 
 export type SonosSnapshotChangeTrigger =
   | 'sonos-change'
@@ -52,6 +52,8 @@ export interface SonosBridgeOptions {
 
 interface RefreshSnapshotOptions {
   suppressTransientNonPlaying?: boolean;
+  topologyVerified?: boolean;
+  topologyGroup?: ParsedZoneGroup;
 }
 
 interface SonosLocalPlayerInfo {
@@ -123,6 +125,13 @@ interface SonosLocalPlaybackMetadata {
 
 interface SonosZoneInfo {
   HTAudioIn?: number | string | null;
+}
+
+interface SonosTVAudioFormatSnapshot {
+  rawCode: number;
+  label: string;
+  geekLabel: string;
+  hasSignal: boolean;
 }
 
 const SONOS_LOCAL_CONTROL_PORT = 1443;
@@ -237,6 +246,10 @@ export class SonosBridge extends EventEmitter {
   private readonly eventRefreshDebounceMs: number;
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
   private readonly eventRefreshTimers = new Map<string, NodeJS.Timeout>();
+  private readonly attachedDeviceListenerKeys = new Set<string>();
+  private visibleTopologyCoordinatorKeys = new Set<string>();
+  private topologyFilterReady = false;
+  private topologyRefreshTimer: NodeJS.Timeout | null = null;
   private periodicHandle: NodeJS.Timeout | null = null;
   private discoveryState: SonosDiscoveryState = {
     mode: 'auto',
@@ -291,20 +304,30 @@ export class SonosBridge extends EventEmitter {
         'attached Sonos device',
       );
       this.attachDeviceListeners(device);
-      // Prime the snapshot table so a register-activity coming in immediately
-      // can ship something useful even before the first Sonos event fires.
-      void this.refreshSnapshot(device, 'initial-prime').catch(err =>
-        this.log.warn({ err, device: device.Name }, 'initial snapshot fetch failed'),
-      );
     }
+    const managerWithNewDevice = this.manager as unknown as {
+      OnNewDevice?: (listener: (device: SonosDevice) => void) => void;
+    };
+    managerWithNewDevice.OnNewDevice?.(device => {
+        this.log.info(
+          { name: device.Name, host: device.Host, uuid: device.Uuid },
+          'attached newly discovered Sonos device',
+        );
+        this.attachDeviceListeners(device);
+        this.scheduleTopologyRefresh();
+      });
+
+    // ZoneGroupState is authoritative for which devices are user-visible
+    // coordinators. sonos-ts also discovers bonded surrounds, stereo-pair
+    // partners and Subs as devices; priming every discovered device creates
+    // phantom dashboard groups for those Invisible=1 members.
+    await this.refreshTopologySnapshots('initial-prime');
 
     // Belt-and-braces: poll once a minute as a safety net in case GENA
     // subscriptions silently expire (Sonos firmware bug; renews are auto
     // but rare hiccups aren't unheard of).
     this.periodicHandle = setInterval(() => {
-      for (const device of this.manager.Devices) {
-        void this.refreshSnapshot(device, 'periodic-refresh').catch(() => undefined);
-      }
+      void this.refreshTopologySnapshots('periodic-refresh');
     }, 60_000);
   }
 
@@ -329,6 +352,8 @@ export class SonosBridge extends EventEmitter {
       clearTimeout(timer);
     }
     this.eventRefreshTimers.clear();
+    if (this.topologyRefreshTimer) clearTimeout(this.topologyRefreshTimer);
+    this.topologyRefreshTimer = null;
     this.manager.CancelSubscription();
   }
 
@@ -344,8 +369,11 @@ export class SonosBridge extends EventEmitter {
   /// Coordinator IP used as `groupId` by iOS / relay health — resolve group coordinator.
   resolveCoordinator(groupId: string): SonosDevice | undefined {
     for (const device of this.manager.Devices) {
-      const coord = device.Coordinator;
-      if (coord.Host === groupId) return coord;
+      const coord = device.Coordinator ?? device;
+      const host = firstNonEmpty(coord.Host, device.Host);
+      const uuid = firstNonEmpty(coord.Uuid, device.Uuid);
+      if (this.topologyFilterReady && !this.isVisibleTopologyCoordinator(host, uuid)) continue;
+      if (host === groupId) return coord;
     }
     return undefined;
   }
@@ -388,6 +416,22 @@ export class SonosBridge extends EventEmitter {
       InstanceID: 0,
       DesiredVolume: v,
     });
+    await this.refreshSnapshot(coord);
+  }
+
+  async setMemberVolume(groupId: string, memberId: string, volume: number): Promise<void> {
+    const coord = this.requireCoordinator(groupId);
+    const members = await this.groupMembersForCoordinator(coord, groupId);
+    const member = members.find(candidate => candidate.id === memberId || candidate.host === memberId);
+    if (!member) throw new Error(`unknown_member: no visible Sonos member ${memberId} in ${groupId}`);
+
+    const device = this.findDevice(member.host, member.id);
+    const service = renderingControlService(device);
+    if (!service || typeof service.SetVolume !== 'function') {
+      throw new Error(`missing_rendering_control_service: ${member.name}`);
+    }
+    const desiredVolume = Math.min(100, Math.max(0, Math.round(volume)));
+    await service.SetVolume({ InstanceID: 0, Channel: 'Master', DesiredVolume: desiredVolume });
     await this.refreshSnapshot(coord);
   }
 
@@ -490,8 +534,8 @@ export class SonosBridge extends EventEmitter {
   }
 
   private requireZoneMemberDevice(member: NonNullable<ParsedZoneGroup['members']>[number]): SonosDevice {
-    const host = firstObjectString(member.host);
-    const uuid = firstObjectString(member.uuid);
+    const host = firstObjectString(member.host) ?? '';
+    const uuid = firstObjectString(member.uuid) ?? '';
     const device = this.manager.Devices.find(candidate => (
       (host && candidate.Host === host) || (uuid && candidate.Uuid === uuid)
     ));
@@ -503,27 +547,7 @@ export class SonosBridge extends EventEmitter {
 
   private async refreshTopologyAfterMutation(): Promise<void> {
     await topologyMutationDelay(500);
-    const groups = await this.loadAllZoneGroups();
-    const activeGroupIds = new Set<string>();
-
-    for (const group of groups) {
-      const host = firstObjectString(group.coordinator?.host);
-      const uuid = firstObjectString(group.coordinator?.uuid);
-      if (host) activeGroupIds.add(host);
-      const coordinator = this.manager.Devices.find(device => (
-        (host && device.Host === host) || (uuid && device.Uuid === uuid)
-      ));
-      if (!coordinator) continue;
-      try {
-        await this.refreshSnapshot(coordinator);
-      } catch (err) {
-        this.log.debug({ err, groupId: host || uuid }, 'post-grouping Sonos snapshot refresh failed');
-      }
-    }
-
-    for (const groupId of this.snapshots.keys()) {
-      if (!activeGroupIds.has(groupId)) this.snapshots.delete(groupId);
-    }
+    await this.refreshTopologySnapshots('sonos-change');
   }
 
   // ---- internals --------------------------------------------------------
@@ -534,6 +558,9 @@ export class SonosBridge extends EventEmitter {
     // happened, please re-snapshot" trigger; the actual state we always pull
     // fresh via PositionInfo / TransportInfo to avoid event-payload drift
     // between firmware versions.
+    const key = firstNonEmpty(device?.Uuid, device?.Host, device?.Name);
+    if (key && this.attachedDeviceListenerKeys.has(key)) return;
+    if (key) this.attachedDeviceListenerKeys.add(key);
     try {
       device.Events.on(SonosEvents.AVTransport, () => this.scheduleEventRefresh(device));
       device.Events.on(SonosEvents.CurrentTrackUri, () => this.scheduleEventRefresh(device));
@@ -541,7 +568,10 @@ export class SonosBridge extends EventEmitter {
       device.Events.on(SonosEvents.CurrentTransportState, () => this.scheduleEventRefresh(device));
       device.Events.on(SonosEvents.CurrentTransportStateSimple, () => this.scheduleEventRefresh(device));
       device.Events.on(SonosEvents.PlaybackStopped, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.GroupName, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.RenderingControl, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.Volume, () => this.scheduleEventRefresh(device));
+      device.Events.on(SonosEvents.Coordinator, () => this.scheduleTopologyRefresh());
+      device.Events.on(SonosEvents.GroupName, () => this.scheduleTopologyRefresh());
     } catch (err) {
       this.log.warn({ err, device: device.Name }, 'failed to attach device events');
     }
@@ -572,6 +602,118 @@ export class SonosBridge extends EventEmitter {
     this.eventRefreshTimers.set(groupId, timer);
   }
 
+  private scheduleTopologyRefresh(): void {
+    if (this.topologyRefreshTimer) clearTimeout(this.topologyRefreshTimer);
+    this.topologyRefreshTimer = setTimeout(() => {
+      this.topologyRefreshTimer = null;
+      void this.refreshTopologySnapshots('sonos-change').catch(err => {
+        this.log.debug({ err }, 'Sonos topology event refresh failed');
+      });
+    }, this.eventRefreshDebounceMs);
+    this.topologyRefreshTimer.unref?.();
+  }
+
+  private async refreshTopologySnapshots(trigger: SonosSnapshotChangeTrigger): Promise<void> {
+    let groups: ParsedZoneGroup[];
+    try {
+      groups = await this.loadAllZoneGroups();
+    } catch (err) {
+      // Older/mocked sonos-ts managers may not expose parsed topology. Keep a
+      // deduplicated coordinator fallback instead of failing discovery.
+      this.log.warn({ err }, 'Sonos topology unavailable; using discovered coordinator fallback');
+      await this.refreshDiscoveredCoordinatorSnapshots(trigger);
+      return;
+    }
+
+    const activeGroupIds = new Set<string>();
+    const coordinatorKeys = new Set<string>();
+    const coordinators: Array<{ device: SonosDevice; group: ParsedZoneGroup }> = [];
+
+    for (const group of groups) {
+      const host = firstObjectString(group.coordinator?.host);
+      const uuid = firstObjectString(group.coordinator?.uuid);
+      const coordinatorMember = (group.members ?? []).find(member => (
+        (host && firstObjectString(member.host) === host)
+        || (uuid && firstObjectString(member.uuid) === uuid)
+      ));
+      if (
+        isInvisibleDevice(group.coordinator as unknown as Record<string, unknown>)
+        || (coordinatorMember
+          && isInvisibleDevice(coordinatorMember as unknown as Record<string, unknown>))
+      ) {
+        continue;
+      }
+
+      const coordinator = this.manager.Devices.find(device => (
+        (host && device.Host === host) || (uuid && device.Uuid === uuid)
+      ));
+      if (!coordinator) {
+        this.log.debug({ groupId: host || uuid }, 'topology coordinator device is not attached');
+        continue;
+      }
+
+      const resolvedHost = firstNonEmpty(host, coordinator.Host);
+      const resolvedUuid = firstNonEmpty(uuid, coordinator.Uuid);
+      if (resolvedHost) {
+        activeGroupIds.add(resolvedHost);
+        coordinatorKeys.add(resolvedHost);
+      }
+      if (resolvedUuid) coordinatorKeys.add(resolvedUuid);
+      coordinators.push({ device: coordinator, group });
+    }
+
+    this.visibleTopologyCoordinatorKeys = coordinatorKeys;
+    this.topologyFilterReady = true;
+
+    await Promise.all(coordinators.map(async ({ device: coordinator, group }) => {
+      try {
+        await this.refreshSnapshot(coordinator, trigger, { topologyVerified: true, topologyGroup: group });
+      } catch (err) {
+        this.log.debug(
+          { err, groupId: coordinator.Host ?? coordinator.Uuid },
+          'topology coordinator snapshot refresh failed',
+        );
+      }
+    }));
+
+    for (const groupId of this.snapshots.keys()) {
+      if (!activeGroupIds.has(groupId)) this.snapshots.delete(groupId);
+    }
+  }
+
+  private async refreshDiscoveredCoordinatorSnapshots(trigger: SonosSnapshotChangeTrigger): Promise<void> {
+    let devices: SonosDevice[];
+    try {
+      devices = this.manager.Devices;
+    } catch (err) {
+      this.log.debug({ err }, 'no discovered Sonos devices available for topology fallback');
+      return;
+    }
+    const coordinators = new Map<string, SonosDevice>();
+    for (const device of devices) {
+      if (isInvisibleDevice(device as unknown as Record<string, unknown>)) continue;
+      const coordinator = device.Coordinator ?? device;
+      if (isInvisibleDevice(coordinator as unknown as Record<string, unknown>)) continue;
+      const key = firstNonEmpty(coordinator.Host, coordinator.Uuid, device.Host, device.Uuid);
+      if (key && !coordinators.has(key)) coordinators.set(key, coordinator);
+    }
+    await Promise.all([...coordinators.values()].map(coordinator => (
+      this.refreshSnapshot(coordinator, trigger).catch(err => {
+        this.log.debug(
+          { err, groupId: coordinator.Host ?? coordinator.Uuid },
+          'fallback coordinator snapshot refresh failed',
+        );
+      })
+    )));
+  }
+
+  private isVisibleTopologyCoordinator(host: string, uuid: string): boolean {
+    return Boolean(
+      (host && this.visibleTopologyCoordinatorKeys.has(host))
+      || (uuid && this.visibleTopologyCoordinatorKeys.has(uuid)),
+    );
+  }
+
   private async refreshSnapshot(
     device: any,
     trigger: SonosSnapshotChangeTrigger = 'sonos-change',
@@ -588,6 +730,16 @@ export class SonosBridge extends EventEmitter {
       if (!resolvedGroupId) {
         throw new Error(`missing Sonos group id for ${device.Name ?? 'unknown device'}`);
       }
+      const coordinatorHost = firstNonEmpty(coordinator.Host, device.Host);
+      const coordinatorUuid = firstNonEmpty(coordinator.Uuid, device.Uuid);
+      if (
+        this.topologyFilterReady
+        && options.topologyVerified !== true
+        && !this.isVisibleTopologyCoordinator(coordinatorHost, coordinatorUuid)
+      ) {
+        this.snapshots.delete(resolvedGroupId);
+        return false;
+      }
       groupId = resolvedGroupId;
       refreshSequence = this.beginRefresh(resolvedGroupId);
       const previousSnapshot = this.snapshots.get(resolvedGroupId);
@@ -595,9 +747,10 @@ export class SonosBridge extends EventEmitter {
       const position = await coordinator.AVTransportService.GetPositionInfo();
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
-      const isPlaying = String(transport.CurrentTransportState) === 'PLAYING';
+      const transportStateRaw = String(transport.CurrentTransportState || 'UNKNOWN').toUpperCase();
+      const isPlaying = transportStateRaw === 'PLAYING';
       const trackUri = firstNonEmpty(position.TrackURI, coordinator.CurrentTrackUri, device.CurrentTrackUri);
-      const playbackSourceRaw = playbackSourceFromTrackUri(trackUri);
+      let playbackSourceRaw = playbackSourceFromTrackUri(trackUri);
       const positionSeconds = parseDuration(position.RelTime ?? '00:00:00');
       const durationSeconds = parseDuration(position.TrackDuration ?? '00:00:00');
       const metadata = trackMetadataFromMetadata(position.TrackMetaData);
@@ -607,12 +760,19 @@ export class SonosBridge extends EventEmitter {
         position.TrackMetaData,
         playbackSourceRaw,
       );
+      let tvAudioFormat: SonosTVAudioFormatSnapshot | null = null;
       if (playbackSourceRaw === 'tv') {
-        audioQualityLabel = await this.tvAudioQualityLabelForSnapshot(coordinator) ?? audioQualityLabel;
+        tvAudioFormat = await this.tvAudioFormatForSnapshot(coordinator);
+        audioQualityLabel = tvAudioFormat?.geekLabel ?? audioQualityLabel;
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
       } else {
         localPlaybackMetadata = await this.localControlPlaybackMetadata(coordinator, device);
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+        if (!playbackSourceRaw || playbackSourceRaw === 'unknown') {
+          playbackSourceRaw = playbackSourceFromServiceName(
+            localPlaybackServiceName(localPlaybackMetadata),
+          ) ?? playbackSourceRaw;
+        }
         const localQuality = localPlaybackMetadata
           ? localPlaybackQualityFromPlaybackMetadata(localPlaybackMetadata)
           : this.localControl?.playbackMetadata
@@ -626,6 +786,12 @@ export class SonosBridge extends EventEmitter {
       const soundbarEQ = await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw);
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
       const groupVolume = await this.groupVolumeForSnapshot(coordinator, previousSnapshot?.groupVolume);
+      if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
+      const groupMembers = await this.groupMembersForCoordinator(
+        coordinator,
+        resolvedGroupId,
+        options.topologyGroup,
+      );
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
@@ -799,8 +965,12 @@ export class SonosBridge extends EventEmitter {
         albumArtUri,
         albumArtFallbackUri,
         isPlaying,
+        transportStateRaw,
         groupVolume,
         playbackSourceRaw,
+        tvAudioFormatRawCode: tvAudioFormat?.rawCode,
+        tvAudioFormatLabel: tvAudioFormat?.label,
+        tvHasSignal: tvAudioFormat?.hasSignal,
         soundbarNightMode: soundbarEQ.soundbarNightMode,
         soundbarSpeechEnhancementRawLevel: soundbarEQ.soundbarSpeechEnhancementRawLevel,
         audioQualityLabel,
@@ -813,7 +983,8 @@ export class SonosBridge extends EventEmitter {
         }),
         positionSeconds,
         durationSeconds,
-        groupMemberCount: await this.groupMemberCountForCoordinator(coordinator, resolvedGroupId),
+        groupMemberCount: Math.max(1, groupMembers.length),
+        groupMembers,
         sampledAt: new Date(),
       };
 
@@ -979,14 +1150,21 @@ export class SonosBridge extends EventEmitter {
     };
   }
 
-  private async tvAudioQualityLabelForSnapshot(coordinator: unknown): Promise<string | null> {
+  private async tvAudioFormatForSnapshot(coordinator: unknown): Promise<SonosTVAudioFormatSnapshot | null> {
     const service = devicePropertiesService(coordinator);
     if (!service || typeof service.GetZoneInfo !== 'function') return null;
     try {
       const response = await service.GetZoneInfo();
       const rawCode = Number(response?.HTAudioIn);
       if (!Number.isFinite(rawCode)) return null;
-      return tvAudioFormatGeekLabel(Math.round(rawCode));
+      const normalizedRawCode = Math.round(rawCode);
+      const label = tvAudioFormatLabel(normalizedRawCode);
+      return {
+        rawCode: normalizedRawCode,
+        label,
+        geekLabel: tvAudioFormatGeekLabelFromLabel(label),
+        hasSignal: tvAudioFormatHasSignal(label),
+      };
     } catch {
       return null;
     }
@@ -1020,45 +1198,62 @@ export class SonosBridge extends EventEmitter {
     }
   }
 
-  private async groupMemberCountForCoordinator(coordinator: any, groupId: string): Promise<number> {
-    const parsedCount = await this.parsedZoneGroupMemberCountForCoordinator(coordinator, groupId);
-    if (parsedCount !== null) {
-      return parsedCount;
-    }
-    return this.inferredGroupMemberCountForCoordinator(coordinator, groupId);
-  }
-
-  private async parsedZoneGroupMemberCountForCoordinator(
+  private async groupMembersForCoordinator(
     coordinator: any,
     groupId: string,
-  ): Promise<number | null> {
+    knownGroup?: ParsedZoneGroup,
+  ): Promise<SonosGroupMemberSnapshot[]> {
     const coordinatorHost = firstNonEmpty(coordinator.Host, groupId);
     const coordinatorUuid = firstNonEmpty(coordinator.Uuid);
     const manager = this.manager as unknown as {
       LoadAllGroups?: () => Promise<ParsedZoneGroup[]>;
     };
 
-    if (typeof manager.LoadAllGroups !== 'function') {
-      return null;
-    }
-
     try {
-      const groups = await manager.LoadAllGroups.call(this.manager);
-      const group = groups.find(candidate =>
-        zoneGroupMatchesCoordinator(candidate, coordinatorHost, coordinatorUuid));
-      if (!group) {
-        return null;
+      const group = knownGroup ?? (
+        typeof manager.LoadAllGroups === 'function'
+          ? (await manager.LoadAllGroups.call(this.manager)).find(candidate =>
+            zoneGroupMatchesCoordinator(candidate, coordinatorHost, coordinatorUuid))
+          : undefined
+      );
+      if (group) {
+        const members = await Promise.all((group.members ?? [])
+          .filter(member => !isInvisibleDevice(member as unknown as Record<string, unknown>))
+          .map(member => this.groupMemberSnapshot(member, coordinatorHost, coordinatorUuid)));
+        const visible = members.filter((member): member is SonosGroupMemberSnapshot => member !== null);
+        if (visible.length > 0) return visible;
       }
-
-      const visibleMembers = (group.members ?? [])
-        .filter(member => !isInvisibleDevice(member as unknown as Record<string, unknown>));
-      return Math.max(1, visibleMembers.length);
     } catch {
-      return null;
+      // Fall through to sonos-ts' in-memory coordinator relationships.
     }
+    return this.inferredGroupMembersForCoordinator(coordinator, groupId);
   }
 
-  private inferredGroupMemberCountForCoordinator(coordinator: any, groupId: string): number {
+  private async groupMemberSnapshot(
+    member: NonNullable<ParsedZoneGroup['members']>[number],
+    coordinatorHost: string,
+    coordinatorUuid: string,
+  ): Promise<SonosGroupMemberSnapshot | null> {
+    const host = firstObjectString(member.host) ?? '';
+    const uuid = firstObjectString(member.uuid) ?? '';
+    if (!host && !uuid) return null;
+    const device = this.findDevice(host, uuid);
+    return {
+      id: uuid || host,
+      name: firstObjectString(member.name, device?.Name, host, uuid) || 'Unknown room',
+      host: host || firstNonEmpty(device?.Host),
+      isCoordinator: Boolean(
+        (coordinatorHost && host === coordinatorHost)
+        || (coordinatorUuid && uuid === coordinatorUuid)
+      ),
+      volume: await this.memberVolumeForSnapshot(device),
+    };
+  }
+
+  private async inferredGroupMembersForCoordinator(
+    coordinator: any,
+    groupId: string,
+  ): Promise<SonosGroupMemberSnapshot[]> {
     let devices: any[] = [];
     try {
       devices = this.manager.Devices as any[];
@@ -1068,7 +1263,7 @@ export class SonosBridge extends EventEmitter {
 
     const coordinatorHost = firstNonEmpty(coordinator.Host, groupId);
     const coordinatorUuid = firstNonEmpty(coordinator.Uuid);
-    let count = 0;
+    const matched: any[] = [];
 
     for (const device of devices) {
       if (!device || typeof device !== 'object' || isInvisibleDevice(device)) continue;
@@ -1087,16 +1282,52 @@ export class SonosBridge extends EventEmitter {
       const deviceUuid = firstNonEmpty(deviceRecord.Uuid as string);
 
       if (coordinatorHost && (candidateCoordinatorHost === coordinatorHost || deviceHost === coordinatorHost)) {
-        count += 1;
+        matched.push(device);
       } else if (
         coordinatorUuid
         && (candidateCoordinatorUuid === coordinatorUuid || deviceUuid === coordinatorUuid)
       ) {
-        count += 1;
+        matched.push(device);
       }
     }
 
-    return Math.max(1, count);
+    if (matched.length === 0) matched.push(coordinator);
+    return Promise.all(matched.map(async device => {
+      const host = firstNonEmpty(device.Host);
+      const uuid = firstNonEmpty(device.Uuid, host);
+      return {
+        id: uuid,
+        name: firstNonEmpty(device.Name, host, uuid) || 'Unknown room',
+        host,
+        isCoordinator: Boolean(
+          (coordinatorHost && host === coordinatorHost)
+          || (coordinatorUuid && uuid === coordinatorUuid)
+        ),
+        volume: await this.memberVolumeForSnapshot(device),
+      };
+    }));
+  }
+
+  private findDevice(host: string, uuid: string): any | undefined {
+    try {
+      return this.manager.Devices.find(device => (
+        (host && device.Host === host) || (uuid && device.Uuid === uuid)
+      ));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async memberVolumeForSnapshot(device: unknown): Promise<number | null> {
+    const service = renderingControlService(device);
+    if (!service || typeof service.GetVolume !== 'function') return null;
+    try {
+      const response = await service.GetVolume({ InstanceID: 0, Channel: 'Master' });
+      const volume = Number(response?.CurrentVolume);
+      return Number.isFinite(volume) ? Math.min(100, Math.max(0, Math.round(volume))) : null;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -1115,6 +1346,8 @@ function clampSpeechEnhancementLevel(level: number): number {
 function renderingControlService(coordinator: unknown): {
   GetEQ?: (input: { InstanceID: number; EQType: string }) => Promise<{ CurrentValue?: number | string }>;
   SetEQ?: (input: { InstanceID: number; EQType: string; DesiredValue: number }) => Promise<unknown>;
+  GetVolume?: (input: { InstanceID: number; Channel: string }) => Promise<{ CurrentVolume?: number | string }>;
+  SetVolume?: (input: { InstanceID: number; Channel: string; DesiredVolume: number }) => Promise<unknown>;
 } | null {
   if (!coordinator || typeof coordinator !== 'object') return null;
   const service = (coordinator as { RenderingControlService?: unknown }).RenderingControlService;
@@ -1122,6 +1355,8 @@ function renderingControlService(coordinator: unknown): {
   const candidate = service as {
     GetEQ?: (input: { InstanceID: number; EQType: string }) => Promise<{ CurrentValue?: number | string }>;
     SetEQ?: (input: { InstanceID: number; EQType: string; DesiredValue: number }) => Promise<unknown>;
+    GetVolume?: (input: { InstanceID: number; Channel: string }) => Promise<{ CurrentVolume?: number | string }>;
+    SetVolume?: (input: { InstanceID: number; Channel: string; DesiredVolume: number }) => Promise<unknown>;
   };
   return candidate;
 }
@@ -1135,13 +1370,17 @@ function devicePropertiesService(coordinator: unknown): {
   return service as { GetZoneInfo?: () => Promise<SonosZoneInfo> };
 }
 
-function tvAudioFormatGeekLabel(code: number): string {
-  const label = tvAudioFormatLabel(code);
+function tvAudioFormatGeekLabelFromLabel(label: string): string {
   const codec = tvAudioFormatCodec(label);
   const channelLayout = tvAudioFormatIsAtmos(label)
     ? null
     : ['7.1', '5.1', '2.0'].find(layout => label.includes(layout)) ?? null;
   return [codec, channelLayout].filter(Boolean).join(' · ');
+}
+
+function tvAudioFormatHasSignal(label: string): boolean {
+  const normalized = label.toLowerCase();
+  return !normalized.includes('no input') && !normalized.includes('no audio');
 }
 
 function tvAudioFormatLabel(code: number): string {
@@ -1221,6 +1460,30 @@ export function playbackSourceFromTrackUri(trackUri: unknown): string | null {
   return null;
 }
 
+export function playbackSourceFromServiceName(serviceName: unknown): string | null {
+  if (typeof serviceName !== 'string') return null;
+  const name = serviceName.trim().toLowerCase();
+  if (!name) return null;
+  if (name.includes('spotify')) return 'spotify';
+  if (name.includes('apple')) return 'appleMusic';
+  if (name.includes('amazon')) return 'amazonMusic';
+  if (name.includes('tidal')) return 'tidal';
+  if (name.includes('youtube')) return 'youtubeMusic';
+  if (name.includes('netease') || name.includes('网易')) return 'neteaseMusic';
+  if (name.includes('tunein') || name.includes('radio')) return 'radio';
+  return null;
+}
+
+function localPlaybackServiceName(metadata: SonosLocalPlaybackMetadata | null): string | null {
+  if (!metadata) return null;
+  const track = metadata.currentItem?.track ?? metadata.track;
+  return firstObjectString(
+    track?.service?.name,
+    metadata.service?.name,
+    metadata.container?.service?.name,
+  ) || null;
+}
+
 function isLiveRadioSnapshot(input: {
   trackUri: string;
   durationSeconds: number;
@@ -1276,11 +1539,13 @@ interface ParsedZoneGroup {
   coordinator?: {
     host?: string;
     uuid?: string;
+    name?: string;
     Invisible?: boolean;
   };
   members?: Array<{
     host?: string;
     uuid?: string;
+    name?: string;
     Invisible?: boolean;
   }>;
 }
@@ -1764,8 +2029,10 @@ function summarizeAlbumArtUri(albumArtUri: string | null | undefined): string | 
   return `${albumArtUri.slice(0, 96)}…${albumArtUri.slice(-16)}`;
 }
 
-function isInvisibleDevice(device: Record<string, unknown>): boolean {
-  return device.Invisible === true || device.invisible === true || device.isInvisible === true;
+function isInvisibleDevice(device: Record<string, unknown> | null | undefined): boolean {
+  if (!device) return false;
+  const value = device.Invisible ?? device.invisible ?? device.isInvisible;
+  return value === true || value === 1 || value === '1';
 }
 
 function zoneGroupMatchesCoordinator(
