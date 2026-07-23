@@ -121,6 +121,55 @@ test('dashboard requires login, returns sanitized aggregate state, and reuses So
       { action: 'ungroup', groupId: '192.168.50.25' },
     ]);
 
+    const favoritesResponse = await fetch(
+      `${service.baseURL}/api/dashboard/sonos/favorites?target=${encodeURIComponent('Living Room')}`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(favoritesResponse.status, 200);
+    const favorites = await favoritesResponse.json();
+    assert.equal(favorites.favorites[0].title, 'After Hours');
+
+    const currentFavoriteStatus = await fetch(
+      `${service.baseURL}/api/dashboard/sonos/favorite-current?target=${encodeURIComponent('Living Room')}`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(currentFavoriteStatus.status, 200);
+    assert.deepEqual(await currentFavoriteStatus.json(), {
+      ok: true,
+      target: '192.168.50.25',
+      available: true,
+      isFavorite: true,
+      favorite: null,
+    });
+
+    const queueResponse = await fetch(
+      `${service.baseURL}/api/dashboard/sonos/queue?target=${encodeURIComponent('Living Room')}`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(queueResponse.status, 200);
+    const queue = await queueResponse.json();
+    assert.equal(queue.queue.items[0].title, 'Carry Me Away');
+    assert.equal(queue.queue.currentTrackNumber, 9);
+
+    const favoriteCurrent = await fetch(`${service.baseURL}/api/dashboard/sonos/favorite-current`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'Living Room' }),
+    });
+    assert.equal(favoriteCurrent.status, 200);
+    assert.equal((await favoriteCurrent.json()).added, true);
+
+    const playFavorite = await fetch(`${service.baseURL}/api/dashboard/sonos/play-favorite`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'Living Room', favoriteId: 'FV:2/104' }),
+    });
+    assert.equal(playFavorite.status, 200);
+    assert.deepEqual(controller.calls.slice(-2), [
+      { action: 'favorite-current', groupId: '192.168.50.25' },
+      { action: 'play-favorite', groupId: '192.168.50.25' },
+    ]);
+
     const logsResponse = await fetch(`${service.baseURL}/api/dashboard/logs`, {
       headers: { Cookie: cookie },
     });
@@ -208,6 +257,37 @@ class FakeDashboardSonos {
   async setSoundbarSpeechEnhancementRawLevel(groupId: string) { this.calls.push({ action: 'speech', groupId }); }
   async mergeGroups(groupId: string, intoGroupId: string) { this.calls.push({ action: 'group', groupId, intoGroupId }); }
   async separateGroup(groupId: string) { this.calls.push({ action: 'ungroup', groupId }); }
+  async listFavorites() {
+    return [{
+      id: 'FV:2/104', title: 'After Hours', description: 'After Hours', type: 'instantPlay',
+      albumArtUri: 'https://example.com/after-hours.jpg', uri: 'x-rincon-cpcontainer:album',
+      resourceMetadata: '<DIDL-Lite/>', playable: true,
+    }];
+  }
+  async currentFavoriteStatus() {
+    return { available: true, isFavorite: true, favorite: null };
+  }
+  async listQueue(groupId: string) {
+    return {
+      groupId, updateId: 42, currentTrackNumber: 9,
+      items: [{
+        id: 'Q:0/9', trackNumber: 9, title: 'Carry Me Away', artist: 'John Mayer', album: 'Sob Rock',
+        albumArtUri: 'https://example.com/sob-rock.jpg', uri: 'x-sonos-http:song:1', durationSeconds: 159,
+      }],
+    };
+  }
+  async playFavorite(groupId: string) { this.calls.push({ action: 'play-favorite', groupId }); }
+  async addCurrentTrackToFavorites(groupId: string) {
+    this.calls.push({ action: 'favorite-current', groupId });
+    return {
+      added: true, alreadyExists: false,
+      favorite: {
+        id: 'FV:2/105', title: 'Carry Me Away', description: 'Carry Me Away', type: 'instantPlay',
+        albumArtUri: 'https://example.com/sob-rock.jpg', uri: 'x-sonos-http:song:1',
+        resourceMetadata: '<DIDL-Lite/>', playable: true,
+      },
+    };
+  }
 }
 
 class FakeDashboardHue {

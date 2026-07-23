@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class AnimatedNowPlayingArtworkStateTests: XCTestCase {
+    func testNowPlayingIdentityAllowsAppleMusicStationTracksButRejectsOtherLiveStreams() {
+        XCTAssertTrue(AnimatedArtworkFeature.canBuildNowPlayingIdentity(
+            source: .appleMusic,
+            isLiveStream: true
+        ))
+        XCTAssertFalse(AnimatedArtworkFeature.canBuildNowPlayingIdentity(
+            source: .radio,
+            isLiveStream: true
+        ))
+        XCTAssertFalse(AnimatedArtworkFeature.canBuildNowPlayingIdentity(
+            source: .spotify,
+            isLiveStream: true
+        ))
+        XCTAssertTrue(AnimatedArtworkFeature.canBuildNowPlayingIdentity(
+            source: .unknown,
+            isLiveStream: false
+        ))
+    }
+
     func testEligibilityRejectsReduceMotionLowPowerAndNonAppleMusic() {
         XCTAssertFalse(AnimatedArtworkFeature.canRenderVideo(
             source: .appleMusic,

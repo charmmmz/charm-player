@@ -5,9 +5,27 @@ import type { Logger } from 'pino';
 import {
   createSonosArtworkResolver,
   type ITunesArtworkLookupClient,
+  type SonosArtworkResolutionSource,
   type SonosArtworkResolver,
 } from '../artwork/sonosArtworkResolver.js';
 import type { SonosGroupMemberSnapshot, SonosGroupSnapshot } from '../types.js';
+import {
+  buildAppleMusicArtistStationPlayback,
+  buildFavoriteCreateElements,
+  buildCurrentTrackResourceMetadata,
+  favoriteForCurrentURI,
+  favoriteUsesDirectTransport,
+  parseSonosFavorites,
+  resolveAppleMusicArtistId,
+  serviceDescriptorForCurrentURI,
+  sonosQueueView,
+  type SonosFavoriteAddResult,
+  type SonosCurrentFavoriteStatus,
+  type SonosFavoriteItem,
+  type SonosQueueArtworkResult,
+  type SonosQueueItem,
+  type SonosQueueView,
+} from './sonosLibrary.js';
 
 export type SonosSnapshotChangeTrigger =
   | 'sonos-change'
@@ -48,17 +66,58 @@ export interface SonosBridgeOptions {
   artworkResolver?: SonosArtworkResolver | null;
   transitionSettleRefreshMs?: number;
   eventRefreshDebounceMs?: number;
+  volumeCommandDebounceMs?: number;
+  playbackWatchdogIntervalMs?: number;
+  fullHouseWatchdogEveryCycles?: number;
+  managerFactory?: () => SonosManager;
+  topologyRecoveryDiscoveryTimeoutSeconds?: number;
 }
 
 interface RefreshSnapshotOptions {
   suppressTransientNonPlaying?: boolean;
   topologyVerified?: boolean;
   topologyGroup?: ParsedZoneGroup;
+  includeGroupDetails?: boolean;
 }
 
 interface SonosLocalPlayerInfo {
   groupId?: string | null;
 }
+
+interface QueueArtworkCacheEntry {
+  url: string | null;
+  source: SonosQueueItem['artworkSource'];
+  expiresAt: number;
+}
+
+interface PendingVolumeWrite {
+  volume: number;
+  operation: (volume: number) => Promise<void>;
+  timer: NodeJS.Timeout;
+  waiters: Array<{
+    resolve: () => void;
+    reject: (reason: unknown) => void;
+  }>;
+}
+
+interface AttachedDeviceListeners {
+  device: {
+    Events?: {
+      off?: (event: SonosEvents, listener: (...args: any[]) => void) => void;
+    };
+  };
+  listeners: Array<{
+    event: SonosEvents;
+    listener: (...args: any[]) => void;
+  }>;
+}
+
+const QUEUE_ARTWORK_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const QUEUE_ARTWORK_MISS_TTL_MS = 15 * 60 * 1_000;
+const QUEUE_ARTWORK_CACHE_MAX_ENTRIES = 2_000;
+const QUEUE_ARTWORK_BATCH_LIMIT = 12;
+const QUEUE_ARTWORK_LOOKUP_INTERVAL_MS = 350;
+const QUEUE_ARTWORK_RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1_000;
 
 interface SonosLocalPlaybackMetadata {
   service?: {
@@ -235,22 +294,39 @@ class SonosLocalControlApiClient implements SonosLocalControlClient {
 /// transport-state, playback-stopped, etc.) that we collapse into one snapshot
 /// per group so the consumer only needs one handler.
 export class SonosBridge extends EventEmitter {
-  private readonly manager = new SonosManager();
+  private manager: SonosManager;
+  private readonly managerFactory: () => SonosManager;
   private readonly snapshots = new Map<string, SonosGroupSnapshot>();
   private readonly refreshSequences = new Map<string, number>();
   private readonly localQualityLogSignatures = new Map<string, string>();
   private readonly log: Logger;
   private readonly localControl: SonosLocalControlClient | null;
   private readonly artworkResolver: SonosArtworkResolver | null;
+  private readonly queueArtworkCache = new Map<string, QueueArtworkCacheEntry>();
+  private readonly queueArtworkInFlight = new Map<string, Promise<QueueArtworkCacheEntry>>();
+  private readonly queueViews = new Map<string, SonosQueueView>();
+  private queueArtworkLookupTail = Promise.resolve();
+  private nextQueueArtworkLookupAt = 0;
+  private queueArtworkBackoffUntil = 0;
   private readonly transitionSettleRefreshMs: number;
   private readonly eventRefreshDebounceMs: number;
+  private readonly volumeCommandDebounceMs: number;
+  private readonly playbackWatchdogIntervalMs: number;
+  private readonly fullHouseWatchdogEveryCycles: number;
+  private readonly topologyRecoveryDiscoveryTimeoutSeconds: number;
   private readonly transitionSettleRefreshTimers = new Map<string, NodeJS.Timeout>();
+  private readonly commandConfirmationRefreshTimers = new Map<string, NodeJS.Timeout>();
   private readonly eventRefreshTimers = new Map<string, NodeJS.Timeout>();
+  private readonly volumeEventRefreshTimers = new Map<string, NodeJS.Timeout>();
+  private readonly pendingVolumeWrites = new Map<string, PendingVolumeWrite>();
   private readonly attachedDeviceListenerKeys = new Set<string>();
+  private readonly attachedDeviceListeners = new Map<string, AttachedDeviceListeners>();
   private visibleTopologyCoordinatorKeys = new Set<string>();
   private topologyFilterReady = false;
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
+  private topologyRecoveryPromise: Promise<ParsedZoneGroup[] | null> | null = null;
   private periodicHandle: NodeJS.Timeout | null = null;
+  private periodicCycle = 0;
   private discoveryState: SonosDiscoveryState = {
     mode: 'auto',
     status: 'idle',
@@ -259,6 +335,8 @@ export class SonosBridge extends EventEmitter {
 
   constructor(log: Logger, options: SonosBridgeOptions = {}) {
     super();
+    this.managerFactory = options.managerFactory ?? (() => new SonosManager());
+    this.manager = this.managerFactory();
     this.log = log.child({ module: 'sonos' });
     this.localControl = options.localControl === undefined
       ? new SonosLocalControlApiClient(this.log)
@@ -271,6 +349,11 @@ export class SonosBridge extends EventEmitter {
       : options.artworkResolver;
     this.transitionSettleRefreshMs = options.transitionSettleRefreshMs ?? 1_200;
     this.eventRefreshDebounceMs = options.eventRefreshDebounceMs ?? 250;
+    this.volumeCommandDebounceMs = options.volumeCommandDebounceMs ?? 300;
+    this.playbackWatchdogIntervalMs = options.playbackWatchdogIntervalMs ?? 10 * 60_000;
+    this.fullHouseWatchdogEveryCycles = Math.max(1, options.fullHouseWatchdogEveryCycles ?? 3);
+    this.topologyRecoveryDiscoveryTimeoutSeconds =
+      options.topologyRecoveryDiscoveryTimeoutSeconds ?? 10;
   }
 
   get discovery(): SonosDiscoveryState {
@@ -298,24 +381,7 @@ export class SonosBridge extends EventEmitter {
       throw err;
     }
 
-    for (const device of this.manager.Devices) {
-      this.log.info(
-        { name: device.Name, host: device.Host, uuid: device.Uuid },
-        'attached Sonos device',
-      );
-      this.attachDeviceListeners(device);
-    }
-    const managerWithNewDevice = this.manager as unknown as {
-      OnNewDevice?: (listener: (device: SonosDevice) => void) => void;
-    };
-    managerWithNewDevice.OnNewDevice?.(device => {
-        this.log.info(
-          { name: device.Name, host: device.Host, uuid: device.Uuid },
-          'attached newly discovered Sonos device',
-        );
-        this.attachDeviceListeners(device);
-        this.scheduleTopologyRefresh();
-      });
+    this.attachManagerListeners(this.manager);
 
     // ZoneGroupState is authoritative for which devices are user-visible
     // coordinators. sonos-ts also discovers bonded surrounds, stereo-pair
@@ -323,12 +389,14 @@ export class SonosBridge extends EventEmitter {
     // phantom dashboard groups for those Invisible=1 members.
     await this.refreshTopologySnapshots('initial-prime');
 
-    // Belt-and-braces: poll once a minute as a safety net in case GENA
-    // subscriptions silently expire (Sonos firmware bug; renews are auto
-    // but rare hiccups aren't unheard of).
+    // GENA is the primary source of truth. Keep a deliberately slow watchdog
+    // for the rare case where a firmware update silently drops subscriptions:
+    // active groups get a light playback refresh every ten minutes, while a
+    // full topology/group-detail refresh runs only every third cycle.
     this.periodicHandle = setInterval(() => {
-      void this.refreshTopologySnapshots('periodic-refresh');
-    }, 60_000);
+      void this.runPlaybackWatchdog();
+    }, this.playbackWatchdogIntervalMs);
+    this.periodicHandle.unref?.();
   }
 
   private async startFromSeed(seedIp: string): Promise<boolean> {
@@ -344,17 +412,34 @@ export class SonosBridge extends EventEmitter {
 
   stop(): void {
     if (this.periodicHandle) clearInterval(this.periodicHandle);
+    this.periodicHandle = null;
     for (const timer of this.transitionSettleRefreshTimers.values()) {
       clearTimeout(timer);
     }
     this.transitionSettleRefreshTimers.clear();
+    for (const timer of this.commandConfirmationRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.commandConfirmationRefreshTimers.clear();
     for (const timer of this.eventRefreshTimers.values()) {
       clearTimeout(timer);
     }
     this.eventRefreshTimers.clear();
+    for (const timer of this.volumeEventRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.volumeEventRefreshTimers.clear();
+    for (const pending of this.pendingVolumeWrites.values()) {
+      clearTimeout(pending.timer);
+      for (const waiter of pending.waiters) {
+        waiter.reject(new Error('Sonos bridge stopped before volume command was sent'));
+      }
+    }
+    this.pendingVolumeWrites.clear();
     if (this.topologyRefreshTimer) clearTimeout(this.topologyRefreshTimer);
     this.topologyRefreshTimer = null;
-    this.manager.CancelSubscription();
+    this.detachDeviceListeners();
+    this.cancelManagerSubscription(this.manager);
   }
 
   /// Latest known snapshot for a group, or undefined if we haven't sampled yet.
@@ -387,52 +472,392 @@ export class SonosBridge extends EventEmitter {
 
   async play(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
-    await coord.Play();
-    await this.refreshSnapshot(coord);
+    this.scheduleCommandConfirmationRefresh(coord, groupId);
+    try {
+      await coord.Play();
+    } catch (err) {
+      this.cancelCommandConfirmationRefresh(groupId);
+      throw err;
+    }
   }
 
   async pause(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
-    await coord.Pause();
-    await this.refreshSnapshot(coord);
+    this.scheduleCommandConfirmationRefresh(coord, groupId);
+    try {
+      await coord.Pause();
+    } catch (err) {
+      this.cancelCommandConfirmationRefresh(groupId);
+      throw err;
+    }
   }
 
   async next(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
-    await coord.Next();
-    await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
+    this.scheduleCommandConfirmationRefresh(coord, groupId, true);
+    try {
+      await coord.Next();
+    } catch (err) {
+      this.cancelCommandConfirmationRefresh(groupId);
+      throw err;
+    }
   }
 
   async previous(groupId: string): Promise<void> {
     const coord = this.requireCoordinator(groupId);
-    await coord.Previous();
+    this.scheduleCommandConfirmationRefresh(coord, groupId, true);
+    try {
+      await coord.Previous();
+    } catch (err) {
+      this.cancelCommandConfirmationRefresh(groupId);
+      throw err;
+    }
+  }
+
+  async listFavorites(groupId: string): Promise<SonosFavoriteItem[]> {
+    return await this.loadFavorites(this.requireCoordinator(groupId));
+  }
+
+  async currentFavoriteStatus(groupId: string): Promise<SonosCurrentFavoriteStatus> {
+    const coord = this.requireCoordinator(groupId);
+    const snapshot = this.current(groupId) ?? await this.pullFreshSnapshot(groupId);
+    const position = await coord.AVTransportService.GetPositionInfo();
+    const uri = firstNonEmpty(position.TrackURI, snapshot?.trackUri);
+    const available = Boolean(uri)
+      && snapshot?.playbackSourceRaw !== 'tv'
+      && Number(snapshot?.durationSeconds ?? 0) > 0;
+    if (!available || !uri) return { available: false, isFavorite: false, favorite: null };
+
+    const favorite = favoriteForCurrentURI(await this.loadFavorites(coord), uri) ?? null;
+    return { available: true, isFavorite: favorite !== null, favorite };
+  }
+
+  async listQueue(groupId: string): Promise<SonosQueueView> {
+    const coord = this.requireCoordinator(groupId);
+    const [queue, position] = await Promise.all([
+      coord.GetQueue(),
+      coord.AVTransportService.GetPositionInfo(),
+    ]);
+    const view = sonosQueueView(groupId, queue.Result, queue.UpdateID, position.Track);
+    this.queueViews.set(groupId, view);
+    return this.applyCachedQueueArtwork(view);
+  }
+
+  async resolveQueueArtworkAlbums(
+    groupId: string,
+    albumKeys: string[],
+  ): Promise<SonosQueueArtworkResult[]> {
+    if (!this.artworkResolver) return [];
+    let view = this.queueViews.get(groupId);
+    if (!view) {
+      await this.listQueue(groupId);
+      view = this.queueViews.get(groupId);
+    }
+    if (!view) return [];
+
+    const requested = [...new Set(albumKeys
+      .filter((key): key is string => typeof key === 'string' && key.trim().length > 0)
+      .map(key => key.trim()))]
+      .slice(0, QUEUE_ARTWORK_BATCH_LIMIT);
+    const representatives = new Map<string, SonosQueueItem>();
+    for (const item of view.items) {
+      if (requested.includes(item.albumKey) && !representatives.has(item.albumKey)) {
+        representatives.set(item.albumKey, item);
+      }
+    }
+
+    const resolved = new Map<string, QueueArtworkCacheEntry>();
+    await mapWithConcurrency([...representatives.entries()], 2, async ([albumKey, item]) => {
+      resolved.set(albumKey, await this.resolveQueueAlbumArtwork(groupId, albumKey, item));
+    });
+    return requested.flatMap(albumKey => {
+      const artwork = resolved.get(albumKey);
+      return artwork ? [{
+        albumKey,
+        albumArtUri: artwork.url,
+        artworkSource: artwork.source,
+      }] : [];
+    });
+  }
+
+  private applyCachedQueueArtwork(view: SonosQueueView): SonosQueueView {
+    return {
+      ...view,
+      items: view.items.map(item => {
+        const artwork = this.queueArtworkCache.get(item.albumKey);
+        return artwork?.url && artwork.expiresAt > Date.now()
+          ? { ...item, albumArtUri: artwork.url, artworkSource: artwork.source }
+          : item;
+      }),
+    };
+  }
+
+  private async resolveQueueAlbumArtwork(
+    groupId: string,
+    albumKey: string,
+    item: SonosQueueItem,
+  ): Promise<QueueArtworkCacheEntry> {
+    const now = Date.now();
+    const cached = this.queueArtworkCache.get(albumKey);
+    if (cached && cached.expiresAt > now) return cached;
+    const pending = this.queueArtworkInFlight.get(albumKey);
+    if (pending) return await pending;
+    if (this.queueArtworkBackoffUntil > now) {
+      return this.rememberQueueArtwork(albumKey, {
+        url: null,
+        source: 'none',
+        expiresAt: this.queueArtworkBackoffUntil,
+      });
+    }
+
+    const request = (async () => {
+      try {
+        await this.waitForQueueArtworkLookupSlot();
+        if (this.queueArtworkBackoffUntil > Date.now()) {
+          return this.rememberQueueArtwork(albumKey, {
+            url: null,
+            source: 'none',
+            expiresAt: this.queueArtworkBackoffUntil,
+          });
+        }
+        const resolution = await this.artworkResolver!.resolve({
+          groupId,
+          trigger: 'queue',
+          title: item.title,
+          artist: item.artist,
+          album: item.album,
+          trackUri: item.uri,
+          albumArtUri: item.sonosAlbumArtUri,
+          playbackSourceRaw: playbackSourceFromTrackUri(item.uri),
+        });
+        if (resolution.fallbackErrorStatus === 'rate-limited') {
+          this.queueArtworkBackoffUntil = Date.now() + QUEUE_ARTWORK_RATE_LIMIT_BACKOFF_MS;
+          this.log.warn(
+            { album: item.album, albumKey, backoffMs: QUEUE_ARTWORK_RATE_LIMIT_BACKOFF_MS },
+            'queue artwork iTunes lookup entered rate-limit backoff',
+          );
+        }
+        const publicFallback = publicQueueArtworkURL(resolution.fallbackUrl);
+        const publicPrimary = resolution.source === 'getaa'
+          ? null
+          : publicQueueArtworkURL(resolution.url);
+        const url = publicFallback ?? publicPrimary;
+        const source = url
+          ? queueArtworkSource(publicFallback ? resolution.fallbackSource : resolution.source)
+          : 'none';
+        return this.rememberQueueArtwork(albumKey, {
+          url,
+          source,
+          expiresAt: now + (url ? QUEUE_ARTWORK_CACHE_TTL_MS : QUEUE_ARTWORK_MISS_TTL_MS),
+        });
+      } catch (error) {
+        this.log.debug({ error, album: item.album, albumKey }, 'queue album artwork resolution failed');
+        return this.rememberQueueArtwork(albumKey, {
+          url: null,
+          source: 'none',
+          expiresAt: now + QUEUE_ARTWORK_MISS_TTL_MS,
+        });
+      }
+    })();
+    this.queueArtworkInFlight.set(albumKey, request);
+    try {
+      return await request;
+    } finally {
+      this.queueArtworkInFlight.delete(albumKey);
+    }
+  }
+
+  private rememberQueueArtwork(albumKey: string, entry: QueueArtworkCacheEntry): QueueArtworkCacheEntry {
+    this.queueArtworkCache.delete(albumKey);
+    this.queueArtworkCache.set(albumKey, entry);
+    while (this.queueArtworkCache.size > QUEUE_ARTWORK_CACHE_MAX_ENTRIES) {
+      const oldest = this.queueArtworkCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.queueArtworkCache.delete(oldest);
+    }
+    return entry;
+  }
+
+  private async waitForQueueArtworkLookupSlot(): Promise<void> {
+    let release!: () => void;
+    const turn = new Promise<void>(resolve => { release = resolve; });
+    const previous = this.queueArtworkLookupTail;
+    this.queueArtworkLookupTail = turn;
+    await previous;
+    try {
+      const waitMs = Math.max(0, this.nextQueueArtworkLookupAt - Date.now());
+      if (waitMs > 0) await queueArtworkLookupDelay(waitMs);
+      this.nextQueueArtworkLookupAt = Date.now() + QUEUE_ARTWORK_LOOKUP_INTERVAL_MS;
+    } finally {
+      release();
+    }
+  }
+
+  async playFavorite(groupId: string, favoriteId: string): Promise<void> {
+    const coord = this.requireCoordinator(groupId);
+    const favorites = await this.loadFavorites(coord);
+    const favorite = favorites.find(item => item.id === favoriteId);
+    if (!favorite) throw new Error(`unknown_favorite: no Sonos Favorite ${favoriteId}`);
+    if (favorite.playbackKind === 'artistStation') {
+      const artistStationId = favorite.artistStationId ?? await resolveAppleMusicArtistId(favorite.title);
+      const station = artistStationId
+        ? buildAppleMusicArtistStationPlayback({ ...favorite, artistStationId }, favorites)
+        : null;
+      if (!station) throw new Error(`artist_station_unavailable: ${favorite.title}`);
+      await coord.AVTransportService.SetAVTransportURI({
+        InstanceID: 0,
+        CurrentURI: station.uri,
+        CurrentURIMetaData: encodeSonosSoapMetadata(station.metadata),
+      });
+      await playbackSettleDelay(800);
+      await coord.Play();
+      await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
+      return;
+    }
+    if (favorite.playbackKind !== 'direct' || !favorite.uri || !favorite.resourceMetadata) {
+      throw new Error(`favorite_not_playable: ${favorite.title}`);
+    }
+
+    if (favoriteUsesDirectTransport(favorite)) {
+      await coord.AVTransportService.SetAVTransportURI({
+        InstanceID: 0,
+        CurrentURI: favorite.uri,
+        CurrentURIMetaData: encodeSonosSoapMetadata(favorite.resourceMetadata),
+      });
+      await coord.Play();
+      await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
+      return;
+    }
+
+    // Match the iOS LAN playback path for albums, playlists and tracks. Sonos
+    // content containers cannot be loaded as the active transport directly;
+    // they must first expand into the coordinator's queue.
+    try {
+      await coord.AVTransportService.RemoveAllTracksFromQueue({ InstanceID: 0 });
+    } catch (err) {
+      // Sonos returns UPnP 804 when the queue is already empty. iOS treats
+      // queue clearing as best-effort as well, so continue to AddURIToQueue.
+      this.log.debug({ err, groupId, favoriteId }, 'favorite queue was already empty or could not be cleared');
+    }
+    const added = await coord.AVTransportService.AddURIToQueue({
+      InstanceID: 0,
+      EnqueuedURI: favorite.uri,
+      EnqueuedURIMetaData: encodeSonosSoapMetadata(favorite.resourceMetadata),
+      DesiredFirstTrackNumberEnqueued: 0,
+      EnqueueAsNext: false,
+    });
+    const coordinatorUuid = firstNonEmpty(coord.Uuid);
+    if (!coordinatorUuid) {
+      throw new Error(`favorite_playback_unavailable: coordinator UUID is missing for ${favorite.title}`);
+    }
+    await coord.AVTransportService.SetAVTransportURI({
+      InstanceID: 0,
+      CurrentURI: `x-rincon-queue:${coordinatorUuid}#0`,
+      CurrentURIMetaData: '',
+    });
+    const firstTrackNumber = Math.max(1, Number(added.FirstTrackNumberEnqueued) || 1);
+    await coord.AVTransportService.Seek({
+      InstanceID: 0,
+      Unit: 'TRACK_NR',
+      Target: String(firstTrackNumber),
+    });
+    await coord.Play();
     await this.refreshSnapshot(coord, 'sonos-change', { suppressTransientNonPlaying: true });
+  }
+
+  async addCurrentTrackToFavorites(groupId: string): Promise<SonosFavoriteAddResult> {
+    const coord = this.requireCoordinator(groupId);
+    const snapshot = this.current(groupId) ?? await this.pullFreshSnapshot(groupId);
+    if (!snapshot || snapshot.playbackSourceRaw === 'tv' || snapshot.durationSeconds <= 0) {
+      throw new Error('current_favorite_unavailable: select a regular music track first');
+    }
+
+    const position = await coord.AVTransportService.GetPositionInfo();
+    const uri = firstNonEmpty(position.TrackURI, snapshot.trackUri);
+    if (!uri) throw new Error('current_favorite_unavailable: current track URI is missing');
+
+    const favorites = await this.loadFavorites(coord);
+    const existing = favoriteForCurrentURI(favorites, uri);
+    if (existing) return { added: false, alreadyExists: true, favorite: existing };
+
+    const positionMetadata = position.TrackMetaData as { UpnpClass?: unknown } | null | undefined;
+    const favoriteInput = {
+      title: snapshot.trackTitle,
+      artist: snapshot.artist,
+      album: snapshot.album,
+      albumArtUri: snapshot.albumArtUri ?? snapshot.albumArtFallbackUri ?? null,
+      uri,
+      upnpClass: firstObjectString(positionMetadata?.UpnpClass),
+      serviceDescriptor: serviceDescriptorForCurrentURI(favorites, uri),
+    };
+    const resourceMetadata = buildCurrentTrackResourceMetadata(favoriteInput);
+    const response = await coord.ContentDirectoryService.CreateObject({
+      ContainerID: 'FV:2',
+      // @svrooij/sonos inserts ContentDirectory `Elements` verbatim instead
+      // of encoding it as an XML string. CreateObject expects escaped DIDL
+      // here, matching the iOS SonosAPI SOAP body.
+      Elements: encodeSonosSoapMetadata(buildFavoriteCreateElements(favoriteInput)),
+    });
+    const created: SonosFavoriteItem = {
+      id: firstNonEmpty(response.ObjectID, `FV:2/${Date.now()}`),
+      title: snapshot.trackTitle,
+      description: snapshot.trackTitle,
+      type: 'instantPlay',
+      category: 'song',
+      playbackKind: 'direct',
+      artistStationId: null,
+      albumArtUri: snapshot.albumArtUri ?? snapshot.albumArtFallbackUri ?? null,
+      uri,
+      resourceMetadata,
+      playbackSourceRaw: snapshot.playbackSourceRaw ?? null,
+      playable: true,
+    };
+    return { added: true, alreadyExists: false, favorite: created };
   }
 
   async setGroupVolume(groupId: string, volume: number): Promise<void> {
     const coord = this.requireCoordinator(groupId);
     const v = Math.min(100, Math.max(0, Math.round(volume)));
-    await coord.GroupRenderingControlService.SetGroupVolume({
-      InstanceID: 0,
-      DesiredVolume: v,
+    await this.coalesceVolumeWrite(`group:${groupId}`, v, async desiredVolume => {
+      await coord.GroupRenderingControlService.SetGroupVolume({
+        InstanceID: 0,
+        DesiredVolume: desiredVolume,
+      });
+      this.applyOptimisticGroupVolume(groupId, desiredVolume);
     });
-    await this.refreshSnapshot(coord);
+  }
+
+  private async loadFavorites(coord: SonosDevice): Promise<SonosFavoriteItem[]> {
+    const response = await coord.ContentDirectoryService.Browse({
+      ObjectID: 'FV:2',
+      BrowseFlag: 'BrowseDirectChildren',
+      Filter: '*',
+      StartingIndex: 0,
+      RequestedCount: 0,
+      SortCriteria: '',
+    });
+    return parseSonosFavorites(response.Result, coord.Host);
   }
 
   async setMemberVolume(groupId: string, memberId: string, volume: number): Promise<void> {
     const coord = this.requireCoordinator(groupId);
-    const members = await this.groupMembersForCoordinator(coord, groupId);
-    const member = members.find(candidate => candidate.id === memberId || candidate.host === memberId);
-    if (!member) throw new Error(`unknown_member: no visible Sonos member ${memberId} in ${groupId}`);
-
-    const device = this.findDevice(member.host, member.id);
-    const service = renderingControlService(device);
-    if (!service || typeof service.SetVolume !== 'function') {
-      throw new Error(`missing_rendering_control_service: ${member.name}`);
-    }
     const desiredVolume = Math.min(100, Math.max(0, Math.round(volume)));
-    await service.SetVolume({ InstanceID: 0, Channel: 'Master', DesiredVolume: desiredVolume });
-    await this.refreshSnapshot(coord);
+    await this.coalesceVolumeWrite(`member:${groupId}:${memberId}`, desiredVolume, async latestVolume => {
+      const cachedMembers = this.snapshots.get(groupId)?.groupMembers ?? [];
+      const members = cachedMembers.length > 0
+        ? cachedMembers
+        : await this.groupMembersForCoordinator(coord, groupId);
+      const member = members.find(candidate => candidate.id === memberId || candidate.host === memberId);
+      if (!member) throw new Error(`unknown_member: no visible Sonos member ${memberId} in ${groupId}`);
+
+      const device = this.findDevice(member.host, member.id);
+      const service = renderingControlService(device);
+      if (!service || typeof service.SetVolume !== 'function') {
+        throw new Error(`missing_rendering_control_service: ${member.name}`);
+      }
+      await service.SetVolume({ InstanceID: 0, Channel: 'Master', DesiredVolume: latestVolume });
+      this.applyOptimisticMemberVolume(groupId, member.id, member.host, latestVolume);
+    });
   }
 
   /// Moves every visible member of one Sonos group into another group.
@@ -512,14 +937,16 @@ export class SonosBridge extends EventEmitter {
     return coord;
   }
 
-  private async loadAllZoneGroups(): Promise<ParsedZoneGroup[]> {
-    const manager = this.manager as unknown as {
+  private async loadAllZoneGroups(
+    sourceManager: SonosManager = this.manager,
+  ): Promise<ParsedZoneGroup[]> {
+    const manager = sourceManager as unknown as {
       LoadAllGroups?: () => Promise<ParsedZoneGroup[]>;
     };
     if (typeof manager.LoadAllGroups !== 'function') {
       throw new Error('grouping_unavailable: Sonos topology service is unavailable');
     }
-    return manager.LoadAllGroups.call(this.manager);
+    return manager.LoadAllGroups.call(sourceManager);
   }
 
   private requireZoneGroup(groups: ParsedZoneGroup[], groupId: string): ParsedZoneGroup {
@@ -552,6 +979,119 @@ export class SonosBridge extends EventEmitter {
 
   // ---- internals --------------------------------------------------------
 
+  private async runPlaybackWatchdog(): Promise<void> {
+    this.periodicCycle += 1;
+    if (this.periodicCycle % this.fullHouseWatchdogEveryCycles === 0) {
+      await this.refreshTopologySnapshots('periodic-refresh');
+      return;
+    }
+
+    const activeGroupIds = [...this.snapshots.values()]
+      .filter(snapshot => snapshot.isPlaying)
+      .map(snapshot => snapshot.groupId);
+    await Promise.all(activeGroupIds.map(async groupId => {
+      const coordinator = this.resolveCoordinator(groupId);
+      if (!coordinator) return;
+      await this.refreshSnapshot(coordinator, 'periodic-refresh', {
+        includeGroupDetails: false,
+      });
+    }));
+  }
+
+  private coalesceVolumeWrite(
+    key: string,
+    volume: number,
+    operation: (volume: number) => Promise<void>,
+  ): Promise<void> {
+    if (this.volumeCommandDebounceMs <= 0) return operation(volume);
+
+    return new Promise<void>((resolve, reject) => {
+      const existing = this.pendingVolumeWrites.get(key);
+      if (existing) {
+        existing.volume = volume;
+        existing.operation = operation;
+        existing.waiters.push({ resolve, reject });
+        clearTimeout(existing.timer);
+        existing.timer = this.volumeWriteTimer(key);
+        return;
+      }
+
+      const pending: PendingVolumeWrite = {
+        volume,
+        operation,
+        timer: this.volumeWriteTimer(key),
+        waiters: [{ resolve, reject }],
+      };
+      this.pendingVolumeWrites.set(key, pending);
+    });
+  }
+
+  private volumeWriteTimer(key: string): NodeJS.Timeout {
+    const timer = setTimeout(() => {
+      void this.flushVolumeWrite(key);
+    }, this.volumeCommandDebounceMs);
+    return timer;
+  }
+
+  private async flushVolumeWrite(key: string): Promise<void> {
+    const pending = this.pendingVolumeWrites.get(key);
+    if (!pending) return;
+    this.pendingVolumeWrites.delete(key);
+    try {
+      await pending.operation(pending.volume);
+      for (const waiter of pending.waiters) waiter.resolve();
+    } catch (err) {
+      for (const waiter of pending.waiters) waiter.reject(err);
+    }
+  }
+
+  private applyOptimisticGroupVolume(groupId: string, volume: number): void {
+    const previous = this.snapshots.get(groupId);
+    if (!previous || previous.groupVolume === volume) return;
+    this.publishSnapshot({ ...previous, groupVolume: volume, sampledAt: new Date() }, 'sonos-change');
+  }
+
+  private applyOptimisticMemberVolume(
+    groupId: string,
+    memberId: string,
+    memberHost: string,
+    volume: number,
+  ): void {
+    const previous = this.snapshots.get(groupId);
+    if (!previous) return;
+    const groupMembers = (previous.groupMembers ?? []).map(member => (
+      member.id === memberId || member.host === memberHost
+        ? { ...member, volume }
+        : member
+    ));
+    this.publishSnapshot({ ...previous, groupMembers, sampledAt: new Date() }, 'sonos-change');
+  }
+
+  private attachManagerListeners(manager: SonosManager): void {
+    for (const device of manager.Devices) {
+      if (!shouldAttachSonosDeviceEvents(device)) continue;
+      this.log.info(
+        { name: device.Name, host: device.Host, uuid: device.Uuid },
+        'attached Sonos device',
+      );
+      this.attachDeviceListeners(device);
+    }
+
+    const managerWithNewDevice = manager as unknown as {
+      OnNewDevice?: (listener: (device: SonosDevice) => void) => void;
+    };
+    managerWithNewDevice.OnNewDevice?.(device => {
+      if (shouldAttachSonosDeviceEvents(device)) {
+        this.log.info(
+          { name: device.Name, host: device.Host, uuid: device.Uuid },
+          'attached newly discovered Sonos device',
+        );
+        this.attachDeviceListeners(device);
+      }
+      this.scheduleTopologyRefresh();
+    });
+  }
+
   private attachDeviceListeners(device: any): void {
     // sonos-ts devices have an Events emitter that re-emits a useful subset
     // of the underlying UPnP service events. We just need a "something
@@ -562,16 +1102,22 @@ export class SonosBridge extends EventEmitter {
     if (key && this.attachedDeviceListenerKeys.has(key)) return;
     if (key) this.attachedDeviceListenerKeys.add(key);
     try {
-      device.Events.on(SonosEvents.AVTransport, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.CurrentTrackUri, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.CurrentTrackMetadata, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.CurrentTransportState, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.CurrentTransportStateSimple, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.PlaybackStopped, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.RenderingControl, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.Volume, () => this.scheduleEventRefresh(device));
-      device.Events.on(SonosEvents.Coordinator, () => this.scheduleTopologyRefresh());
-      device.Events.on(SonosEvents.GroupName, () => this.scheduleTopologyRefresh());
+      const listeners: AttachedDeviceListeners['listeners'] = [
+        { event: SonosEvents.AVTransport, listener: () => this.scheduleEventRefresh(device) },
+        { event: SonosEvents.CurrentTrackUri, listener: () => this.scheduleEventRefresh(device) },
+        { event: SonosEvents.CurrentTrackMetadata, listener: () => this.scheduleEventRefresh(device) },
+        { event: SonosEvents.CurrentTransportState, listener: () => this.scheduleEventRefresh(device) },
+        { event: SonosEvents.CurrentTransportStateSimple, listener: () => this.scheduleEventRefresh(device) },
+        { event: SonosEvents.PlaybackStopped, listener: () => this.scheduleEventRefresh(device) },
+        {
+          event: SonosEvents.Volume,
+          listener: (volume: unknown) => this.scheduleVolumeEventRefresh(device, volume),
+        },
+        { event: SonosEvents.Coordinator, listener: () => this.scheduleTopologyRefresh() },
+        { event: SonosEvents.GroupName, listener: () => this.scheduleTopologyRefresh() },
+      ];
+      for (const { event, listener } of listeners) device.Events.on(event, listener);
+      if (key) this.attachedDeviceListeners.set(key, { device, listeners });
     } catch (err) {
       this.log.warn({ err, device: device.Name }, 'failed to attach device events');
     }
@@ -581,9 +1127,10 @@ export class SonosBridge extends EventEmitter {
     const groupId = this.snapshotGroupId(device)
       ?? firstNonEmpty(device?.Host, device?.Uuid, device?.Name)
       ?? 'unknown';
+    this.cancelCommandConfirmationRefresh(groupId);
 
     if (this.eventRefreshDebounceMs <= 0) {
-      void this.refreshSnapshot(device).catch(err => {
+      void this.refreshSnapshot(device, 'sonos-change', { includeGroupDetails: false }).catch(err => {
         this.log.debug({ err, groupId }, 'debounced Sonos event refresh failed');
       });
       return;
@@ -594,12 +1141,68 @@ export class SonosBridge extends EventEmitter {
 
     const timer = setTimeout(() => {
       this.eventRefreshTimers.delete(groupId);
-      void this.refreshSnapshot(device).catch(err => {
+      void this.refreshSnapshot(device, 'sonos-change', { includeGroupDetails: false }).catch(err => {
         this.log.debug({ err, groupId }, 'debounced Sonos event refresh failed');
       });
     }, this.eventRefreshDebounceMs);
     timer.unref?.();
     this.eventRefreshTimers.set(groupId, timer);
+  }
+
+  private scheduleVolumeEventRefresh(device: any, eventVolume: unknown): void {
+    const groupId = this.snapshotGroupId(device)
+      ?? firstNonEmpty(device?.Host, device?.Uuid, device?.Name)
+      ?? 'unknown';
+    this.cancelCommandConfirmationRefresh(groupId);
+
+    const existing = this.volumeEventRefreshTimers.get(groupId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.volumeEventRefreshTimers.delete(groupId);
+      void this.refreshVolumeSnapshot(device, eventVolume).catch(err => {
+        this.log.debug({ err, groupId }, 'lightweight Sonos volume refresh failed');
+      });
+    }, Math.max(0, this.eventRefreshDebounceMs));
+    timer.unref?.();
+    this.volumeEventRefreshTimers.set(groupId, timer);
+  }
+
+  private async refreshVolumeSnapshot(device: any, eventVolume: unknown): Promise<void> {
+    const groupId = this.snapshotGroupId(device);
+    if (!groupId) return;
+    const previous = this.snapshots.get(groupId);
+    if (!previous) {
+      await this.refreshSnapshot(device);
+      return;
+    }
+
+    const coordinator = device?.Coordinator ?? device;
+    const groupVolume = await this.groupVolumeForSnapshot(coordinator, previous.groupVolume);
+    const coordinatorHost = firstNonEmpty(coordinator?.Host, device?.Host);
+    const coordinatorUuid = firstNonEmpty(coordinator?.Uuid, device?.Uuid);
+    const numericEventVolume = Number(eventVolume);
+    const groupMembers = Number.isFinite(numericEventVolume)
+      ? (previous.groupMembers ?? []).map(member => (
+        (coordinatorHost && member.host === coordinatorHost)
+          || (coordinatorUuid && member.id === coordinatorUuid)
+          ? { ...member, volume: Math.min(100, Math.max(0, Math.round(numericEventVolume))) }
+          : member
+      ))
+      : previous.groupMembers ?? [];
+    this.publishSnapshot({
+      ...previous,
+      groupVolume,
+      groupMembers,
+      sampledAt: new Date(),
+    }, 'sonos-change');
+  }
+
+  private detachDeviceListeners(): void {
+    for (const { device, listeners } of this.attachedDeviceListeners.values()) {
+      for (const { event, listener } of listeners) device.Events?.off?.(event, listener);
+    }
+    this.attachedDeviceListeners.clear();
+    this.attachedDeviceListenerKeys.clear();
   }
 
   private scheduleTopologyRefresh(): void {
@@ -618,11 +1221,24 @@ export class SonosBridge extends EventEmitter {
     try {
       groups = await this.loadAllZoneGroups();
     } catch (err) {
-      // Older/mocked sonos-ts managers may not expose parsed topology. Keep a
-      // deduplicated coordinator fallback instead of failing discovery.
-      this.log.warn({ err }, 'Sonos topology unavailable; using discovered coordinator fallback');
-      await this.refreshDiscoveredCoordinatorSnapshots(trigger);
-      return;
+      if (errorSummary(err).includes('grouping_unavailable')) {
+        // Keep compatibility with older or lightweight SonosManager
+        // implementations that never exposed parsed topology at all. This is
+        // not a stale network seed and therefore cannot be repaired by trying
+        // alternate IPs.
+        await this.refreshDiscoveredCoordinatorSnapshots(trigger);
+        return;
+      }
+      this.log.warn({ err }, 'Sonos topology seed unavailable; attempting alternate speakers');
+      const recoveredGroups = await this.recoverTopologyFromAlternateSpeaker();
+      if (!recoveredGroups) {
+        // Older/mocked sonos-ts managers may not expose parsed topology. Keep a
+        // deduplicated coordinator fallback instead of failing discovery.
+        this.log.warn({ err }, 'Sonos topology recovery failed; using discovered coordinator fallback');
+        await this.refreshDiscoveredCoordinatorSnapshots(trigger);
+        return;
+      }
+      groups = recoveredGroups;
     }
 
     const activeGroupIds = new Set<string>();
@@ -660,6 +1276,10 @@ export class SonosBridge extends EventEmitter {
       }
       if (resolvedUuid) coordinatorKeys.add(resolvedUuid);
       coordinators.push({ device: coordinator, group });
+      // Bonded stereo partners, surrounds, and Subs are represented through
+      // their coordinator. They do not need their own transport/rendering
+      // event subscriptions.
+      this.attachDeviceListeners(coordinator);
     }
 
     this.visibleTopologyCoordinatorKeys = coordinatorKeys;
@@ -678,6 +1298,120 @@ export class SonosBridge extends EventEmitter {
 
     for (const groupId of this.snapshots.keys()) {
       if (!activeGroupIds.has(groupId)) this.snapshots.delete(groupId);
+    }
+  }
+
+  private async recoverTopologyFromAlternateSpeaker(): Promise<ParsedZoneGroup[] | null> {
+    if (this.topologyRecoveryPromise) return this.topologyRecoveryPromise;
+
+    this.topologyRecoveryPromise = this.performTopologyRecovery();
+    try {
+      return await this.topologyRecoveryPromise;
+    } finally {
+      this.topologyRecoveryPromise = null;
+    }
+  }
+
+  private async performTopologyRecovery(): Promise<ParsedZoneGroup[] | null> {
+    const candidates = this.topologyRecoveryCandidateIPs();
+    for (const [index, seedIp] of candidates.entries()) {
+      const candidateManager = this.managerFactory();
+      try {
+        const initialized = await candidateManager.InitializeFromDevice(seedIp);
+        if (!initialized) throw new Error('seed did not initialize a Sonos household');
+        const groups = await this.loadAllZoneGroups(candidateManager);
+        if (groups.length === 0) throw new Error('seed returned an empty Sonos topology');
+        this.replaceManager(candidateManager);
+        this.discoveryState = { ...this.discoveryState, status: 'ready', error: null };
+        this.log.info(
+          { seedIp, attempts: index + 1, groups: groups.length },
+          'Sonos topology recovered through alternate speaker',
+        );
+        return groups;
+      } catch (err) {
+        this.cancelManagerSubscription(candidateManager);
+        this.log.debug(
+          { err, seedIp, attempt: index + 1 },
+          'alternate Sonos topology seed failed',
+        );
+      }
+    }
+
+    const discoveredManager = this.managerFactory();
+    try {
+      const initialized = await discoveredManager.InitializeWithDiscovery(
+        this.topologyRecoveryDiscoveryTimeoutSeconds,
+      );
+      if (!initialized) throw new Error('SSDP did not discover a Sonos household');
+      const groups = await this.loadAllZoneGroups(discoveredManager);
+      if (groups.length === 0) throw new Error('SSDP returned an empty Sonos topology');
+      this.replaceManager(discoveredManager);
+      this.discoveryState = { mode: 'auto', status: 'ready', error: null };
+      this.log.info(
+        { groups: groups.length },
+        'Sonos topology recovered through fresh SSDP discovery',
+      );
+      return groups;
+    } catch (err) {
+      this.cancelManagerSubscription(discoveredManager);
+      this.log.warn({ err, candidates: candidates.length }, 'fresh Sonos topology discovery failed');
+      return null;
+    }
+  }
+
+  private topologyRecoveryCandidateIPs(): string[] {
+    const candidates: string[] = [];
+    const seen = new Set<string>();
+    const append = (value: unknown): void => {
+      const host = firstObjectString(value);
+      if (!host || seen.has(host)) return;
+      seen.add(host);
+      candidates.push(host);
+    };
+
+    const snapshots = [...this.snapshots.values()].sort((left, right) =>
+      Number(right.isPlaying) - Number(left.isPlaying));
+    for (const snapshot of snapshots) {
+      append(snapshot.groupId);
+      for (const member of snapshot.groupMembers ?? []) append(member.host);
+    }
+
+    try {
+      for (const device of this.manager.Devices) {
+        const coordinator = device.Coordinator ?? device;
+        append(coordinator.Host);
+        append(device.Host);
+      }
+    } catch {
+      // The final SSDP attempt below can recover when no cached roster exists.
+    }
+
+    return candidates;
+  }
+
+  private replaceManager(nextManager: SonosManager): void {
+    const previousManager = this.manager;
+    this.detachDeviceListeners();
+    this.manager = nextManager;
+    this.cancelManagerSubscription(previousManager);
+
+    for (const timer of this.eventRefreshTimers.values()) clearTimeout(timer);
+    this.eventRefreshTimers.clear();
+    for (const timer of this.transitionSettleRefreshTimers.values()) clearTimeout(timer);
+    this.transitionSettleRefreshTimers.clear();
+    if (this.topologyRefreshTimer) clearTimeout(this.topologyRefreshTimer);
+    this.topologyRefreshTimer = null;
+
+    this.visibleTopologyCoordinatorKeys.clear();
+    this.topologyFilterReady = false;
+    this.attachManagerListeners(nextManager);
+  }
+
+  private cancelManagerSubscription(manager: SonosManager): void {
+    try {
+      manager.CancelSubscription();
+    } catch (err) {
+      this.log.debug({ err }, 'failed to cancel stale Sonos manager subscription');
     }
   }
 
@@ -725,8 +1459,14 @@ export class SonosBridge extends EventEmitter {
       // Use the coordinator LAN IP as the group identifier so iOS and the
       // relay agree without an extra mapping step. iOS sends `playbackIP`,
       // which is `coordinatorIP ?? ipAddress`.
-      const coordinator = device.Coordinator ?? device;
-      const resolvedGroupId = this.snapshotGroupId(device);
+      // Parsed ZoneGroupState is authoritative during topology refreshes.
+      // sonos-ts can retain a stale `device.Coordinator` briefly after a room
+      // leaves a group; following it here would write the departed room's
+      // members into the old coordinator snapshot.
+      const coordinator = options.topologyVerified ? device : (device.Coordinator ?? device);
+      const resolvedGroupId = options.topologyVerified
+        ? firstNonEmpty(device.Host, device.Uuid)
+        : this.snapshotGroupId(device);
       if (!resolvedGroupId) {
         throw new Error(`missing Sonos group id for ${device.Name ?? 'unknown device'}`);
       }
@@ -783,15 +1523,29 @@ export class SonosBridge extends EventEmitter {
           audioQualityLabel = localQuality.label;
         }
       }
-      const soundbarEQ = await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw);
+      const includeGroupDetails = options.includeGroupDetails
+        ?? options.topologyVerified
+        ?? previousSnapshot === undefined;
+      const shouldRefreshSoundbarEQ = includeGroupDetails
+        || (playbackSourceRaw === 'tv' && previousSnapshot?.playbackSourceRaw !== 'tv');
+      const soundbarEQ = shouldRefreshSoundbarEQ
+        ? await this.soundbarEQForSnapshot(coordinator, playbackSourceRaw)
+        : {
+          soundbarNightMode: previousSnapshot?.soundbarNightMode,
+          soundbarSpeechEnhancementRawLevel: previousSnapshot?.soundbarSpeechEnhancementRawLevel,
+        };
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
-      const groupVolume = await this.groupVolumeForSnapshot(coordinator, previousSnapshot?.groupVolume);
+      const groupVolume = includeGroupDetails || previousSnapshot?.groupVolume == null
+        ? await this.groupVolumeForSnapshot(coordinator, previousSnapshot?.groupVolume)
+        : previousSnapshot.groupVolume;
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
-      const groupMembers = await this.groupMembersForCoordinator(
-        coordinator,
-        resolvedGroupId,
-        options.topologyGroup,
-      );
+      const groupMembers = includeGroupDetails || !(previousSnapshot?.groupMembers?.length)
+        ? await this.groupMembersForCoordinator(
+          coordinator,
+          resolvedGroupId,
+          options.topologyGroup,
+        )
+        : previousSnapshot.groupMembers ?? [];
       if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
 
       // Prefer GetPositionInfo's parsed DIDL because radio streams put the
@@ -962,6 +1716,7 @@ export class SonosBridge extends EventEmitter {
         trackTitle,
         artist,
         album,
+        trackUri,
         albumArtUri,
         albumArtFallbackUri,
         isPlaying,
@@ -988,9 +1743,7 @@ export class SonosBridge extends EventEmitter {
         sampledAt: new Date(),
       };
 
-      this.snapshots.set(resolvedGroupId, snapshot);
-      this.emit('change', snapshot, { trigger } satisfies SonosSnapshotChangeContext);
-      return true;
+      return this.publishSnapshot(snapshot, trigger);
     } catch (err) {
       if (groupId && !this.isCurrentRefresh(groupId, refreshSequence)) return false;
       this.log.warn(
@@ -1033,13 +1786,53 @@ export class SonosBridge extends EventEmitter {
     return this.refreshSequences.get(groupId) === sequence;
   }
 
+  private publishSnapshot(
+    snapshot: SonosGroupSnapshot,
+    trigger: SonosSnapshotChangeTrigger,
+  ): boolean {
+    const previous = this.snapshots.get(snapshot.groupId);
+    this.snapshots.set(snapshot.groupId, snapshot);
+    if (previous && sonosSnapshotsMeaningfullyEqual(previous, snapshot)) return false;
+    this.emit('change', snapshot, { trigger } satisfies SonosSnapshotChangeContext);
+    return true;
+  }
+
+  private scheduleCommandConfirmationRefresh(
+    device: any,
+    groupId: string,
+    suppressTransientNonPlaying = false,
+  ): void {
+    this.cancelCommandConfirmationRefresh(groupId);
+    if (this.transitionSettleRefreshMs <= 0) return;
+    const timer = setTimeout(() => {
+      this.commandConfirmationRefreshTimers.delete(groupId);
+      void this.refreshSnapshot(device, 'transition-settle-refresh', {
+        includeGroupDetails: false,
+        suppressTransientNonPlaying,
+      }).catch(err => {
+        this.log.debug({ err, groupId }, 'Sonos command confirmation refresh failed');
+      });
+    }, this.transitionSettleRefreshMs);
+    timer.unref?.();
+    this.commandConfirmationRefreshTimers.set(groupId, timer);
+  }
+
+  private cancelCommandConfirmationRefresh(groupId: string): void {
+    const timer = this.commandConfirmationRefreshTimers.get(groupId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.commandConfirmationRefreshTimers.delete(groupId);
+  }
+
   private scheduleTransitionSettleRefresh(device: any, groupId: string): void {
     if (this.transitionSettleRefreshMs <= 0) return;
     if (this.transitionSettleRefreshTimers.has(groupId)) return;
 
     const timer = setTimeout(() => {
       this.transitionSettleRefreshTimers.delete(groupId);
-      void this.refreshSnapshot(device, 'transition-settle-refresh').catch(err => {
+      void this.refreshSnapshot(device, 'transition-settle-refresh', {
+        includeGroupDetails: false,
+      }).catch(err => {
         this.log.debug({ err, groupId }, 'transition settle refresh failed');
       });
     }, this.transitionSettleRefreshMs);
@@ -1226,6 +2019,14 @@ export class SonosBridge extends EventEmitter {
     } catch {
       // Fall through to sonos-ts' in-memory coordinator relationships.
     }
+
+    // A SonosManager device object does not retain ZoneGroupState's
+    // `Invisible` flag. If topology is temporarily unreachable, keep the last
+    // topology-verified logical membership rather than reclassifying bonded
+    // stereo partners, surrounds, or Subs as independently grouped rooms.
+    const cachedMembers = this.snapshots.get(groupId)?.groupMembers;
+    if (cachedMembers && cachedMembers.length > 0) return cachedMembers;
+
     return this.inferredGroupMembersForCoordinator(coordinator, groupId);
   }
 
@@ -1460,6 +2261,45 @@ export function playbackSourceFromTrackUri(trackUri: unknown): string | null {
   return null;
 }
 
+export function sonosSnapshotsMeaningfullyEqual(
+  left: SonosGroupSnapshot,
+  right: SonosGroupSnapshot,
+): boolean {
+  const { sampledAt: _leftSampledAt, ...leftContent } = left;
+  const { sampledAt: _rightSampledAt, ...rightContent } = right;
+  return JSON.stringify(leftContent) === JSON.stringify(rightContent);
+}
+
+function publicQueueArtworkURL(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function queueArtworkSource(
+  source: SonosArtworkResolutionSource | null | undefined,
+): SonosQueueItem['artworkSource'] {
+  return source === 'itunes-lookup' || source === 'itunes-search' ? source : 'none';
+}
+
+async function mapWithConcurrency<T>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<void>,
+): Promise<void> {
+  let index = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (index < values.length) {
+      const value = values[index++];
+      await operation(value);
+    }
+  }));
+}
+
 export function playbackSourceFromServiceName(serviceName: unknown): string | null {
   if (typeof serviceName !== 'string') return null;
   const name = serviceName.trim().toLowerCase();
@@ -1552,6 +2392,26 @@ interface ParsedZoneGroup {
 
 function topologyMutationDelay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function playbackSettleDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function queueArtworkLookupDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+// @svrooij/sonos encodes URI string fields but inserts metadata string fields
+// verbatim into its SOAP envelope. Escape the nested DIDL document exactly once
+// so Sonos receives it as the text value of *MetaData instead of malformed XML.
+export function encodeSonosSoapMetadata(metadata: string): string {
+  return metadata
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 export function trackMetadataFromMetadata(metadata: unknown): SonosTrackMetadata {
@@ -2033,6 +2893,13 @@ function isInvisibleDevice(device: Record<string, unknown> | null | undefined): 
   if (!device) return false;
   const value = device.Invisible ?? device.invisible ?? device.isInvisible;
   return value === true || value === 1 || value === '1';
+}
+
+export function shouldAttachSonosDeviceEvents(
+  device: { Coordinator?: unknown } | null | undefined,
+): boolean {
+  if (!device) return false;
+  return device.Coordinator == null || device.Coordinator === device;
 }
 
 function zoneGroupMatchesCoordinator(

@@ -203,6 +203,81 @@ test('metadata no-match misses are persisted under metadata keys for seven days'
   }
 });
 
+test('known album hits override stale metadata negative-cache entries', async () => {
+  const dir = await tempDir();
+  try {
+    let searchCount = 0;
+    const resolver = new AnimatedAppleMusicArtworkResolver({
+      dataDir: dir,
+      fetchBearerToken: async () => 'token',
+      fetchText: async () => hlsMasterPlaylist('1080x1080'),
+      fetchJson: async () => ampAlbumFixture({ square: 'https://cdn.example.com/square.m3u8' }),
+      searchAppleMusicAlbumURL: async () => {
+        searchCount += 1;
+        return null;
+      },
+    });
+
+    const initialMiss = await resolver.resolveByMetadata('Daniel Caesar', 'Freudian', 'us');
+    const albumHit = await resolver.resolveByURL(
+      'https://music.apple.com/us/album/freudian/1547315522',
+    );
+    const repaired = await resolver.resolveByMetadata('Daniel Caesar', 'Freudian', 'us');
+
+    assert.equal(initialMiss.status, 'miss');
+    assert.equal(albumHit.status, 'hit');
+    assert.equal(repaired.status, 'hit');
+    assert.equal(repaired.source, 'cache');
+    assert.equal(repaired.squareUrl, 'https://cdn.example.com/square.m3u8');
+    assert.equal(searchCount, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('catalog ID lookup bypasses and repairs a metadata negative-cache entry', async () => {
+  const dir = await tempDir();
+  try {
+    let searchCount = 0;
+    let lookupCount = 0;
+    const resolver = new AnimatedAppleMusicArtworkResolver({
+      dataDir: dir,
+      fetchBearerToken: async () => 'token',
+      fetchText: async () => hlsMasterPlaylist('1080x1080'),
+      fetchJson: async () => ampAlbumFixture({ square: 'https://cdn.example.com/catalog-square.m3u8' }),
+      searchAppleMusicAlbumURL: async () => {
+        searchCount += 1;
+        return null;
+      },
+      lookupAppleMusicAlbumURL: async (catalogID, country) => {
+        lookupCount += 1;
+        assert.equal(catalogID, '1547315524');
+        assert.equal(country, 'US');
+        return 'https://music.apple.com/us/album/freudian/1547315522?i=1547315524';
+      },
+    });
+
+    const initialMiss = await resolver.resolveByMetadata('Daniel Caesar', 'Freudian', 'us');
+    const repaired = await resolver.resolveByMetadata(
+      'Daniel Caesar',
+      'Freudian',
+      'us',
+      '1547315524',
+    );
+    const cached = await resolver.resolveByMetadata('Daniel Caesar', 'Freudian', 'us');
+
+    assert.equal(initialMiss.status, 'miss');
+    assert.equal(repaired.status, 'hit');
+    assert.equal(repaired.source, 'metadata-search');
+    assert.equal(cached.status, 'hit');
+    assert.equal(cached.source, 'cache');
+    assert.equal(searchCount, 1);
+    assert.equal(lookupCount, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('default metadata search uses iTunes Search API matching before animated artwork lookup', async () => {
   const dir = await tempDir();
   const originalFetch = globalThis.fetch;
@@ -259,6 +334,59 @@ test('default metadata search uses iTunes Search API matching before animated ar
     assert.equal(new URL(searchURL).searchParams.get('country'), 'US');
   } finally {
     globalThis.fetch = originalFetch;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('default catalog lookup resolves a track ID to its exact album before metadata search', async () => {
+  const dir = await tempDir();
+  try {
+    const requested: string[] = [];
+    const resolver = new AnimatedAppleMusicArtworkResolver({
+      dataDir: dir,
+      fetchBearerToken: async () => 'token',
+      fetchText: async url => {
+        requested.push(url.toString());
+        if (url.pathname === '/lookup') {
+          return JSON.stringify({
+            resultCount: 1,
+            results: [{
+              wrapperType: 'track',
+              kind: 'song',
+              trackId: 1547315524,
+              collectionId: 1547315522,
+              collectionViewUrl: 'https://music.apple.com/us/album/freudian/1547315522?i=1547315524&uo=4',
+            }],
+          });
+        }
+        if (url.toString() === 'https://cdn.example.com/catalog-square.m3u8') {
+          return hlsMasterPlaylist('1080x1080');
+        }
+        throw new Error(`unexpected text fetch: ${url.toString()}`);
+      },
+      fetchJson: async url => {
+        assert.equal(url.pathname, '/v1/catalog/us/albums/1547315522');
+        return ampAlbumFixture({ square: 'https://cdn.example.com/catalog-square.m3u8' });
+      },
+      searchAppleMusicAlbumURL: async () => {
+        throw new Error('metadata search should not run after an exact catalog lookup');
+      },
+    });
+
+    const result = await resolver.resolveByMetadata(
+      'Daniel Caesar',
+      'Freudian',
+      'us',
+      '1547315524',
+    );
+
+    assert.equal(result.status, 'hit');
+    const lookupURL = new URL(requested[0] ?? '');
+    assert.equal(lookupURL.pathname, '/lookup');
+    assert.equal(lookupURL.searchParams.get('id'), '1547315524');
+    assert.equal(lookupURL.searchParams.get('entity'), 'song');
+    assert.equal(lookupURL.searchParams.get('country'), 'US');
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

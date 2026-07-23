@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { SonosEvents } from '@svrooij/sonos';
+import { SonosEvents, SonosManager } from '@svrooij/sonos';
 import pino from 'pino';
 
 import {
   albumArtUriFromMetadata,
+  encodeSonosSoapMetadata,
   isMusicAmbienceEligibleForSnapshot,
   localPlaybackQualityFromPlaybackMetadata,
   playbackSourceFromServiceName,
   playbackSourceFromTrackUri,
+  shouldAttachSonosDeviceEvents,
   SonosBridge,
   trackMetadataFromMetadata,
 } from './sonos.js';
@@ -114,6 +116,216 @@ test('music ambience eligibility still allows music metadata without a known sou
     albumArtUri: null,
     playbackSourceRaw: null,
   }), true);
+});
+
+test('Sonos SOAP metadata escapes nested DIDL without changing encoded catalog ids', () => {
+  assert.equal(
+    encodeSonosSoapMetadata('<DIDL-Lite><item id="album%3a1499378108">John &amp; Jane</item></DIDL-Lite>'),
+    '&lt;DIDL-Lite&gt;&lt;item id=&quot;album%3a1499378108&quot;&gt;John &amp;amp; Jane&lt;/item&gt;&lt;/DIDL-Lite&gt;',
+  );
+});
+
+test('current Apple Music library tracks use escaped CreateObject Elements and iOS metadata ids', async () => {
+  const bridge = testBridge();
+  let createInput: { ContainerID: string; Elements: string } | null = null;
+  const favorites = '&lt;DIDL-Lite&gt;&lt;item id=&quot;FV:2/1&quot;&gt;'
+    + '&lt;dc:title&gt;Seed&lt;/dc:title&gt;'
+    + '&lt;res&gt;x-sonos-http:song%3a1.mp4?sid=204&amp;amp;flags=8232&amp;amp;sn=2&lt;/res&gt;'
+    + '&lt;r:resMD&gt;&amp;lt;DIDL-Lite&amp;gt;&amp;lt;item&amp;gt;&amp;lt;desc id=&amp;quot;cdudn&amp;quot;&amp;gt;SA_RINCON52231_X_#Svc52231-2-Token&amp;lt;/desc&amp;gt;&amp;lt;/item&amp;gt;&amp;lt;/DIDL-Lite&amp;gt;&lt;/r:resMD&gt;'
+    + '&lt;/item&gt;&lt;/DIDL-Lite&gt;';
+  const trackURI = 'x-sonos-http:librarytrack%3ai.B0VzPbptxlqoaX7.mp4?sid=204&flags=8232&sn=2';
+  const device = playbackDevice({
+    Host: '192.168.50.249',
+    Name: 'Playroom',
+    Uuid: 'RINCON_PLAYROOM',
+    ContentDirectoryService: {
+      Browse: async () => ({ Result: favorites }),
+      CreateObject: async (input: { ContainerID: string; Elements: string }) => {
+        createInput = input;
+        return { ObjectID: 'FV:2/99' };
+      },
+    },
+    AVTransportService: {
+      GetPositionInfo: async () => ({
+        TrackURI: trackURI,
+        TrackMetaData: { UpnpClass: 'object.item.audioItem.musicTrack' },
+      }),
+    },
+  });
+  (device as { Coordinator?: unknown }).Coordinator = device;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = { Devices: [device] };
+  (bridge as unknown as { snapshots: Map<string, unknown> }).snapshots.set('192.168.50.249', {
+    groupId: '192.168.50.249',
+    trackTitle: 'Things You Don\'t Say',
+    artist: 'Real Action & JONES',
+    album: 'Things You Don\'t Say - Single',
+    albumArtUri: 'http://192.168.50.249:1400/getaa?track=1',
+    albumArtFallbackUri: null,
+    trackUri: trackURI,
+    playbackSourceRaw: 'appleMusic',
+    durationSeconds: 227,
+  });
+
+  const result = await bridge.addCurrentTrackToFavorites('192.168.50.249');
+
+  assert.equal(result.added, true);
+  assert.equal(createInput?.ContainerID, 'FV:2');
+  assert.match(createInput?.Elements ?? '', /^&lt;DIDL-Lite/);
+  assert.doesNotMatch(createInput?.Elements ?? '', /<DIDL-Lite/);
+  assert.match(createInput?.Elements ?? '', /10032028librarytrack%3ai\.B0VzPbptxlqoaX7/);
+  assert.match(createInput?.Elements ?? '', /&amp;lt;DIDL-Lite/);
+});
+
+test('queue returns before artwork enrichment and resolves visible sibling tracks once per album', async () => {
+  const resolverInputs: Array<{ title?: string | null; album?: string | null }> = [];
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: {
+      resolve: async input => {
+        resolverInputs.push({ title: input.title, album: input.album });
+        return {
+          source: 'getaa',
+          url: input.albumArtUri ?? null,
+          fallbackSource: 'itunes-lookup',
+          fallbackUrl: 'https://is1-ssl.mzstatic.com/image/thumb/Music/case-study.jpg',
+        };
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_PLAYROOM',
+    GetQueue: async () => ({
+      Result: [
+        { ItemId: 'Q:0/1', Title: 'Entropy', Artist: 'Daniel Caesar', Album: 'CASE STUDY 01', AlbumArtUri: 'http://192.168.50.25:1400/getaa?track=1', TrackUri: 'x-sonos-http:song:1.mp4?sid=204&flags=8232&sn=2' },
+        { ItemId: 'Q:0/2', Title: 'Love Again', Artist: 'Daniel Caesar & Brandy', Album: 'CASE STUDY 01', AlbumArtUri: 'http://192.168.50.25:1400/getaa?track=2', TrackUri: 'x-sonos-http:song:2.mp4?sid=204&flags=8232&sn=2' },
+      ],
+      UpdateID: 7,
+    }),
+    AVTransportService: {
+      GetPositionInfo: async () => ({ Track: 1 }),
+    },
+  });
+  (device as { Coordinator?: unknown }).Coordinator = device;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = { Devices: [device] };
+
+  const initialQueue = await bridge.listQueue('192.168.50.25');
+
+  assert.equal(resolverInputs.length, 0);
+  assert.equal(initialQueue.items[0]?.artworkSource, 'sonos');
+  const albumKey = initialQueue.items[0]?.albumKey ?? '';
+  const artwork = await bridge.resolveQueueArtworkAlbums('192.168.50.25', [albumKey]);
+  assert.equal(resolverInputs.length, 1);
+  assert.deepEqual(artwork, [{
+    albumKey,
+    albumArtUri: 'https://is1-ssl.mzstatic.com/image/thumb/Music/case-study.jpg',
+    artworkSource: 'itunes-lookup',
+  }]);
+
+  const cachedQueue = await bridge.listQueue('192.168.50.25');
+  assert.equal(resolverInputs.length, 1);
+  assert.equal(cachedQueue.items[0]?.albumArtUri, 'https://is1-ssl.mzstatic.com/image/thumb/Music/case-study.jpg');
+  assert.equal(cachedQueue.items[1]?.albumArtUri, cachedQueue.items[0]?.albumArtUri);
+  assert.equal(cachedQueue.items[0]?.sonosAlbumArtUri, 'http://192.168.50.25:1400/getaa?track=1');
+  assert.equal(cachedQueue.items[1]?.sonosAlbumArtUri, 'http://192.168.50.25:1400/getaa?track=2');
+  assert.equal(cachedQueue.items[0]?.artworkSource, 'itunes-lookup');
+});
+
+test('queue artwork stops external enrichment during an iTunes rate-limit backoff', async () => {
+  let resolverCalls = 0;
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: {
+      resolve: async input => {
+        resolverCalls += 1;
+        return {
+          source: 'getaa',
+          url: input.albumArtUri ?? null,
+          fallbackErrorStatus: 'rate-limited',
+        };
+      },
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_PLAYROOM',
+    GetQueue: async () => ({
+      Result: [
+        { ItemId: 'Q:0/1', Title: 'First', Artist: 'Artist', Album: 'Album One', AlbumArtUri: 'http://192.168.50.25:1400/getaa?track=1', TrackUri: 'x-sonos-http:song:1.mp4?sid=204&flags=8232&sn=2' },
+        { ItemId: 'Q:0/2', Title: 'Second', Artist: 'Artist', Album: 'Album Two', AlbumArtUri: 'http://192.168.50.25:1400/getaa?track=2', TrackUri: 'x-sonos-http:song:2.mp4?sid=204&flags=8232&sn=2' },
+      ],
+      UpdateID: 8,
+    }),
+    AVTransportService: { GetPositionInfo: async () => ({ Track: 1 }) },
+  });
+  (device as { Coordinator?: unknown }).Coordinator = device;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = { Devices: [device] };
+  const queue = await bridge.listQueue('192.168.50.25');
+
+  await bridge.resolveQueueArtworkAlbums('192.168.50.25', [queue.items[0]!.albumKey]);
+  await bridge.resolveQueueArtworkAlbums('192.168.50.25', [queue.items[1]!.albumKey]);
+
+  assert.equal(resolverCalls, 1);
+});
+
+test('favorite album playback preserves its encoded object id and replaces the Sonos queue', async () => {
+  const bridge = testBridge();
+  const calls: Array<{ action: string; input?: Record<string, unknown> }> = [];
+  const favoriteResult = '&lt;DIDL-Lite&gt;&lt;item id=&quot;FV:2/104&quot; parentID=&quot;FV:2&quot;&gt;'
+    + '&lt;dc:title&gt;After Hours&lt;/dc:title&gt;'
+    + '&lt;res&gt;x-rincon-cpcontainer:1004206calbum%3a1499378108?sid=204&amp;amp;flags=8300&amp;amp;sn=2&lt;/res&gt;'
+    + '&lt;r:resMD&gt;&amp;lt;DIDL-Lite&amp;gt;&amp;lt;item id=&amp;quot;1004206calbum%3a1499378108&amp;quot;&amp;gt;&amp;lt;/item&amp;gt;&amp;lt;/DIDL-Lite&amp;gt;&lt;/r:resMD&gt;'
+    + '&lt;/item&gt;&lt;/DIDL-Lite&gt;';
+  const device: Record<string, any> = {
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'RINCON_PLAYROOM',
+    ContentDirectoryService: {
+      Browse: async () => ({ Result: favoriteResult }),
+    },
+    AVTransportService: {
+      RemoveAllTracksFromQueue: async (input: Record<string, unknown>) => {
+        calls.push({ action: 'remove', input });
+        return true;
+      },
+      AddURIToQueue: async (input: Record<string, unknown>) => {
+        calls.push({ action: 'add', input });
+        return { FirstTrackNumberEnqueued: 4, NumTracksAdded: 12, NewQueueLength: 12 };
+      },
+      SetAVTransportURI: async (input: Record<string, unknown>) => {
+        calls.push({ action: 'transport', input });
+        return true;
+      },
+      Seek: async (input: Record<string, unknown>) => {
+        calls.push({ action: 'seek', input });
+        return true;
+      },
+    },
+    Play: async () => {
+      calls.push({ action: 'play' });
+    },
+  };
+  device.Coordinator = device;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = { Devices: [device] };
+  (bridge as unknown as {
+    refreshSnapshot: (device: unknown, trigger: unknown, options: unknown) => Promise<void>;
+  }).refreshSnapshot = async () => undefined;
+
+  await bridge.playFavorite('192.168.50.25', 'FV:2/104');
+
+  assert.deepEqual(calls.map(call => call.action), ['remove', 'add', 'transport', 'seek', 'play']);
+  assert.equal(
+    calls[1]?.input?.EnqueuedURI,
+    'x-rincon-cpcontainer:1004206calbum%3a1499378108?sid=204&flags=8300&sn=2',
+  );
+  assert.equal(
+    calls[1]?.input?.EnqueuedURIMetaData,
+    '&lt;DIDL-Lite&gt;&lt;item id=&quot;1004206calbum%3a1499378108&quot;&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;',
+  );
+  assert.equal(calls[2]?.input?.CurrentURI, 'x-rincon-queue:RINCON_PLAYROOM#0');
+  assert.equal(calls[3]?.input?.Target, '4');
 });
 
 test('bridge debounces snapshot refreshes when the Sonos library emits event bursts', async () => {
@@ -1196,6 +1408,25 @@ test('bridge snapshots grouped playback with the coordinator visible member coun
   ]);
 });
 
+test('relay event subscriptions attach only to coordinators', () => {
+  const coordinator = { Host: '192.168.50.25', Uuid: 'rincon-playroom' };
+  const stereoPartner = {
+    Host: '192.168.50.26',
+    Uuid: 'rincon-playroom-right',
+    Coordinator: coordinator,
+  };
+  const sub = {
+    Host: '192.168.50.27',
+    Uuid: 'rincon-sub',
+    Coordinator: coordinator,
+  };
+
+  assert.equal(shouldAttachSonosDeviceEvents(coordinator), true);
+  assert.equal(shouldAttachSonosDeviceEvents(stereoPartner), false);
+  assert.equal(shouldAttachSonosDeviceEvents(sub), false);
+  assert.equal(shouldAttachSonosDeviceEvents(null), false);
+});
+
 test('bridge writes an individual visible member volume', async () => {
   const bridge = testBridge();
   let desiredVolume: number | null = null;
@@ -1222,6 +1453,197 @@ test('bridge writes an individual visible member volume', async () => {
   await bridge.setMemberVolume('192.168.50.25', 'rincon-kitchen', 31);
 
   assert.equal(desiredVolume, 31);
+});
+
+test('bridge coalesces a burst of group volume commands to the last value', async () => {
+  const writes: number[] = [];
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    transitionSettleRefreshMs: 0,
+    volumeCommandDebounceMs: 5,
+  });
+  const coordinator = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    GroupRenderingControlService: {
+      SetGroupVolume: async (input: { DesiredVolume: number }) => {
+        writes.push(input.DesiredVolume);
+      },
+    },
+  });
+  coordinator.Coordinator = coordinator;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = {
+    Devices: [coordinator],
+  };
+
+  await Promise.all([
+    bridge.setGroupVolume('192.168.50.25', 21),
+    bridge.setGroupVolume('192.168.50.25', 24),
+    bridge.setGroupVolume('192.168.50.25', 29),
+  ]);
+
+  assert.deepEqual(writes, [29]);
+});
+
+test('bridge handles a volume event without re-reading playback metadata', async () => {
+  let groupVolumeReads = 0;
+  let transportReads = 0;
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    eventRefreshDebounceMs: 0,
+  });
+  const coordinator = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    GroupRenderingControlService: {
+      GetGroupVolume: async () => {
+        groupVolumeReads += 1;
+        return { CurrentVolume: 32 };
+      },
+    },
+    AVTransportService: {
+      GetTransportInfo: async () => {
+        transportReads += 1;
+        return { CurrentTransportState: 'PLAYING' };
+      },
+      GetPositionInfo: async () => positionInfo('Blue Train'),
+    },
+  });
+  coordinator.Coordinator = coordinator;
+  (bridge as unknown as { snapshots: Map<string, unknown> }).snapshots.set(
+    '192.168.50.25',
+    {
+      groupId: '192.168.50.25',
+      speakerName: 'Playroom',
+      trackTitle: 'Blue Train',
+      artist: 'John Coltrane',
+      album: 'Blue Train',
+      trackUri: 'x-rincon-queue:RINCON_1#0',
+      albumArtUri: null,
+      albumArtFallbackUri: null,
+      isPlaying: true,
+      transportStateRaw: 'PLAYING',
+      groupVolume: 25,
+      playbackSourceRaw: 'appleMusic',
+      audioQualityLabel: null,
+      musicAmbienceEligible: true,
+      positionSeconds: 10,
+      durationSeconds: 180,
+      groupMemberCount: 1,
+      groupMembers: [{
+        id: 'rincon-playroom',
+        name: 'Playroom',
+        host: '192.168.50.25',
+        isCoordinator: true,
+        volume: 25,
+      }],
+      sampledAt: new Date(),
+    },
+  );
+
+  await (bridge as unknown as {
+    refreshVolumeSnapshot: (device: unknown, volume: number) => Promise<void>;
+  }).refreshVolumeSnapshot(coordinator, 32);
+
+  assert.equal(groupVolumeReads, 1);
+  assert.equal(transportReads, 0);
+  assert.equal(bridge.current('192.168.50.25')?.groupVolume, 32);
+  assert.equal(bridge.current('192.168.50.25')?.groupMembers?.[0]?.volume, 32);
+});
+
+test('bridge lets a Sonos event replace the command confirmation refresh', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    eventRefreshDebounceMs: 5,
+    transitionSettleRefreshMs: 20,
+  });
+  const events = new EventEmitter();
+  const coordinator = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    Events: events,
+    Play: async () => {
+      events.emit(SonosEvents.AVTransport, { TransportState: 'PLAYING' });
+    },
+  });
+  coordinator.Coordinator = coordinator;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = {
+    Devices: [coordinator],
+  };
+  let refreshes = 0;
+  (bridge as unknown as {
+    refreshSnapshot: () => Promise<boolean>;
+  }).refreshSnapshot = async () => {
+    refreshes += 1;
+    return true;
+  };
+  (bridge as unknown as {
+    attachDeviceListeners: (device: unknown) => void;
+  }).attachDeviceListeners(coordinator);
+
+  await bridge.play('192.168.50.25');
+  await delay(40);
+
+  assert.equal(refreshes, 1);
+});
+
+test('bridge watchdog refreshes only active groups before its slow full-house cycle', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    fullHouseWatchdogEveryCycles: 3,
+  });
+  const active = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  const idle = playbackDevice({
+    Host: '192.168.50.30',
+    Name: 'Move',
+    Uuid: 'rincon-move',
+  });
+  active.Coordinator = active;
+  idle.Coordinator = idle;
+  (bridge as unknown as { manager: { Devices: unknown[] } }).manager = {
+    Devices: [active, idle],
+  };
+  const snapshots = (bridge as unknown as { snapshots: Map<string, unknown> }).snapshots;
+  snapshots.set('192.168.50.25', {
+    groupId: '192.168.50.25',
+    isPlaying: true,
+  });
+  snapshots.set('192.168.50.30', {
+    groupId: '192.168.50.30',
+    isPlaying: false,
+  });
+  const lightRefreshes: string[] = [];
+  let fullHouseRefreshes = 0;
+  (bridge as unknown as {
+    refreshSnapshot: (device: { Host: string }) => Promise<boolean>;
+  }).refreshSnapshot = async device => {
+    lightRefreshes.push(device.Host);
+    return true;
+  };
+  (bridge as unknown as {
+    refreshTopologySnapshots: () => Promise<void>;
+  }).refreshTopologySnapshots = async () => {
+    fullHouseRefreshes += 1;
+  };
+
+  const watchdog = bridge as unknown as { runPlaybackWatchdog: () => Promise<void> };
+  await watchdog.runPlaybackWatchdog();
+  await watchdog.runPlaybackWatchdog();
+  await watchdog.runPlaybackWatchdog();
+
+  assert.deepEqual(lightRefreshes, ['192.168.50.25', '192.168.50.25']);
+  assert.equal(fullHouseRefreshes, 1);
 });
 
 test('bridge topology snapshots exclude invisible stereo and Sub members', async () => {
@@ -1286,10 +1708,133 @@ test('bridge topology snapshots exclude invisible stereo and Sub members', async
     [{ groupId: '192.168.50.249', speakerName: 'Playroom', groupMemberCount: 1 }],
   );
 
+  manager.zoneService = {
+    GetParsedZoneGroupState: async () => {
+      throw new Error('temporary topology outage');
+    },
+  };
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(playroom);
+  assert.equal(
+    bridge.current('192.168.50.249')?.groupMemberCount,
+    1,
+    'temporary topology loss must keep the last verified logical room count',
+  );
+
   await (bridge as unknown as {
     refreshSnapshot: (device: unknown) => Promise<void>;
   }).refreshSnapshot(subMini);
   assert.deepEqual(bridge.allSnapshots().map(snapshot => snapshot.groupId), ['192.168.50.249']);
+});
+
+test('bridge rebuilds topology through another speaker when the original seed IP expires', async () => {
+  const staleSubMini = playbackDevice({
+    Host: '192.168.50.122',
+    Name: 'Sub Mini',
+    Uuid: 'rincon-sub-mini',
+    Events: new EventEmitter(),
+  });
+  const stalePlayroom = playbackDevice({
+    Host: '192.168.50.249',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom-left',
+    Events: new EventEmitter(),
+  });
+  staleSubMini.Coordinator = staleSubMini;
+  stalePlayroom.Coordinator = stalePlayroom;
+
+  const freshPlayroom = playbackDevice({
+    Host: '192.168.50.249',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom-left',
+    Events: new EventEmitter(),
+  });
+  const freshPairedPlayroom = playbackDevice({
+    Host: '192.168.50.9',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom-right',
+    Events: new EventEmitter(),
+  });
+  const freshSubMini = playbackDevice({
+    Host: '192.168.50.123',
+    Name: 'Sub Mini',
+    Uuid: 'rincon-sub-mini',
+    Events: new EventEmitter(),
+  });
+  freshPlayroom.Coordinator = freshPlayroom;
+  freshPairedPlayroom.Coordinator = freshPlayroom;
+  freshSubMini.Coordinator = freshPlayroom;
+
+  const recoveredGroups = [{
+    coordinator: zoneMember(freshPlayroom),
+    members: [
+      zoneMember(freshPlayroom),
+      zoneMember(freshPairedPlayroom, '1'),
+      zoneMember(freshSubMini, true),
+    ],
+  }];
+
+  const staleManager = new SonosManager();
+  const staleManagerInternals = staleManager as unknown as {
+    devices: unknown[];
+    zoneService: unknown;
+  };
+  staleManagerInternals.devices = [staleSubMini, stalePlayroom];
+  staleManagerInternals.zoneService = {
+    Events: new EventEmitter(),
+    GetParsedZoneGroupState: async () => {
+      throw new Error('connect EHOSTUNREACH 192.168.50.122:1400');
+    },
+  };
+
+  const recoveredManager = new SonosManager();
+  const recoveredManagerInternals = recoveredManager as unknown as {
+    devices: unknown[];
+    zoneService: unknown;
+    InitializeFromDevice: (seedIp: string) => Promise<boolean>;
+  };
+  const attemptedSeeds: string[] = [];
+  recoveredManagerInternals.InitializeFromDevice = async seedIp => {
+    attemptedSeeds.push(seedIp);
+    if (seedIp !== '192.168.50.249') return false;
+    recoveredManagerInternals.devices = [freshPlayroom, freshPairedPlayroom, freshSubMini];
+    recoveredManagerInternals.zoneService = {
+      Events: new EventEmitter(),
+      GetParsedZoneGroupState: async () => recoveredGroups,
+    };
+    return true;
+  };
+
+  let factoryCalls = 0;
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    managerFactory: () => {
+      factoryCalls += 1;
+      return factoryCalls === 1 ? staleManager : recoveredManager;
+    },
+    topologyRecoveryDiscoveryTimeoutSeconds: 0,
+  });
+
+  assert.deepEqual(
+    (bridge as unknown as { topologyRecoveryCandidateIPs: () => string[] })
+      .topologyRecoveryCandidateIPs(),
+    ['192.168.50.122', '192.168.50.249'],
+  );
+
+  await (bridge as unknown as {
+    refreshTopologySnapshots: (trigger: 'periodic-refresh') => Promise<void>;
+  }).refreshTopologySnapshots('periodic-refresh');
+
+  assert.deepEqual(attemptedSeeds, ['192.168.50.122', '192.168.50.249']);
+  assert.equal(bridge.current('192.168.50.249')?.groupMemberCount, 1);
+  assert.deepEqual(bridge.current('192.168.50.249')?.groupMembers.map(member => member.name), ['Playroom']);
+  const activeManager = (bridge as unknown as { manager: SonosManager }).manager;
+  assert.equal(
+    activeManager.Devices.find(device => device.Uuid === 'rincon-sub-mini')?.Host,
+    '192.168.50.123',
+  );
 });
 
 test('bridge merges every visible source member into the target coordinator', async () => {
@@ -1389,6 +1934,45 @@ test('bridge prefers parsed ZoneGroup members over stale coordinator relationshi
   const snapshot = bridge.current('192.168.50.25');
   assert.equal(snapshot?.speakerName, 'Playroom');
   assert.equal(snapshot?.groupMemberCount, 1);
+});
+
+test('bridge trusts parsed topology coordinators after ungrouping stale device relationships', async () => {
+  const bridge = testBridge();
+  const playroom = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  playroom.Coordinator = playroom;
+
+  const move = playbackDevice({
+    Host: '192.168.50.26',
+    Name: 'Move',
+    Uuid: 'rincon-move',
+  });
+  // Reproduce sonos-ts' short stale window after Move leaves Playroom.
+  move.Coordinator = playroom;
+
+  const manager = (bridge as unknown as {
+    manager: { devices: unknown[]; zoneService: unknown };
+  }).manager;
+  manager.devices = [playroom, move];
+  manager.zoneService = {
+    GetParsedZoneGroupState: async () => [zoneGroup(playroom), zoneGroup(move)],
+  };
+
+  await (bridge as unknown as {
+    refreshTopologySnapshots: (trigger: 'sonos-change') => Promise<void>;
+  }).refreshTopologySnapshots('sonos-change');
+
+  assert.deepEqual(
+    bridge.current('192.168.50.25')?.groupMembers.map(member => member.name),
+    ['Playroom'],
+  );
+  assert.deepEqual(
+    bridge.current('192.168.50.26')?.groupMembers.map(member => member.name),
+    ['Move'],
+  );
 });
 
 function positionInfo(title: string): Record<string, string> {

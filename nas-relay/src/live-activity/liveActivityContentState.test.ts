@@ -193,6 +193,36 @@ test('Live Activity content hash ignores diagnostic artwork trace ids', () => {
   assert.equal(first, second);
 });
 
+test('Live Activity content hash ignores playback progress changes', () => {
+  const earlier = hashLiveActivityContentState({
+    ...baseContentState(),
+    positionSeconds: 42,
+    startedAt: 802396758,
+    endsAt: 802397058,
+  });
+  const later = hashLiveActivityContentState({
+    ...baseContentState(),
+    positionSeconds: 102,
+    startedAt: 802396818,
+    endsAt: 802397118,
+  });
+
+  assert.equal(earlier, later);
+});
+
+test('Live Activity content hash changes when the group member count changes', () => {
+  const standalone = hashLiveActivityContentState({
+    ...baseContentState(),
+    groupMemberCount: 1,
+  });
+  const grouped = hashLiveActivityContentState({
+    ...baseContentState(),
+    groupMemberCount: 2,
+  });
+
+  assert.notEqual(standalone, grouped);
+});
+
 test('Live Activity content hash changes when the dominant theme color changes', () => {
   const withoutColor = hashLiveActivityContentState({
     ...baseContentState(),

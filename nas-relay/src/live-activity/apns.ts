@@ -1,7 +1,11 @@
 import apn from '@parse/node-apn';
 import { promises as fs } from 'node:fs';
 import type { Logger } from 'pino';
-import type { LiveActivityContentState, LiveActivityStartAttributes } from '../types.js';
+import type {
+  LiveActivityContentState,
+  LiveActivityStartAttributes,
+  NowPlayingAttributes,
+} from '../types.js';
 
 /// Swift's `Date` Codable default uses NSDate reference epoch (2001-01-01 UTC),
 /// NOT Unix epoch. ContentState fields like `startedAt` / `endsAt` must be
@@ -71,6 +75,14 @@ type LiveActivityNote = apn.Notification & {
   inputPushToken: number;
 };
 
+type NowPlayingEvent = 'start' | 'update' | 'end';
+type NowPlayingNote = apn.Notification & {
+  pushType: string;
+  timestamp: number;
+  event: NowPlayingEvent;
+  attributes: Record<string, unknown>;
+};
+
 export function makeLiveActivityStartNotification(
   bundleId: string,
   attributes: LiveActivityStartAttributes,
@@ -101,6 +113,29 @@ export function liveActivityNotificationPayloadBytes(note: apn.Notification): nu
   return Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8');
 }
 
+export function makeNowPlayingNotification(
+  bundleId: string,
+  event: NowPlayingEvent,
+  attributes: NowPlayingAttributes | Pick<NowPlayingAttributes, 'id'>,
+  nowUnixSeconds = Math.floor(Date.now() / 1000),
+): apn.Notification {
+  const note = new apn.Notification() as NowPlayingNote;
+  note.topic = `${bundleId}.push-type.nowplaying`;
+  (note as unknown as { pushType: string }).pushType = 'nowplaying';
+  note.expiry = nowUnixSeconds + 3600;
+  note.timestamp = nowUnixSeconds;
+  note.event = event;
+  note.attributes = attributes as unknown as Record<string, unknown>;
+  return note;
+}
+
+export function nextMonotonicNowPlayingTimestamp(
+  nowUnixSeconds: number,
+  previousTimestamp: number,
+): number {
+  return Math.max(Math.floor(nowUnixSeconds), previousTimestamp + 1);
+}
+
 function liveActivityStartAlertBody(
   attributes: LiveActivityStartAttributes,
   contentState: LiveActivityContentState,
@@ -122,6 +157,7 @@ export class ApnsClient {
   private readonly dryRun: boolean;
   private readonly apnsStatus: ApnsStatus;
   private readonly retryDelaysMs: readonly number[] = DEFAULT_APNS_RETRY_DELAYS_MS;
+  private lastNowPlayingTimestamp = 0;
 
   private constructor(config: ApnsConfig, status: ApnsStatus, log: Logger) {
     this.config = config;
@@ -194,6 +230,24 @@ export class ApnsClient {
     return this.sendLiveActivityNotification(tokens, note, 'start', contentState);
   }
 
+  async pushNowPlayingStart(
+    tokens: string[],
+    attributes: NowPlayingAttributes,
+  ): Promise<ApnsResult> {
+    return this.pushNowPlaying(tokens, 'start', attributes);
+  }
+
+  async pushNowPlayingUpdate(
+    tokens: string[],
+    attributes: NowPlayingAttributes,
+  ): Promise<ApnsResult> {
+    return this.pushNowPlaying(tokens, 'update', attributes);
+  }
+
+  async pushNowPlayingEnd(tokens: string[], sessionId: string): Promise<ApnsResult> {
+    return this.pushNowPlaying(tokens, 'end', { id: sessionId });
+  }
+
   private async push(
     tokens: string[],
     event: 'update' | 'end',
@@ -224,6 +278,51 @@ export class ApnsClient {
     event: LiveActivityEvent,
     contentState: LiveActivityContentState,
   ): Promise<ApnsResult> {
+    return this.sendNotification(
+      tokens,
+      note,
+      event,
+      summarizeLiveActivityState(contentState),
+      'live_activity',
+    );
+  }
+
+  private async pushNowPlaying(
+    tokens: string[],
+    event: NowPlayingEvent,
+    attributes: NowPlayingAttributes | Pick<NowPlayingAttributes, 'id'>,
+  ): Promise<ApnsResult> {
+    // A static metadata update can be followed a few milliseconds later by an
+    // animated-artwork enrichment. Now Playing orders remote changes by this
+    // timestamp, so two updates sharing the same whole second can be applied
+    // in the wrong order on device. Keep this channel strictly monotonic.
+    const timestamp = nextMonotonicNowPlayingTimestamp(
+      Date.now() / 1_000,
+      this.lastNowPlayingTimestamp,
+    );
+    this.lastNowPlayingTimestamp = timestamp;
+    const note = makeNowPlayingNotification(
+      this.config.bundleId,
+      event,
+      attributes,
+      timestamp,
+    );
+    return this.sendNotification(
+      tokens,
+      note,
+      event,
+      summarizeNowPlayingAttributes(attributes),
+      'now_playing',
+    );
+  }
+
+  private async sendNotification(
+    tokens: string[],
+    note: apn.Notification,
+    event: LiveActivityEvent | NowPlayingEvent,
+    state: Record<string, unknown>,
+    channel: 'live_activity' | 'now_playing',
+  ): Promise<ApnsResult> {
     if (tokens.length === 0) return { sent: 0, failed: 0, unregistered: [] };
     const payloadBytes = liveActivityNotificationPayloadBytes(note);
 
@@ -235,9 +334,9 @@ export class ApnsClient {
           event,
           tokens: tokens.length,
           payloadBytes,
-          state: summarizeLiveActivityState(contentState),
+          state,
         },
-        'live_activity',
+        channel,
       );
       return { sent: tokens.length, failed: 0, unregistered: [] };
     }
@@ -254,9 +353,9 @@ export class ApnsClient {
             attempt,
             tokens: pendingTokens.length,
             payloadBytes,
-            state: summarizeLiveActivityState(contentState),
+            state,
           },
-          'live_activity',
+          channel,
         );
 
         const response = await this.provider.send(note, pendingTokens);
@@ -266,12 +365,12 @@ export class ApnsClient {
         for (const failure of response.failed) {
           // 410 Unregistered = device de-installed app or token rotated;
           // surface so the caller can prune the token store.
-          if (failure.status === 410 && failure.device) {
+          if ((failure.status === 410 || isBadDeviceTokenFailure(failure)) && failure.device) {
             result.failed += 1;
             result.unregistered.push(failure.device);
             this.log.info(
               { token: failure.device.slice(0, 8) + '…' },
-              'APNs reported token Unregistered — pruning',
+              'APNs rejected a stale device token — pruning',
             );
             continue;
           }
@@ -292,7 +391,7 @@ export class ApnsClient {
                 token: failure.device.slice(0, 8) + '…',
                 reason: apnsFailureReason(failure),
               },
-              'live_activity',
+              channel,
             );
             continue;
           }
@@ -313,7 +412,7 @@ export class ApnsClient {
               nextAttempt: attempt + 1,
               err,
             },
-            'live_activity',
+            channel,
           );
         } else {
           this.log.error({ err }, 'APNs send threw');
@@ -337,9 +436,9 @@ export class ApnsClient {
         sent: result.sent,
         failed: result.failed,
         unregistered: result.unregistered.map(token => token.slice(0, 8) + '…'),
-        state: summarizeLiveActivityState(contentState),
+        state,
       },
-      'live_activity',
+      channel,
     );
     return result;
   }
@@ -354,10 +453,30 @@ export class ApnsClient {
   }
 }
 
+function summarizeNowPlayingAttributes(
+  attributes: NowPlayingAttributes | Pick<NowPlayingAttributes, 'id'>,
+): Record<string, unknown> {
+  if (!('title' in attributes)) return { id: attributes.id };
+  return {
+    id: attributes.id,
+    groupID: attributes.groupID,
+    title: attributes.title,
+    artist: attributes.artist,
+    isPlaying: attributes.isPlaying,
+    duration: Math.round(attributes.duration),
+    hasPrimaryArtwork: Boolean(attributes.artworkURLString),
+    hasFallbackArtwork: Boolean(attributes.artworkFallbackURLString),
+  };
+}
+
 function isRetryableApnsFailure(failure: unknown): boolean {
   const status = numericValue((failure as { status?: unknown })?.status);
   if (status !== null && status >= 400 && status < 500) return false;
   return retryableApnsText(apnsFailureReason(failure));
+}
+
+function isBadDeviceTokenFailure(failure: unknown): boolean {
+  return apnsFailureReason(failure).toLowerCase().includes('baddevicetoken');
 }
 
 function isRetryableApnsError(err: unknown): boolean {

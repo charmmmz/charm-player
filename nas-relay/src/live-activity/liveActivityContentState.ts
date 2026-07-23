@@ -66,8 +66,8 @@ export async function buildLiveActivityContentState(
 }
 
 export function hashLiveActivityContentState(state: LiveActivityContentState): string {
-  // Hash only the user-visible fields; ignore startedAt/endsAt drift since
-  // those move on every poll even when playback is unchanged.
+  // Hash only the user-visible fields. Playback progress and its time anchors
+  // are intentionally excluded so polling cannot consume APNs budget by itself.
   const projection = {
     t: state.trackTitle,
     a: state.artist,
@@ -77,6 +77,7 @@ export function hashLiveActivityContentState(state: LiveActivityContentState): s
     s: state.playbackSourceRaw,
     art: state.albumArtThumbnail,
     c: state.dominantColorHex,
+    g: state.groupMemberCount,
     n: state.soundbarNightMode,
     se: state.soundbarSpeechEnhancementRawLevel,
     sty: state.liveActivityStyleRaw,

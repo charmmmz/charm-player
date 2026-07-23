@@ -407,6 +407,7 @@ extension SonosManager {
             // correct branch once `transportBackend` settles. Meanwhile the
             // Home tab's "Speaker unreachable" banner is the right terminal
             // state for a genuinely unreachable speaker.
+            projectSkeletonGroupStatusesFromSavedSpeakers()
             return
         }
 
@@ -419,55 +420,94 @@ extension SonosManager {
     }
 
     func refreshAllGroupStatusesLAN() async {
-        guard let anyIP = allSpeakers.first?.ipAddress ?? selectedSpeaker?.ipAddress else { return }
+        let candidateIPs = Self.topologyRefreshCandidateIPs(
+            selectedSpeaker: selectedSpeaker,
+            allSpeakers: allSpeakers
+        )
+        guard !candidateIPs.isEmpty else {
+            projectSkeletonGroupStatusesFromSavedSpeakers()
+            return
+        }
 
-        do {
-            let fresh = try await SonosAPI.getZoneGroupState(ip: anyIP)
-            allSpeakers = fresh
-            speakers = Self.homeSpeakerCoordinatorCandidates(in: fresh)
-            SharedStorage.savedSpeakers = fresh
-
-            var statuses: [SpeakerGroupStatus] = []
-            let coordinators = Self.homeSpeakerCoordinatorCandidates(in: fresh)
-
-            for coord in coordinators {
-                let members = fresh.filter { $0.groupId == coord.groupId && !$0.isInvisible }
-                do {
-                    async let t = SonosAPI.getTransportInfo(ip: coord.ipAddress)
-                    async let p = SonosAPI.getPositionInfo(ip: coord.ipAddress)
-                    async let v = SonosAPI.getGroupVolume(ip: coord.ipAddress)
-                    let state = try await t
-                    let positionInfo = try await p
-                    let vol = (try? await v) ?? 0
-                    let localMetadata: SonosCloudAPI.CloudPlaybackMetadata?
-                    if Self.shouldFetchLocalControlMetadataForLANSpeakerStatus(positionInfo) {
-                        localMetadata = await fetchLocalControlPlaybackMetadata(ip: coord.ipAddress)
-                    } else {
-                        localMetadata = nil
-                    }
-                    let track = Self.lanTrackInfo(
-                        positionInfo,
-                        localMetadata: localMetadata,
-                        cachedCloudQuality: cachedCloudQuality,
-                        cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
-                            && isCloudQualityAuthoritative(positionInfo.source)
-                    )
-                    statuses.append(SpeakerGroupStatus(
-                        id: coord.groupId ?? coord.id,
-                        coordinator: coord, members: members,
-                        trackInfo: track, transportState: state, volume: vol
-                    ))
-                } catch {
-                    statuses.append(SpeakerGroupStatus(
-                        id: coord.groupId ?? coord.id,
-                        coordinator: coord, members: members,
-                        trackInfo: nil, transportState: .unknown, volume: 0
-                    ))
+        var freshTopology: [SonosPlayer]?
+        var lastError: Error?
+        for (index, ip) in candidateIPs.enumerated() {
+            do {
+                let topology = try await SonosAPI.getZoneGroupState(ip: ip)
+                guard !topology.isEmpty else {
+                    SonosLog.info(.soap, "topology refresh returned no speakers seed=\(ip)")
+                    continue
                 }
+                freshTopology = topology
+                if index > 0 {
+                    SonosLog.info(
+                        .soap,
+                        "topology refresh recovered with fallback seed=\(ip) attempts=\(index + 1)"
+                    )
+                }
+                break
+            } catch {
+                lastError = error
+                SonosLog.error(
+                    .soap,
+                    "topology refresh failed seed=\(ip) error=\(error.localizedDescription)"
+                )
             }
-            applyPreferredSpeakerOrder(to: statuses)
-            await loadGroupAlbumColors()
-        } catch { /* keep existing data */ }
+        }
+
+        guard let fresh = freshTopology else {
+            projectSkeletonGroupStatusesFromSavedSpeakers()
+            if let lastError {
+                errorMessage = lastError.localizedDescription
+            }
+            invalidateBackend()
+            return
+        }
+
+        allSpeakers = fresh
+        speakers = Self.homeSpeakerCoordinatorCandidates(in: fresh)
+        SharedStorage.savedSpeakers = fresh
+
+        var statuses: [SpeakerGroupStatus] = []
+        let coordinators = Self.homeSpeakerCoordinatorCandidates(in: fresh)
+
+        for coord in coordinators {
+            let members = fresh.filter { $0.groupId == coord.groupId && !$0.isInvisible }
+            do {
+                async let t = SonosAPI.getTransportInfo(ip: coord.ipAddress)
+                async let p = SonosAPI.getPositionInfo(ip: coord.ipAddress)
+                async let v = SonosAPI.getGroupVolume(ip: coord.ipAddress)
+                let state = try await t
+                let positionInfo = try await p
+                let vol = (try? await v) ?? 0
+                let localMetadata: SonosCloudAPI.CloudPlaybackMetadata?
+                if Self.shouldFetchLocalControlMetadataForLANSpeakerStatus(positionInfo) {
+                    localMetadata = await fetchLocalControlPlaybackMetadata(ip: coord.ipAddress)
+                } else {
+                    localMetadata = nil
+                }
+                let track = Self.lanTrackInfo(
+                    positionInfo,
+                    localMetadata: localMetadata,
+                    cachedCloudQuality: cachedCloudQuality,
+                    cloudQualityIsAuthoritative: SonosAuth.shared.isLoggedIn
+                        && isCloudQualityAuthoritative(positionInfo.source)
+                )
+                statuses.append(SpeakerGroupStatus(
+                    id: coord.groupId ?? coord.id,
+                    coordinator: coord, members: members,
+                    trackInfo: track, transportState: state, volume: vol
+                ))
+            } catch {
+                statuses.append(SpeakerGroupStatus(
+                    id: coord.groupId ?? coord.id,
+                    coordinator: coord, members: members,
+                    trackInfo: nil, transportState: .unknown, volume: 0
+                ))
+            }
+        }
+        applyPreferredSpeakerOrder(to: statuses)
+        await loadGroupAlbumColors()
     }
 
     /// Cloud version of `refreshAllGroupStatuses`. Populates the Home tab

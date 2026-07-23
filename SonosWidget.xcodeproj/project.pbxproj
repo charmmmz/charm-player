@@ -11,6 +11,7 @@
 		BA832D652F90D2A80023DEE7 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BA832D642F90D2A80023DEE7 /* WidgetKit.framework */; };
 		BA832D672F90D2A80023DEE7 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BA832D662F90D2A80023DEE7 /* SwiftUI.framework */; };
 		BA832D782F90D2AA0023DEE7 /* TheWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BA832D622F90D2A80023DEE7 /* TheWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C10000000000000000000002 /* RemoteMediaSessionExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* RemoteMediaSessionExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -35,6 +36,13 @@
 			remoteGlobalIDString = BA832D4F2F90D1690023DEE7;
 			remoteInfo = SonosWidget;
 		};
+		C10000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BA832D482F90D1690023DEE7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C10000000000000000000007;
+			remoteInfo = RemoteMediaSessionExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -50,6 +58,17 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C1000000000000000000000F /* Embed Remote Media Extension */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				C10000000000000000000002 /* RemoteMediaSessionExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Remote Media Extension";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +80,7 @@
 		BA832D942F90E0020023DEE7 /* SonosSecrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SonosSecrets.example.xcconfig; sourceTree = "<group>"; };
 		BA832D972F92E1000023DEE7 /* SonosWidgetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SonosWidgetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AppleMusicShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000001 /* RemoteMediaSessionExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RemoteMediaSessionExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -135,6 +155,13 @@
 			);
 			target = BA832D9C2F92E1000023DEE7 /* SonosWidgetTests */;
 		};
+		C10000000000000000000004 /* Exceptions for "RemoteMediaSessionExtension" folder in "RemoteMediaSessionExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = C10000000000000000000007 /* RemoteMediaSessionExtension */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -176,6 +203,19 @@
 			path = SonosWidgetTests;
 			sourceTree = "<group>";
 		};
+		C10000000000000000000005 /* RemoteMediaSessionExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C10000000000000000000004 /* Exceptions for "RemoteMediaSessionExtension" folder in "RemoteMediaSessionExtension" target */,
+			);
+			path = RemoteMediaSessionExtension;
+			sourceTree = "<group>";
+		};
+		C1000000000000000000000E /* RemoteMediaSessionShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RemoteMediaSessionShared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -209,6 +249,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -218,8 +265,10 @@
 				BA832D952F90E0020023DEE7 /* Config */,
 				BA832D522F90D1690023DEE7 /* SonosWidget */,
 				BA832D802F90D3000023DEE7 /* Shared */,
+				C1000000000000000000000E /* RemoteMediaSessionShared */,
 				BA832D682F90D2A80023DEE7 /* TheWidget */,
 				9288B861AA7E06A6E5623D0D /* AppleMusicShareExtension */,
+				C10000000000000000000005 /* RemoteMediaSessionExtension */,
 				BA832D982F92E1000023DEE7 /* SonosWidgetTests */,
 				BA832D632F90D2A80023DEE7 /* Frameworks */,
 				BA832D512F90D1690023DEE7 /* Products */,
@@ -232,6 +281,7 @@
 				BA832D502F90D1690023DEE7 /* SonosWidget.app */,
 				BA832D622F90D2A80023DEE7 /* TheWidgetExtension.appex */,
 				BC3A0CF5A0AB7CC0DF917AC1 /* AppleMusicShareExtension.appex */,
+				C10000000000000000000001 /* RemoteMediaSessionExtension.appex */,
 				BA832D972F92E1000023DEE7 /* SonosWidgetTests.xctest */,
 			);
 			name = Products;
@@ -288,16 +338,19 @@
 				BA832D4D2F90D1690023DEE7 /* Frameworks */,
 				BA832D4E2F90D1690023DEE7 /* Resources */,
 				BA832D7D2F90D2AA0023DEE7 /* Embed Foundation Extensions */,
+				C1000000000000000000000F /* Embed Remote Media Extension */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				BA832D772F90D2AA0023DEE7 /* PBXTargetDependency */,
 				B638E843BC2D07506F85B0BE /* PBXTargetDependency */,
+				C1000000000000000000000A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				BA832D522F90D1690023DEE7 /* SonosWidget */,
 				BA832D802F90D3000023DEE7 /* Shared */,
+				C1000000000000000000000E /* RemoteMediaSessionShared */,
 			);
 			name = SonosWidget;
 			packageProductDependencies = (
@@ -353,6 +406,29 @@
 			productReference = BA832D972F92E1000023DEE7 /* SonosWidgetTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C10000000000000000000007 /* RemoteMediaSessionExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1000000000000000000000D /* Build configuration list for PBXNativeTarget "RemoteMediaSessionExtension" */;
+			buildPhases = (
+				C10000000000000000000009 /* Sources */,
+				C10000000000000000000006 /* Frameworks */,
+				C10000000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C10000000000000000000005 /* RemoteMediaSessionExtension */,
+				C1000000000000000000000E /* RemoteMediaSessionShared */,
+			);
+			name = RemoteMediaSessionExtension;
+			packageProductDependencies = (
+			);
+			productName = RemoteMediaSessionExtension;
+			productReference = C10000000000000000000001 /* RemoteMediaSessionExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -376,6 +452,9 @@
 						CreatedOnToolsVersion = 26.4;
 						TestTargetID = BA832D4F2F90D1690023DEE7;
 					};
+					C10000000000000000000007 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = BA832D4B2F90D1690023DEE7 /* Build configuration list for PBXProject "SonosWidget" */;
@@ -396,6 +475,7 @@
 				BA832D612F90D2A80023DEE7 /* TheWidgetExtension */,
 				8D65F719D012899BDE575D0A /* AppleMusicShareExtension */,
 				BA832D9C2F92E1000023DEE7 /* SonosWidgetTests */,
+				C10000000000000000000007 /* RemoteMediaSessionExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -423,6 +503,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BA832D9B2F92E1000023DEE7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000008 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -460,6 +547,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -477,6 +571,11 @@
 			isa = PBXTargetDependency;
 			target = BA832D4F2F90D1690023DEE7 /* SonosWidget */;
 			targetProxy = BA832DA02F92E1000023DEE7 /* PBXContainerItemProxy */;
+		};
+		C1000000000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C10000000000000000000007 /* RemoteMediaSessionExtension */;
+			targetProxy = C10000000000000000000003 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -873,6 +972,68 @@
 			};
 			name = Release;
 		};
+		C1000000000000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = RemoteMediaSessionExtension/RemoteMediaSessionExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3MSS7DJGVR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RemoteMediaSessionExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Charm Player Remote";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.RemoteMediaSessionExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C1000000000000000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = RemoteMediaSessionExtension/RemoteMediaSessionExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3MSS7DJGVR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = RemoteMediaSessionExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Charm Player Remote";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.charm.SonosWidget.RemoteMediaSessionExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -917,6 +1078,15 @@
 			buildConfigurations = (
 				BA832D9D2F92E1000023DEE7 /* Debug */,
 				BA832D9E2F92E1000023DEE7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1000000000000000000000D /* Build configuration list for PBXNativeTarget "RemoteMediaSessionExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1000000000000000000000B /* Debug */,
+				C1000000000000000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

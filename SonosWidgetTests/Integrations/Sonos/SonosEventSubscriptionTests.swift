@@ -158,6 +158,21 @@ final class SonosEventSubscriptionTests: XCTestCase {
         XCTAssertEqual(registry.service(for: notification), .avTransport)
     }
 
+    func testRenderingControlClassifierOnlyEscalatesSoundbarEQEvents() {
+        XCTAssertFalse(SonosManager.renderingControlEventContainsSoundbarEQ(
+            "&lt;Volume channel=&quot;Master&quot; val=&quot;32&quot;/&gt;"
+        ))
+        XCTAssertTrue(SonosManager.renderingControlEventContainsSoundbarEQ(
+            "&lt;NightMode val=&quot;1&quot;/&gt;"
+        ))
+        XCTAssertTrue(SonosManager.renderingControlEventContainsSoundbarEQ(
+            "&lt;DialogLevel val=&quot;3&quot;/&gt;"
+        ))
+        XCTAssertTrue(SonosManager.renderingControlEventContainsSoundbarEQ(
+            "&lt;SpeechEnhanceEnabled val=&quot;1&quot;/&gt;"
+        ))
+    }
+
     func testEventListenerCallbackURLUsesNonZeroPort() throws {
         let listener = SonosEventListener(localAddressProvider: { "127.0.0.1" }) { _ in }
         let callbackURL = try listener.start()

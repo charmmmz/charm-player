@@ -106,10 +106,10 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
 
         XCTAssertTrue(plan.refreshState)
         XCTAssertTrue(plan.refreshGroups)
-        XCTAssertEqual(plan.sleepSeconds, 30)
+        XCTAssertEqual(plan.sleepSeconds, 120)
     }
 
-    func testAutoRefreshKeepsFastCadenceWhenLANEventsAreNotSubscribed() {
+    func testAutoRefreshUsesBoundedFallbackWhenLANEventsAreNotSubscribed() {
         let firstPlan = SonosManager.autoRefreshPlan(
             transportBackend: .lan,
             hasLANEventSubscriptions: false,
@@ -122,11 +122,48 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         )
 
         XCTAssertTrue(firstPlan.refreshState)
-        XCTAssertFalse(firstPlan.refreshGroups)
-        XCTAssertEqual(firstPlan.sleepSeconds, 3)
+        XCTAssertTrue(firstPlan.refreshGroups)
+        XCTAssertEqual(firstPlan.sleepSeconds, 15)
         XCTAssertTrue(secondPlan.refreshState)
-        XCTAssertTrue(secondPlan.refreshGroups)
-        XCTAssertEqual(secondPlan.sleepSeconds, 3)
+        XCTAssertFalse(secondPlan.refreshGroups)
+        XCTAssertEqual(secondPlan.sleepSeconds, 15)
+    }
+
+    func testRelayBackedLANEventsReduceWholeHousePolling() {
+        let initialPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: true,
+            relayAvailable: true,
+            cycle: 0
+        )
+        let nextPlan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: true,
+            relayAvailable: true,
+            cycle: 1
+        )
+
+        XCTAssertTrue(initialPlan.refreshState)
+        XCTAssertTrue(initialPlan.refreshGroups)
+        XCTAssertEqual(initialPlan.sleepSeconds, 300)
+        XCTAssertTrue(nextPlan.refreshState)
+        XCTAssertFalse(nextPlan.refreshGroups)
+        XCTAssertEqual(nextPlan.sleepSeconds, 300)
+    }
+
+    func testRelayOwnedLiveActivitySkipsBackgroundKeepalive() {
+        XCTAssertFalse(
+            SonosManager.shouldStartBackgroundKeepalive(
+                currentActivityExists: true,
+                relayAvailable: true
+            )
+        )
+        XCTAssertTrue(
+            SonosManager.shouldStartBackgroundKeepalive(
+                currentActivityExists: true,
+                relayAvailable: false
+            )
+        )
     }
 
     func testAutoRefreshKeepsCloudRefreshRateLimited() {
@@ -790,28 +827,7 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertEqual(data, payloadThumbnail)
     }
 
-    func testLiveActivityPlaybackLayoutMetricsStayStableAcrossPlayState() {
-        let playing = SonosActivityAttributes.ContentState(
-            trackTitle: "Music For a Sushi Restaurant",
-            artist: "Harry Styles",
-            album: "Harry's House",
-            isPlaying: true,
-            positionSeconds: 42,
-            durationSeconds: 193,
-            startedAt: Date(timeIntervalSince1970: 2_000),
-            endsAt: Date(timeIntervalSince1970: 2_151),
-            playbackSourceRaw: PlaybackSource.appleMusic.rawValue
-        )
-        var paused = playing
-        paused.isPlaying = false
-        paused.startedAt = nil
-        paused.endsAt = nil
-
-        XCTAssertEqual(
-            LiveActivityLayoutMetrics.progressHeight(for: playing),
-            LiveActivityLayoutMetrics.progressHeight(for: paused)
-        )
-        XCTAssertEqual(LiveActivityLayoutMetrics.progressHeight(for: playing), 12)
+    func testLiveActivityTransportLayoutMetricsStayStable() {
         XCTAssertEqual(
             LiveActivityLayoutMetrics.waveformWidth(barCount: 3),
             9,

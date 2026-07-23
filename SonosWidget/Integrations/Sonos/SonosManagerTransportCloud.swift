@@ -780,13 +780,29 @@ extension SonosManager {
     static func autoRefreshPlan(
         transportBackend: TransportBackend,
         hasLANEventSubscriptions: Bool,
+        relayAvailable: Bool = false,
         cycle: Int
     ) -> AutoRefreshPlan {
         if transportBackend == .lan && hasLANEventSubscriptions {
+            if relayAvailable {
+                return AutoRefreshPlan(
+                    refreshState: true,
+                    refreshGroups: cycle.isMultiple(of: relayBackedGroupRefreshEveryCycles),
+                    sleepSeconds: relayBackedLANEventWatchdogRefreshIntervalSeconds
+                )
+            }
             return AutoRefreshPlan(
                 refreshState: true,
-                refreshGroups: true,
+                refreshGroups: cycle.isMultiple(of: lanEventGroupRefreshEveryCycles),
                 sleepSeconds: lanEventWatchdogRefreshIntervalSeconds
+            )
+        }
+
+        if transportBackend == .lan {
+            return AutoRefreshPlan(
+                refreshState: true,
+                refreshGroups: cycle.isMultiple(of: lanUnsubscribedGroupRefreshEveryCycles),
+                sleepSeconds: lanUnsubscribedRefreshIntervalSeconds
             )
         }
 
@@ -815,6 +831,7 @@ extension SonosManager {
                 let plan = Self.autoRefreshPlan(
                     transportBackend: self.transportBackend,
                     hasLANEventSubscriptions: self.hasActiveLANEventSubscriptions,
+                    relayAvailable: RelayManager.shared.isAvailable,
                     cycle: self.groupRefreshCounter
                 )
                 if plan.refreshState {
@@ -824,7 +841,16 @@ extension SonosManager {
                     await self.refreshAllGroupStatuses()
                 }
                 self.groupRefreshCounter += 1
-                try? await Task.sleep(for: .seconds(plan.sleepSeconds))
+                // The first refresh often establishes LAN event subscriptions.
+                // Re-evaluate the cadence after the work so we don't perform a
+                // second full refresh only three seconds later.
+                let nextCadence = Self.autoRefreshPlan(
+                    transportBackend: self.transportBackend,
+                    hasLANEventSubscriptions: self.hasActiveLANEventSubscriptions,
+                    relayAvailable: RelayManager.shared.isAvailable,
+                    cycle: self.groupRefreshCounter
+                )
+                try? await Task.sleep(for: .seconds(nextCadence.sleepSeconds))
             }
         }
 

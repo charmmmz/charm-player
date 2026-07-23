@@ -6,6 +6,18 @@ enum AnimatedArtworkFeature {
     static let isEnabled = true
     static let fullScreenBackgroundBottomEdgeOverscan: CGFloat = 2
 
+    /// Sonos reports radio playback without a track duration, so Apple Music
+    /// station songs are classified as live streams even when their current
+    /// title, artist, and album identify a normal catalog track. Let those
+    /// songs reach the existing metadata resolver while keeping ordinary
+    /// radio and other durationless inputs out of the animated-artwork path.
+    static func canBuildNowPlayingIdentity(
+        source: PlaybackSource?,
+        isLiveStream: Bool
+    ) -> Bool {
+        !isLiveStream || source == .appleMusic
+    }
+
     static func canRenderVideo(
         source: PlaybackSource?,
         isReduceMotionEnabled: Bool? = nil,

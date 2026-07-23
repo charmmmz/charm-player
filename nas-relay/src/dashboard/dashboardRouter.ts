@@ -17,6 +17,13 @@ import type { ApnsStatus } from '../live-activity/apns.js';
 import { resolveMcpTarget, type SonosMcpController, type SonosMcpOptions } from '../mcp/sonosMcpRouter.js';
 import { snapshotJson } from '../sonos/relaySnapshotJson.js';
 import type { SonosDiscoveryState } from '../sonos/sonos.js';
+import type {
+  SonosFavoriteAddResult,
+  SonosCurrentFavoriteStatus,
+  SonosFavoriteItem,
+  SonosQueueArtworkResult,
+  SonosQueueView,
+} from '../sonos/sonosLibrary.js';
 import { themeColorFromAlbumArtBuffer } from './dashboardArtworkTheme.js';
 
 const COOKIE_NAME = 'charm_dashboard_session';
@@ -38,6 +45,12 @@ export interface DashboardDependencies {
     mergeGroups(sourceGroupId: string, intoGroupId: string): Promise<void>;
     separateGroup(groupId: string): Promise<void>;
     setMemberVolume(groupId: string, memberId: string, volume: number): Promise<void>;
+    listFavorites(groupId: string): Promise<SonosFavoriteItem[]>;
+    currentFavoriteStatus(groupId: string): Promise<SonosCurrentFavoriteStatus>;
+    listQueue(groupId: string): Promise<SonosQueueView>;
+    resolveQueueArtworkAlbums(groupId: string, albumKeys: string[]): Promise<SonosQueueArtworkResult[]>;
+    playFavorite(groupId: string, favoriteId: string): Promise<void>;
+    addCurrentTrackToFavorites(groupId: string): Promise<SonosFavoriteAddResult>;
   };
   hue: {
     status(): HueAmbienceServiceStatus;
@@ -237,6 +250,65 @@ export function createDashboardRouter(
     res.json({ ok: true, entries });
   });
 
+  router.get('/sonos/favorites', async (req, res) => {
+    const target = typeof req.query.target === 'string' ? req.query.target : '';
+    try {
+      const resolved = resolveMcpTarget(target, dependencies.sonos.allSnapshots());
+      const favorites = await dependencies.sonos.listFavorites(resolved.groupId);
+      res.json({ ok: true, target: resolved.groupId, favorites });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      dashboardLog.warn({ err: error, target }, 'dashboard Sonos Favorites load failed');
+      res.status(message.includes('Unknown Sonos target') ? 404 : 500)
+        .json({ ok: false, error: message });
+    }
+  });
+
+  router.get('/sonos/favorite-current', async (req, res) => {
+    const target = typeof req.query.target === 'string' ? req.query.target : '';
+    try {
+      const resolved = resolveMcpTarget(target, dependencies.sonos.allSnapshots());
+      const status = await dependencies.sonos.currentFavoriteStatus(resolved.groupId);
+      res.json({ ok: true, target: resolved.groupId, ...status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      dashboardLog.warn({ err: error, target }, 'dashboard current Sonos Favorite status failed');
+      res.status(message.includes('Unknown Sonos target') ? 404 : 500)
+        .json({ ok: false, error: message });
+    }
+  });
+
+  router.get('/sonos/queue', async (req, res) => {
+    const target = typeof req.query.target === 'string' ? req.query.target : '';
+    try {
+      const resolved = resolveMcpTarget(target, dependencies.sonos.allSnapshots());
+      const queue = await dependencies.sonos.listQueue(resolved.groupId);
+      res.json({ ok: true, queue });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      dashboardLog.warn({ err: error, target }, 'dashboard Sonos queue load failed');
+      res.status(message.includes('Unknown Sonos target') ? 404 : 500)
+        .json({ ok: false, error: message });
+    }
+  });
+
+  router.post('/sonos/queue-artwork', sameOriginOnly, async (req, res) => {
+    const target = typeof req.body?.target === 'string' ? req.body.target : '';
+    const albumKeys = Array.isArray(req.body?.albumKeys)
+      ? req.body.albumKeys.filter((key: unknown): key is string => typeof key === 'string')
+      : [];
+    try {
+      const resolved = resolveMcpTarget(target, dependencies.sonos.allSnapshots());
+      const artwork = await dependencies.sonos.resolveQueueArtworkAlbums(resolved.groupId, albumKeys);
+      res.json({ ok: true, target: resolved.groupId, artwork });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      dashboardLog.warn({ err: error, target }, 'dashboard Sonos queue artwork load failed');
+      res.status(message.includes('Unknown Sonos target') ? 404 : 500)
+        .json({ ok: false, error: message });
+    }
+  });
+
   router.post('/sonos/:action', sameOriginOnly, async (req, res) => {
     const action = req.params.action;
     const target = typeof req.body?.target === 'string' ? req.body.target : '';
@@ -274,6 +346,24 @@ export function createDashboardRouter(
       case 'previous':
         await dependencies.sonos.previous(resolved.groupId);
         break;
+      case 'play-favorite': {
+        const favoriteId = typeof req.body?.favoriteId === 'string' ? req.body.favoriteId.trim() : '';
+        if (!favoriteId) {
+          res.status(400).json({ ok: false, error: 'favoriteId is required' });
+          return;
+        }
+        await dependencies.sonos.playFavorite(resolved.groupId, favoriteId);
+        break;
+      }
+      case 'favorite-current': {
+        const result = await dependencies.sonos.addCurrentTrackToFavorites(resolved.groupId);
+        dashboardLog.info(
+          { action, groupId: resolved.groupId, favoriteId: result.favorite.id, added: result.added },
+          'dashboard Sonos Favorite control',
+        );
+        res.json({ ok: true, ...result });
+        return;
+      }
       case 'volume': {
         const volume = Number(req.body?.volume);
         if (!Number.isInteger(volume) || volume < 0 || volume > dependencies.mcp.maxVolume) {

@@ -13,7 +13,10 @@ extension SonosManager {
     /// Activity (track title, progress timestamps) stays fresh through track changes.
     @MainActor
     func startBackgroundKeepalive() {
-        guard currentActivity != nil else { return }
+        guard Self.shouldStartBackgroundKeepalive(
+            currentActivityExists: currentActivity != nil,
+            relayAvailable: RelayManager.shared.isAvailable
+        ) else { return }
         stopBackgroundKeepalive()
 
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "SonosLiveActivity") { [weak self] in
@@ -28,6 +31,13 @@ extension SonosManager {
             }
             await MainActor.run { self?.stopBackgroundKeepalive() }
         }
+    }
+
+    nonisolated static func shouldStartBackgroundKeepalive(
+        currentActivityExists: Bool,
+        relayAvailable: Bool
+    ) -> Bool {
+        currentActivityExists && !relayAvailable
     }
 
     @MainActor
@@ -152,6 +162,8 @@ extension SonosManager {
         eventSubscriptionTask = nil
         eventDrivenRefreshTask?.cancel()
         eventDrivenRefreshTask = nil
+        pendingEventRefreshServices.removeAll()
+        pendingRenderingControlIncludesSoundbarEQ = false
 
         let ip = eventSubscriptionIP
         let subscriptions = eventSubscriptions.subscriptions
@@ -176,28 +188,56 @@ extension SonosManager {
         }
 
         SonosLog.debug(.sonosEvents, "notify \(service) seq=\(notification.sequence.map(String.init) ?? "?")")
-        scheduleEventDrivenRefresh(for: service)
+        scheduleEventDrivenRefresh(for: service, notificationBody: notification.body)
     }
 
     @MainActor
-    func scheduleEventDrivenRefresh(for service: SonosEventService) {
+    func scheduleEventDrivenRefresh(
+        for service: SonosEventService,
+        notificationBody: String = ""
+    ) {
+        pendingEventRefreshServices.insert(service)
+        if service == .renderingControl {
+            pendingRenderingControlIncludesSoundbarEQ =
+                pendingRenderingControlIncludesSoundbarEQ
+                || Self.renderingControlEventContainsSoundbarEQ(notificationBody)
+        }
         eventDrivenRefreshTask?.cancel()
         eventDrivenRefreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard let self, !Task.isCancelled, self.transportBackend == .lan else { return }
 
-            switch service {
-            case .zoneGroupTopology:
+            let services = self.pendingEventRefreshServices
+            let includeSoundbarEQ = self.pendingRenderingControlIncludesSoundbarEQ
+            self.pendingEventRefreshServices.removeAll()
+            self.pendingRenderingControlIncludesSoundbarEQ = false
+
+            if services.contains(.zoneGroupTopology) {
                 await self.reloadTopology()
-            case .contentDirectory:
+            }
+            if services.contains(.contentDirectory) {
                 if self.queueLoaded {
                     await self.loadQueue()
                 }
+            }
+            if services.contains(.avTransport) || services.contains(.contentDirectory) {
                 await self.refreshStateLAN()
-            case .avTransport, .renderingControl:
-                await self.refreshStateLAN()
+            } else if services.contains(.renderingControl) {
+                await self.refreshVolumeStateLAN(
+                    includeSoundbarEQ: includeSoundbarEQ
+                )
             }
         }
+    }
+
+    /// RenderingControl carries high-frequency volume events as well as the
+    /// soundbar-only EQ values. Keep ordinary volume events on the lightweight
+    /// path without losing external Night Sound / Speech Enhancement changes.
+    nonisolated static func renderingControlEventContainsSoundbarEQ(_ body: String) -> Bool {
+        let normalized = body.lowercased()
+        return normalized.contains("nightmode")
+            || normalized.contains("dialoglevel")
+            || normalized.contains("speechenhanceenabled")
     }
 
     // MARK: - Position Timer

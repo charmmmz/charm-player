@@ -1,6 +1,6 @@
 import Foundation
 
-enum SonosEventService: Equatable, Sendable {
+enum SonosEventService: Hashable, Sendable {
     case avTransport
     case renderingControl
     case zoneGroupTopology

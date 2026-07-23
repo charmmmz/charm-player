@@ -86,12 +86,17 @@ test('animated artwork search route returns resolver success envelope', async ()
   const app = express();
   const resolver = {
     resolveByURL: async () => disabledResolution(),
-    resolveByMetadata: async (artist: string, album: string, country?: string | null) => ({
+    resolveByMetadata: async (
+      artist: string,
+      album: string,
+      country?: string | null,
+      catalogID?: string | null,
+    ) => ({
       ok: true,
       status: 'hit',
       artist,
       album,
-      appleMusicUrl: `country:${country}`,
+      appleMusicUrl: `country:${country}:catalog:${catalogID}`,
       squareUrl: 'https://cdn.example.com/search-square.m3u8',
       squareWidth: null,
       squareHeight: null,
@@ -108,7 +113,7 @@ test('animated artwork search route returns resolver success envelope', async ()
   const server = await listen(app);
   try {
     const response = await fetch(
-      `${server.baseURL}/api/animated-artwork/search?artist=Daniel%20Caesar&album=Freudian&country=gb`,
+      `${server.baseURL}/api/animated-artwork/search?artist=Daniel%20Caesar&album=Freudian&country=gb&trackUri=${encodeURIComponent('x-sonos-http:song%3a1547315524.mp4?sid=204')}`,
     );
 
     assert.equal(response.status, 200);
@@ -117,7 +122,7 @@ test('animated artwork search route returns resolver success envelope', async ()
       status: 'hit',
       artist: 'Daniel Caesar',
       album: 'Freudian',
-      appleMusicUrl: 'country:GB',
+      appleMusicUrl: 'country:GB:catalog:1547315524',
       squareUrl: 'https://cdn.example.com/search-square.m3u8',
       squareWidth: null,
       squareHeight: null,

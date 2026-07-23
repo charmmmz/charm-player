@@ -210,7 +210,10 @@ extension NowPlayingOverlay {
 
     var animatedArtworkIdentity: AnimatedNowPlayingArtworkState.Identity? {
         guard let info = manager.trackInfo,
-              info.isLiveStream != true,
+              AnimatedArtworkFeature.canBuildNowPlayingIdentity(
+                source: info.source,
+                isLiveStream: info.isLiveStream
+              ),
               let title = meaningfulAppleMusicSearchValue(info.title),
               let artist = meaningfulAppleMusicSearchValue(info.artist),
               let album = meaningfulAppleMusicSearchValue(info.album) else {

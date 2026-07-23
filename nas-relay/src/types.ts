@@ -50,6 +50,9 @@ export interface SonosGroupSnapshot {
   trackTitle: string;
   artist: string;
   album: string;
+  /// Raw Sonos transport URI. The dashboard uses Apple Music catalog IDs
+  /// embedded in this value to resolve exact animated album artwork.
+  trackUri?: string | null;
   albumArtUri?: string | null;
   albumArtFallbackUri?: string | null;
   isPlaying: boolean;
@@ -150,4 +153,53 @@ export interface PushToStartSuppressionEntry {
 export interface LiveActivityStartAttributes {
   speakerName: string;
   groupId?: string | null;
+}
+
+export type NowPlayingTokenKind = 'start' | 'update';
+
+export interface NowPlayingRegisterRequest {
+  kind: NowPlayingTokenKind;
+  groupId: string;
+  token: string;
+  sessionId: string;
+  sessionGeneration?: string;
+  clientId: string;
+  speakerName: string;
+  relayURLString: string;
+  requestStart?: boolean;
+}
+
+export interface NowPlayingTokenEntry extends NowPlayingRegisterRequest {
+  registeredAt: string;
+  lastSentHash?: string;
+}
+
+// Must match RemoteMediaSessionShared/SonosRemoteMediaSessionAttributes.swift.
+export interface NowPlayingAttributes {
+  id: string;
+  sessionGeneration?: string | null;
+  groupID: string;
+  speakerName: string;
+  devices?: Array<{
+    id: string;
+    name: string;
+    host?: string | null;
+    volume?: number | null;
+  }>;
+  trackID: string;
+  title: string;
+  artist: string;
+  album: string;
+  artworkURLString?: string | null;
+  artworkFallbackURLString?: string | null;
+  animatedArtworkURLString?: string | null;
+  isLiveStream: boolean;
+  isPlaying: boolean;
+  elapsedTime: number;
+  duration: number;
+  timestamp: number;
+  volume: number;
+  clientID: string;
+  relayURLString?: string | null;
+  relayCommandToken?: string | null;
 }

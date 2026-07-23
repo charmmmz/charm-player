@@ -67,8 +67,7 @@ struct SonosLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     let accent = themeColor(from: context.state.dominantColorHex)
-                    VStack(spacing: 8) {
-                        LiveProgressView(state: context.state)
+                    VStack {
                         if context.state.isTVSource {
                             TVRemoteControlsView(
                                 state: context.state,
@@ -84,7 +83,7 @@ struct SonosLiveActivity: Widget {
                                             .frame(
                                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                                 height: LiveActivityLayoutMetrics.transportHeight)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(LiveActivityControlButtonStyle())
                                 } else {
                                     Button(intent: PreviousTrackIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: "backward.fill")
@@ -93,7 +92,7 @@ struct SonosLiveActivity: Widget {
                                             .frame(
                                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                                 height: LiveActivityLayoutMetrics.transportHeight)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(LiveActivityControlButtonStyle())
 
                                     Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
@@ -102,7 +101,7 @@ struct SonosLiveActivity: Widget {
                                             .frame(
                                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                                 height: LiveActivityLayoutMetrics.transportHeight)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(LiveActivityControlButtonStyle())
 
                                     Button(intent: NextTrackIntent(groupId: context.attributes.groupId)) {
                                         Image(systemName: "forward.fill")
@@ -111,7 +110,7 @@ struct SonosLiveActivity: Widget {
                                             .frame(
                                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                                 height: LiveActivityLayoutMetrics.transportHeight)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(LiveActivityControlButtonStyle())
                                 }
                             }
                         }
@@ -216,27 +215,24 @@ private struct ClassicLockScreenView: View {
                             Image(systemName: context.state.isPlaying ? "stop.fill" : "play.fill")
                                 .font(.title3)
                                 .foregroundStyle(accent)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(LiveActivityControlButtonStyle())
                     } else {
                         Button(intent: PreviousTrackIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: "backward.fill").font(.callout)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(LiveActivityControlButtonStyle())
 
                         Button(intent: PlayPauseIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: context.state.isPlaying ? "pause.fill" : "play.fill")
                                 .font(.title3)
                                 .foregroundStyle(accent)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(LiveActivityControlButtonStyle())
 
                         Button(intent: NextTrackIntent(groupId: context.attributes.groupId)) {
                             Image(systemName: "forward.fill").font(.callout)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(LiveActivityControlButtonStyle())
                     }
                 }
             }
-
-            // ── Progress bar ──
-            LiveProgressView(state: context.state)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -320,9 +316,6 @@ private struct WidgetCardLockScreenView: View {
                     SourceBadgeView(source: source, tintColor: accent, compact: true)
                 }
             }
-
-            LiveProgressView(state: state)
-
             WidgetTransportControlsView(
                 state: state,
                 accent: accent,
@@ -382,9 +375,6 @@ private struct WidgetTVRemoteLockScreenView: View {
 
                 Spacer(minLength: 0)
             }
-
-            LiveProgressView(state: state)
-
             TVRemoteControlsView(
                 state: state,
                 accent: accent,
@@ -446,6 +436,20 @@ private struct QualityBadgeRow: View {
     }
 }
 
+private struct LiveActivityControlButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .sensoryFeedback(
+                .impact(weight: .medium, intensity: 0.85),
+                trigger: configuration.isPressed
+            ) { wasPressed, isPressed in
+                !wasPressed && isPressed
+            }
+    }
+}
+
 private struct WidgetTransportControlsView: View {
     let state: SonosActivityAttributes.ContentState
     let accent: Color
@@ -457,7 +461,7 @@ private struct WidgetTransportControlsView: View {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
             .accessibilityLabel("Volume Down")
 
             Spacer(minLength: 0)
@@ -471,7 +475,7 @@ private struct WidgetTransportControlsView: View {
                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                 height: LiveActivityLayoutMetrics.transportHeight)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(LiveActivityControlButtonStyle())
                     .foregroundStyle(accent)
                 } else {
                     Button(intent: PreviousTrackIntent(groupId: groupId)) {
@@ -481,7 +485,7 @@ private struct WidgetTransportControlsView: View {
                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                 height: LiveActivityLayoutMetrics.transportHeight)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(LiveActivityControlButtonStyle())
 
                     Button(intent: PlayPauseIntent(groupId: groupId)) {
                         Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
@@ -491,7 +495,7 @@ private struct WidgetTransportControlsView: View {
                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                 height: LiveActivityLayoutMetrics.transportHeight)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(LiveActivityControlButtonStyle())
 
                     Button(intent: NextTrackIntent(groupId: groupId)) {
                         Image(systemName: "forward.fill")
@@ -500,7 +504,7 @@ private struct WidgetTransportControlsView: View {
                                 width: LiveActivityLayoutMetrics.transportButtonSlotWidth,
                                 height: LiveActivityLayoutMetrics.transportHeight)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(LiveActivityControlButtonStyle())
                 }
             }
             .foregroundStyle(.white.opacity(0.88))
@@ -514,7 +518,7 @@ private struct WidgetTransportControlsView: View {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
             .accessibilityLabel("Volume Up")
         }
         .frame(height: 26)
@@ -532,7 +536,7 @@ private struct TVRemoteControlsView: View {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeDownSystemImage)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
             .accessibilityLabel("Volume Down")
 
             Spacer(minLength: 0)
@@ -549,7 +553,7 @@ private struct TVRemoteControlsView: View {
                 LiveActivityVolumeControlContent(
                     systemImage: LiveActivityLayoutMetrics.volumeUpSystemImage)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
             .accessibilityLabel("Volume Up")
         }
         .frame(height: 34)
@@ -622,7 +626,7 @@ private struct TVSoundbarControlsView: View {
                     accent: accent,
                     compact: compact)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
 
             Button(intent: ToggleSpeechEnhancementIntent(groupId: groupId)) {
                 TVSoundbarControlContent(
@@ -633,7 +637,7 @@ private struct TVSoundbarControlsView: View {
                     accent: accent,
                     compact: compact)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiveActivityControlButtonStyle())
         }
     }
 }
@@ -734,50 +738,6 @@ private struct PlaybackWaveformSlot: View {
         .frame(
             width: LiveActivityLayoutMetrics.waveformWidth(barCount: barCount),
             height: height)
-    }
-}
-
-// MARK: - Real-time Progress
-
-private struct LiveProgressView: View {
-    let state: SonosActivityAttributes.ContentState
-
-    var body: some View {
-        let accent = themeColor(from: state.dominantColorHex)
-
-        ZStack {
-            if state.isLiveSource {
-                HStack(spacing: 6) {
-                    Capsule()
-                        .fill(.white.opacity(0.18))
-                        .frame(height: 3)
-                    Text("LIVE")
-                        .font(.system(size: 9, weight: .heavy))
-                        .tracking(1.2)
-                        .foregroundStyle(.white.opacity(0.78))
-                    Capsule()
-                        .fill(.white.opacity(0.18))
-                        .frame(height: 3)
-                }
-            } else if state.isPlaying,
-                      let start = state.startedAt,
-                      let end = state.endsAt,
-                      end > Date() {
-                ProgressView(timerInterval: start...end, countsDown: false) {
-                    EmptyView()
-                } currentValueLabel: {
-                    EmptyView()
-                }
-                .progressViewStyle(.linear)
-                .tint(accent)
-            } else if state.durationSeconds > 0 {
-                ProgressView(value: state.positionSeconds, total: state.durationSeconds)
-                    .progressViewStyle(.linear)
-                    .tint(accent)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: LiveActivityLayoutMetrics.progressHeight(for: state))
     }
 }
 

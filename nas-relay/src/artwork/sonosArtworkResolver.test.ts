@@ -107,6 +107,30 @@ test('Sonos artwork resolver logs an iTunes shadow lookup without replacing geta
   assert.equal(logs[0]?.resolvedAlbumArtUri, 'https://is1-ssl.mzstatic.com/image/thumb/Music125/v4/moon/600x600bb.jpg');
 });
 
+test('Sonos artwork resolver exposes iTunes rate limiting to queue callers', async () => {
+  const resolver = createSonosArtworkResolver({
+    itunes: {
+      lookupArtworkURLString: async () => null,
+      searchArtworkURLString: async () => {
+        throw new Error('iTunes artwork request failed: HTTP 429');
+      },
+    },
+  });
+
+  const resolution = await resolver.resolve({
+    trigger: 'queue',
+    title: 'Trust',
+    artist: 'Brent Faiyaz',
+    album: 'Lost - EP',
+    trackUri: 'x-sonos-http:librarytrack:i.example.mp4?sid=204&flags=8232&sn=2',
+    albumArtUri: 'http://192.168.50.249:1400/getaa?track=1',
+    playbackSourceRaw: 'appleMusic',
+  });
+
+  assert.equal(resolution.source, 'getaa');
+  assert.equal(resolution.fallbackErrorStatus, 'rate-limited');
+});
+
 test('Sonos artwork resolver uses iTunes artwork for Apple Music live radio station getaa artwork', async () => {
   const calls: string[] = [];
   const logs: Array<Record<string, unknown>> = [];

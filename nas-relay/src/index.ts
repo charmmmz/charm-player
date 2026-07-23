@@ -15,6 +15,8 @@ import { createHueAmbienceRouter } from './hue/hueRoutes.js';
 import { createHueMusicAmbienceRenderer } from './hue/hueMusicAmbienceRenderer.js';
 import { AnimatedAppleMusicArtworkResolver } from './artwork/animatedAppleMusicArtwork.js';
 import { createAnimatedArtworkRouter } from './artwork/animatedArtworkRoutes.js';
+import { appleMusicCatalogIDFromSonosValues } from './artwork/sonosArtworkResolver.js';
+import { createArtworkRouter } from './artwork/artworkRoutes.js';
 import { createPlaybackStateRouter } from './sonos/playbackStateRoutes.js';
 import { DeviceLogService } from './diagnostics/deviceLogs.js';
 import { RelayLogBuffer } from './diagnostics/relayLogs.js';
@@ -35,17 +37,25 @@ import {
 } from './live-activity/liveActivityPreferences.js';
 import {
   LiveActivityPushInFlightRegistry,
-  liveActivityPushResultLogLevel,
-  shouldForceLiveActivityCalibration,
 } from './live-activity/liveActivityPushPolicy.js';
 import { snapshotJson } from './sonos/relaySnapshotJson.js';
 import { publishRelayBonjour, type RelayBonjourAdvertisement } from './transport/bonjour.js';
 import { StartTokenStore } from './live-activity/startTokenStore.js';
 import { LiveActivityDismissalStore } from './live-activity/liveActivityDismissalStore.js';
+import { NowPlayingTokenStore } from './now-playing/nowPlayingTokenStore.js';
+import {
+  buildNowPlayingAttributes,
+  hashNowPlayingAttributes,
+  isNowPlayingActive,
+  NowPlayingSessionGenerationRegistry,
+  shouldSendNowPlayingStart,
+} from './now-playing/nowPlayingState.js';
 import { createDashboardRouter, dashboardOptionsFromEnv } from './dashboard/dashboardRouter.js';
 import type {
   LiveActivityContentState,
   LiveActivityDismissedRequest,
+  NowPlayingRegisterRequest,
+  NowPlayingTokenEntry,
   PushToStartRegisterRequest,
   PushToStartTokenEntry,
   RegisterRequest,
@@ -70,6 +80,11 @@ const SEED_IP = process.env.SONOS_SEED_IP?.trim() || undefined;
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data';
 const DEFAULT_APNS_BUNDLE_ID = 'com.charm.SonosWidget';
 const DEFAULT_APNS_TEAM_ID = '3MSS7DJGVR';
+// iOS 27 beta currently issues RemoteMediaSession tokens for production APNs
+// even to a development-signed build. Keep the project's existing production
+// topic key as the debug-relay fallback while allowing every field to be
+// overridden for other deployments.
+const DEFAULT_NOW_PLAYING_APNS_KEY_ID = '4K6LLXCPPN';
 const DEFAULT_LIVE_ACTIVITY_DISMISS_SUPPRESS_SECONDS = 30 * 60;
 const DASHBOARD_PUBLIC_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -85,6 +100,8 @@ async function main(): Promise<void> {
   await startTokens.load();
   const liveActivityDismissals = new LiveActivityDismissalStore(DATA_DIR, log);
   await liveActivityDismissals.load();
+  const nowPlayingTokens = new NowPlayingTokenStore(DATA_DIR, log);
+  await nowPlayingTokens.load();
   const hueConfigStore = new HueAmbienceConfigStore(DATA_DIR);
   const hueAmbience = new HueAmbienceService(
     hueConfigStore,
@@ -101,13 +118,30 @@ async function main(): Promise<void> {
     enabled: (process.env.ANIMATED_ARTWORK_ENABLED ?? 'true') !== 'false',
   });
 
-  const apns = await ApnsClient.create(
+  const apnsConfig = {
+    bundleId: process.env.APNS_BUNDLE_ID ?? DEFAULT_APNS_BUNDLE_ID,
+    keyPath: process.env.APNS_KEY_PATH ?? path.join(DATA_DIR, 'apns.p8'),
+    keyId: process.env.APNS_KEY_ID ?? '',
+    teamId: process.env.APNS_TEAM_ID ?? DEFAULT_APNS_TEAM_ID,
+    production: (process.env.APNS_PRODUCTION ?? 'false') === 'true',
+  };
+  const apns = await ApnsClient.create(apnsConfig, log);
+
+  const nowPlayingProduction = (process.env.NOW_PLAYING_APNS_PRODUCTION ?? 'true') === 'true';
+  const nowPlayingAnimatedArtworkEnabled =
+    (process.env.NOW_PLAYING_ANIMATED_ARTWORK_ENABLED ?? 'false') === 'true';
+  const nowPlayingKeyId = process.env.NOW_PLAYING_APNS_KEY_ID?.trim()
+    || (apnsConfig.production ? apnsConfig.keyId : DEFAULT_NOW_PLAYING_APNS_KEY_ID);
+  const nowPlayingApns = await ApnsClient.create(
     {
-      bundleId: process.env.APNS_BUNDLE_ID ?? DEFAULT_APNS_BUNDLE_ID,
-      keyPath: process.env.APNS_KEY_PATH ?? path.join(DATA_DIR, 'apns.p8'),
-      keyId: process.env.APNS_KEY_ID ?? '',
-      teamId: process.env.APNS_TEAM_ID ?? DEFAULT_APNS_TEAM_ID,
-      production: (process.env.APNS_PRODUCTION ?? 'false') === 'true',
+      bundleId: process.env.NOW_PLAYING_APNS_BUNDLE_ID ?? apnsConfig.bundleId,
+      keyPath: process.env.NOW_PLAYING_APNS_KEY_PATH
+        ?? (apnsConfig.production
+          ? apnsConfig.keyPath
+          : path.join(DATA_DIR, `AuthKey_${nowPlayingKeyId}.p8`)),
+      keyId: nowPlayingKeyId,
+      teamId: process.env.NOW_PLAYING_APNS_TEAM_ID ?? apnsConfig.teamId,
+      production: nowPlayingProduction,
     },
     log,
   );
@@ -119,6 +153,7 @@ async function main(): Promise<void> {
   const liveActivityPreferences = new LiveActivityPreferenceStore();
   const liveActivityPushesInFlight = new LiveActivityPushInFlightRegistry();
   const liveActivityArtworkLog = log.child({ module: 'live-activity-artwork' });
+  const nowPlayingSessionGenerations = new NowPlayingSessionGenerationRegistry();
 
   // ---- snapshot → APNs pipeline ----------------------------------------
   type LiveActivityPushTrigger =
@@ -172,8 +207,9 @@ async function main(): Promise<void> {
       'live_activity',
     );
 
-    // Skip no-op pushes for normal Sonos events. Periodic refreshes are a
-    // deliberate low-frequency calibration path for position/timerInterval.
+    // Skip no-op pushes for every Sonos refresh, including the one-minute
+    // safety poll. Progress-only changes are intentionally absent from the
+    // content hash, so APNs is used only for user-visible state changes.
     const targets = liveActivityPushesInFlight.acquire(matching, hash, { force });
     if (targets.length === 0) {
       log.debug(
@@ -205,11 +241,7 @@ async function main(): Promise<void> {
       }
       for (const dead of result.unregistered) tokens.unregister(dead);
 
-      const logLevel = liveActivityPushResultLogLevel(trigger, {
-        failed: result.failed,
-        unregisteredCount: result.unregistered.length,
-      });
-      log[logLevel](
+      log.info(
         {
           source: 'relay',
           action: 'apns-update',
@@ -295,6 +327,171 @@ async function main(): Promise<void> {
     }
   }
 
+  async function pushNowPlayingSnapshot(
+    snap: SonosGroupSnapshot,
+    trigger: string,
+    options: { forceUpdateToken?: string; forceStartToken?: string } = {},
+  ): Promise<void> {
+    const allUpdateEntries = nowPlayingTokens.forGroup(snap.groupId, 'update');
+    if (!isNowPlayingActive(snap)) {
+      for (const entry of allUpdateEntries) {
+        const result = await nowPlayingApns.pushNowPlayingEnd([entry.token], entry.sessionId);
+        for (const dead of result.unregistered) nowPlayingTokens.unregister('update', dead);
+        if (result.sent > 0) nowPlayingTokens.unregister('update', entry.token);
+        log.info({
+          source: 'relay',
+          action: 'apns-end',
+          trigger,
+          groupId: snap.groupId,
+          sessionId: entry.sessionId,
+          sent: result.sent,
+          failed: result.failed,
+        }, 'now_playing');
+      }
+      // A push-to-start token creates a session once. Arm it again only after
+      // playback has actually ended so later playback can create a new one.
+      nowPlayingTokens.resetStartSentForGroup(snap.groupId);
+      nowPlayingSessionGenerations.end(snap.groupId);
+      return;
+    }
+
+    const startEntries = nowPlayingTokens.forGroup(snap.groupId, 'start');
+    const sessionGeneration = nowPlayingSessionGenerations.active(
+      snap.groupId,
+      [...allUpdateEntries, ...startEntries],
+    );
+    const updateEntries = allUpdateEntries.filter(
+      entry => entry.sessionGeneration === sessionGeneration,
+    );
+    const targets: NowPlayingTokenEntry[] = options.forceStartToken
+      ? startEntries.filter(entry => entry.token === options.forceStartToken)
+      : updateEntries.length > 0
+        ? updateEntries
+        : startEntries;
+    if (targets.length === 0) return;
+
+    const animatedKey = nowPlayingAnimatedArtworkEnabled
+      ? nowPlayingAnimatedArtworkKey(snap)
+      : null;
+    const animatedArtworkURLString = animatedKey
+      && nowPlayingAnimatedArtworkURLs.has(animatedKey)
+      ? nowPlayingAnimatedArtworkURLs.get(animatedKey) ?? null
+      : null;
+    for (const entry of targets) {
+      const attributes = buildNowPlayingAttributes(
+        snap,
+        entry,
+        animatedArtworkURLString,
+        sessionGeneration,
+      );
+      const hash = hashNowPlayingAttributes(attributes);
+      const force = (entry.kind === 'update' && options.forceUpdateToken === entry.token)
+        || (entry.kind === 'start' && options.forceStartToken === entry.token);
+      // Once APNs accepted a start, wait for the extension's per-session
+      // update token. Reusing the start token for metadata changes attempts to
+      // create the same session again and can discard its representation.
+      if (!force && entry.kind === 'start' && entry.lastSentHash) {
+        log.debug({
+          source: 'relay',
+          action: 'skip',
+          trigger,
+          reason: 'start-already-sent-awaiting-update-token',
+          groupId: snap.groupId,
+          sessionId: entry.sessionId,
+        }, 'now_playing');
+        continue;
+      }
+      if (!force && entry.lastSentHash === hash) {
+        log.debug({
+          source: 'relay',
+          action: 'skip',
+          trigger,
+          reason: 'last-sent-hash-match',
+          kind: entry.kind,
+          groupId: snap.groupId,
+          sessionId: entry.sessionId,
+        }, 'now_playing');
+        continue;
+      }
+
+      const result = entry.kind === 'update'
+        ? await nowPlayingApns.pushNowPlayingUpdate([entry.token], attributes)
+        : await nowPlayingApns.pushNowPlayingStart([entry.token], attributes);
+      for (const dead of result.unregistered) nowPlayingTokens.unregister(entry.kind, dead);
+      if (result.sent > 0) {
+        nowPlayingTokens.recordSent(entry, hash, sessionGeneration);
+      }
+      log.info({
+        source: 'relay',
+        action: entry.kind === 'update' ? 'apns-update' : 'apns-start',
+        trigger,
+        groupId: snap.groupId,
+        sessionId: entry.sessionId,
+        sessionGeneration,
+        sent: result.sent,
+        failed: result.failed,
+        title: attributes.title,
+        artworkURLString: attributes.artworkURLString ?? null,
+        artworkFallbackURLString: attributes.artworkFallbackURLString ?? null,
+        animatedArtworkURLString: attributes.animatedArtworkURLString ?? null,
+      }, 'now_playing');
+    }
+    if (nowPlayingAnimatedArtworkEnabled) {
+      scheduleNowPlayingAnimatedArtworkResolution(snap);
+    }
+  }
+
+  const nowPlayingAnimatedArtworkURLs = new Map<string, string | null>();
+  const nowPlayingAnimatedArtworkInFlight = new Set<string>();
+
+  function scheduleNowPlayingAnimatedArtworkResolution(snap: SonosGroupSnapshot): void {
+    const key = nowPlayingAnimatedArtworkKey(snap);
+    if (!key
+      || nowPlayingAnimatedArtworkURLs.has(key)
+      || nowPlayingAnimatedArtworkInFlight.has(key)) {
+      return;
+    }
+
+    nowPlayingAnimatedArtworkInFlight.add(key);
+    void (async () => {
+      const resolution = await animatedArtwork.resolveByMetadata(
+        snap.artist,
+        snap.album,
+        null,
+        appleMusicCatalogIDFromSonosValues(snap.trackUri, snap.albumArtUri),
+      );
+      if (resolution.status === 'hit' || resolution.status === 'miss'
+        || resolution.status === 'negative-cache' || resolution.status === 'disabled') {
+        nowPlayingAnimatedArtworkURLs.set(
+          key,
+          resolution.status === 'hit' ? resolution.squareUrl : null,
+        );
+        if (nowPlayingAnimatedArtworkURLs.size > 128) {
+          const oldest = nowPlayingAnimatedArtworkURLs.keys().next().value;
+          if (oldest) nowPlayingAnimatedArtworkURLs.delete(oldest);
+        }
+      }
+
+      const latest = sonos.current(snap.groupId);
+      if (latest
+        && nowPlayingAnimatedArtworkKey(latest) === key
+        && resolution.status === 'hit'
+        && resolution.squareUrl) {
+        await pushNowPlayingSnapshot(latest, 'animated-artwork-ready');
+      }
+    })().catch(err => {
+      log.warn({ err, groupId: snap.groupId }, 'now playing animated artwork resolution failed');
+    }).finally(() => {
+      nowPlayingAnimatedArtworkInFlight.delete(key);
+    });
+  }
+
+  function nowPlayingAnimatedArtworkKey(snap: SonosGroupSnapshot): string | null {
+    const artist = snap.artist.trim().toLocaleLowerCase();
+    const album = snap.album.trim().toLocaleLowerCase();
+    return artist && album ? `${artist}|${album}` : null;
+  }
+
   sonos.on('change', async (
     snap: SonosGroupSnapshot,
     context?: SonosSnapshotChangeContext,
@@ -302,10 +499,6 @@ async function main(): Promise<void> {
     hueAmbience.receiveSnapshot(snap);
 
     const trigger = context?.trigger ?? 'sonos-change';
-    const force = trigger === 'periodic-refresh';
-    if (force && !shouldForceLiveActivityCalibration(snap)) {
-      return;
-    }
     const enrichedSnap = liveActivityPreferences.apply(snap);
     await tryStartLiveActivitySnapshot(
       enrichedSnap,
@@ -314,9 +507,9 @@ async function main(): Promise<void> {
       tokens.forGroup(snap.groupId),
     );
     await pushLiveActivitySnapshot(snap, trigger, {
-      force,
       logNoTokens: trigger !== 'periodic-refresh',
     });
+    await pushNowPlayingSnapshot(snap, trigger);
   });
 
   // ---- HTTP -------------------------------------------------------------
@@ -348,6 +541,7 @@ async function main(): Promise<void> {
   app.use('/api', createPlaybackStateRouter(sonos));
   app.use('/api', createHueAmbienceRouter(hueAmbience, log));
   app.use('/api', createDeviceLogRouter(deviceLogs, log.child({ module: 'device-logs' })));
+  app.use('/api', createArtworkRouter(log.child({ module: 'artwork' })));
   app.use('/api', createAnimatedArtworkRouter(
     log.child({ module: 'animated-artwork' }),
     animatedArtwork,
@@ -400,6 +594,11 @@ async function main(): Promise<void> {
         startTokenCount: startTokens.count(),
         updateTokenCount: tokens.count(),
         dismissedSuppressionCount: liveActivityDismissals.count(),
+      },
+      nowPlaying: {
+        apns: nowPlayingApns.status(),
+        startTokenCount: nowPlayingTokens.count('start'),
+        updateTokenCount: nowPlayingTokens.count('update'),
       },
       groups: sonos.allSnapshots().map(s => ({
         groupId: s.groupId,
@@ -512,6 +711,136 @@ async function main(): Promise<void> {
       );
     }
 
+    res.json({ ok: true });
+  });
+
+  app.post('/api/now-playing/register', async (req, res) => {
+    const body = req.body as Partial<NowPlayingRegisterRequest>;
+    if ((body.kind !== 'start' && body.kind !== 'update')
+      || !body.groupId
+      || !body.token
+      || !body.sessionId
+      || !body.clientId
+      || !body.speakerName
+      || !body.relayURLString) {
+      res.status(400).json({
+        ok: false,
+        error: 'kind, groupId, token, sessionId, clientId, speakerName, and relayURLString are required',
+      });
+      return;
+    }
+    try {
+      const relayURL = new URL(body.relayURLString);
+      if (relayURL.protocol !== 'http:' && relayURL.protocol !== 'https:') throw new Error('protocol');
+    } catch {
+      res.status(400).json({ ok: false, error: 'relayURLString must be an http(s) URL' });
+      return;
+    }
+
+    const persistedEntries = [
+      ...nowPlayingTokens.forGroup(body.groupId, 'update'),
+      ...nowPlayingTokens.forGroup(body.groupId, 'start'),
+    ];
+    if (body.kind === 'update') {
+      if (!body.sessionGeneration) {
+        res.status(409).json({ ok: false, error: 'missing_session_generation' });
+        return;
+      }
+      const expectedGeneration = nowPlayingSessionGenerations.current(
+        body.groupId,
+        persistedEntries.filter(entry => entry.sessionId === body.sessionId),
+      );
+      if (expectedGeneration && expectedGeneration !== body.sessionGeneration) {
+        res.status(409).json({ ok: false, error: 'stale_session_generation' });
+        return;
+      }
+      if (!expectedGeneration) {
+        nowPlayingTokens.removeUpdatesForGroup(body.groupId);
+      }
+      nowPlayingSessionGenerations.adopt(body.groupId, body.sessionGeneration);
+    } else if (body.requestStart === true) {
+      // The relay owns the generation of an APNs-created session. Persist it
+      // on the start-token entry before sending so an update-token callback
+      // racing the APNs response is validated against the same generation.
+      body.sessionGeneration = nowPlayingSessionGenerations.rotate(body.groupId);
+      nowPlayingTokens.removeUpdatesForGroup(body.groupId);
+    } else if (body.sessionGeneration) {
+      // A foreground app can bootstrap the session locally, then register its
+      // push-to-start token only as a future fallback. If the system retained
+      // the old session shell across a reboot, the app deliberately recreates
+      // it with a new generation. Retire that client's pre-reboot update token
+      // before adopting the replacement generation.
+      const previousGeneration = nowPlayingSessionGenerations.current(
+        body.groupId,
+        persistedEntries.filter(entry => entry.sessionId === body.sessionId),
+      );
+      if (previousGeneration && previousGeneration !== body.sessionGeneration) {
+        const removed = nowPlayingTokens.removeUpdatesForClientSession(
+          body.groupId,
+          body.clientId,
+          body.sessionId,
+        );
+        log.info({
+          source: 'relay',
+          action: 'session-generation-replaced',
+          groupId: body.groupId,
+          sessionId: body.sessionId,
+          previousGeneration,
+          sessionGeneration: body.sessionGeneration,
+          removedUpdateTokens: removed,
+        }, 'now_playing');
+      }
+      nowPlayingSessionGenerations.adopt(body.groupId, body.sessionGeneration);
+    }
+
+    const registration = body as NowPlayingRegisterRequest;
+    const alreadyRegistered = nowPlayingTokens.hasRegistration(registration);
+    const entry = nowPlayingTokens.register(registration);
+    if (entry.kind === 'start'
+      && body.requestStart !== true
+      && body.sessionGeneration) {
+      nowPlayingTokens.recordSent(entry, 'local-session-active', body.sessionGeneration);
+    }
+    const registrationLog = {
+      source: 'relay',
+      action: 'register',
+      kind: entry.kind,
+      groupId: entry.groupId,
+      sessionId: entry.sessionId,
+      sessionGeneration: entry.sessionGeneration ?? null,
+      clientId: entry.clientId,
+      token: shortToken(entry.token),
+      alreadyRegistered,
+      requestStart: body.requestStart === true,
+    };
+    if (alreadyRegistered) {
+      log.debug(registrationLog, 'now_playing');
+    } else {
+      log.info(registrationLog, 'now_playing');
+    }
+
+    // With a reachable relay, the app delegates session ownership to APNs.
+    // Start immediately from the current Sonos snapshot so the first session
+    // representation already contains authoritative public artwork.
+    if (shouldSendNowPlayingStart(
+      entry.kind,
+      alreadyRegistered,
+      body.requestStart === true,
+    )) {
+      const snap = sonos.current(entry.groupId);
+      if (snap) {
+        await pushNowPlayingSnapshot(snap, 'register-start-token', {
+          forceStartToken: entry.token,
+        });
+      }
+    } else if (entry.kind === 'update' && !alreadyRegistered) {
+      const snap = sonos.current(entry.groupId);
+      if (snap) {
+        await pushNowPlayingSnapshot(snap, 'register-update-token', {
+          forceUpdateToken: entry.token,
+        });
+      }
+    }
     res.json({ ok: true });
   });
 
@@ -777,8 +1106,9 @@ async function main(): Promise<void> {
       res.status(400).json({ ok: false, error: 'groupId, token, and command are required' });
       return;
     }
-    if (!tokens.hasTokenForGroup(groupId, token)) {
-      res.status(401).json({ ok: false, error: 'unregistered_live_activity_token' });
+    if (!tokens.hasTokenForGroup(groupId, token)
+      && !nowPlayingTokens.hasTokenForGroup(groupId, token)) {
+      res.status(401).json({ ok: false, error: 'unregistered_media_control_token' });
       return;
     }
 
@@ -803,6 +1133,20 @@ async function main(): Promise<void> {
           return;
         }
         await sonos.setGroupVolume(groupId, volume);
+        break;
+      }
+      case 'setMemberVolume': {
+        const volume = req.body?.volume;
+        const memberId = typeof req.body?.memberId === 'string' ? req.body.memberId : '';
+        if (!memberId) {
+          res.status(400).json({ ok: false, error: 'memberId is required' });
+          return;
+        }
+        if (typeof volume !== 'number' || Number.isNaN(volume)) {
+          res.status(400).json({ ok: false, error: 'volume must be a number' });
+          return;
+        }
+        await sonos.setMemberVolume(groupId, memberId, volume);
         break;
       }
       case 'setSoundbarNightMode': {

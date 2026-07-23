@@ -1145,7 +1145,6 @@ enum LiveActivityPresentationStyle: String, Codable, Sendable, Equatable {
 }
 
 enum LiveActivityLayoutMetrics {
-    static let progressHeight: CGFloat = 12
     static let waveformBarWidth: CGFloat = 2
     static let waveformBarSpacing: CGFloat = 1.5
     static let transportHeight: CGFloat = 26
@@ -1154,10 +1153,6 @@ enum LiveActivityLayoutMetrics {
     static let volumeControlSize: CGFloat = 26
     static let volumeDownSystemImage = "minus"
     static let volumeUpSystemImage = "plus"
-
-    static func progressHeight(for _: SonosActivityAttributes.ContentState) -> CGFloat {
-        progressHeight
-    }
 
     static func waveformWidth(barCount: Int) -> CGFloat {
         guard barCount > 0 else { return 0 }

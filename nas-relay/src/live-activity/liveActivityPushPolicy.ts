@@ -1,6 +1,4 @@
-import type { SonosGroupSnapshot, TokenEntry } from '../types.js';
-
-export type LiveActivityLogLevel = 'debug' | 'info';
+import type { TokenEntry } from '../types.js';
 
 export interface LiveActivityPushDecisionOptions {
   force?: boolean;
@@ -39,18 +37,4 @@ export class LiveActivityPushInFlightRegistry {
       }
     }
   }
-}
-
-export function shouldForceLiveActivityCalibration(snap: SonosGroupSnapshot): boolean {
-  return snap.isPlaying && snap.durationSeconds > 0;
-}
-
-export function liveActivityPushResultLogLevel(
-  trigger: string,
-  result: { failed: number; unregisteredCount: number },
-): LiveActivityLogLevel {
-  if (trigger === 'periodic-refresh' && result.failed === 0 && result.unregisteredCount === 0) {
-    return 'debug';
-  }
-  return 'info';
 }

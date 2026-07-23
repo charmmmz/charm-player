@@ -3,7 +3,6 @@ import { test } from 'node:test';
 
 import {
   LiveActivityPushInFlightRegistry,
-  liveActivityPushResultLogLevel,
   shouldPushLiveActivityUpdate,
 } from './liveActivityPushPolicy.js';
 import type { TokenEntry } from '../types.js';
@@ -44,21 +43,6 @@ test('Live Activity in-flight registry blocks forced duplicate hash pushes', () 
 
   assert.deepEqual(registry.acquire([token], 'same-hash', { force: true }), [token]);
   assert.deepEqual(registry.acquire([token], 'same-hash', { force: true }), []);
-});
-
-test('Live Activity successful periodic push results are logged at debug level', () => {
-  assert.equal(
-    liveActivityPushResultLogLevel('periodic-refresh', { failed: 0, unregisteredCount: 0 }),
-    'debug',
-  );
-  assert.equal(
-    liveActivityPushResultLogLevel('sonos-change', { failed: 0, unregisteredCount: 0 }),
-    'info',
-  );
-  assert.equal(
-    liveActivityPushResultLogLevel('periodic-refresh', { failed: 1, unregisteredCount: 0 }),
-    'info',
-  );
 });
 
 function tokenEntry(overrides: Partial<TokenEntry> = {}): TokenEntry {

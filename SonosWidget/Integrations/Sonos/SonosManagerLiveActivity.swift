@@ -174,6 +174,8 @@ extension SonosManager {
     }
 
     func manageLiveActivity() {
+        manageRemoteMediaSession()
+
         guard let speaker = selectedSpeaker else {
             logLiveActivity(action: "skip", reason: "no-selected-speaker")
             return

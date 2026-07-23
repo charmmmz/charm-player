@@ -5,6 +5,7 @@ import {
   type AnimatedAppleMusicArtworkResolver,
   type AnimatedArtworkResolution,
 } from './animatedAppleMusicArtwork.js';
+import { appleMusicCatalogIDFromSonosValues } from './sonosArtworkResolver.js';
 
 type Resolver = Pick<AnimatedAppleMusicArtworkResolver, 'resolveByURL' | 'resolveByMetadata'>;
 
@@ -35,7 +36,16 @@ export function createAnimatedArtworkRouter(log: Logger, resolver: Resolver): Ro
     }
 
     try {
-      res.json(await resolver.resolveByMetadata(artist, album, countryQuery(req.query.country)));
+      const catalogID = appleMusicCatalogIDFromSonosValues(
+        stringQuery(req.query.trackUri),
+        stringQuery(req.query.albumArtUri),
+      );
+      res.json(await resolver.resolveByMetadata(
+        artist,
+        album,
+        countryQuery(req.query.country),
+        catalogID,
+      ));
     } catch (err) {
       log.warn({ err, artist, album }, 'animated artwork metadata resolution failed');
       res.json(errorResolution());

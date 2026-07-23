@@ -159,6 +159,54 @@ final class SpeakerOrderingTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.id), ["playroom"])
     }
 
+    func testTopologyRefreshCandidatesPrioritizeSelectedSpeakerAndDeduplicateRoster() {
+        let selected = SonosPlayer(
+            id: "playroom",
+            name: "Playroom",
+            ipAddress: "192.168.50.249",
+            isCoordinator: true,
+            groupId: "playroom-group",
+            coordinatorIP: "192.168.50.250"
+        )
+        let staleHomeTheater = SonosPlayer(
+            id: "home-theater",
+            name: "Home Theater",
+            ipAddress: "192.168.50.238",
+            isCoordinator: true,
+            groupId: "home-theater-group"
+        )
+        let move = SonosPlayer(
+            id: "move",
+            name: "Move",
+            ipAddress: "192.168.50.197",
+            isCoordinator: true,
+            groupId: "move-group"
+        )
+
+        let candidates = SonosManager.topologyRefreshCandidateIPs(
+            selectedSpeaker: selected,
+            allSpeakers: [staleHomeTheater, selected, move, staleHomeTheater]
+        )
+
+        XCTAssertEqual(
+            candidates,
+            ["192.168.50.250", "192.168.50.249", "192.168.50.238", "192.168.50.197"]
+        )
+    }
+
+    func testSkeletonProjectionEndsInitialHomeSpeakerLoader() {
+        let manager = SonosManager()
+        manager.allSpeakers = [
+            makePlayer(id: "playroom", name: "Playroom", groupId: "playroom-group")
+        ]
+
+        manager.projectSkeletonGroupStatusesFromSavedSpeakers()
+
+        XCTAssertEqual(manager.groupStatuses.map(\.id), ["playroom-group"])
+        XCTAssertTrue(manager.hasLoadedHomeSpeakerCards)
+        XCTAssertFalse(manager.showsHomeSpeakerCardsBlockingLoader)
+    }
+
     func testHomeSpeakerCardsBlockingLoaderOnlyShowsBeforeFirstLoad() {
         XCTAssertTrue(
             HomeSpeakerCardsRefreshPolicy.showsBlockingLoader(

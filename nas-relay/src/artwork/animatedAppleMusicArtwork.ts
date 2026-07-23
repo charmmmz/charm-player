@@ -40,6 +40,11 @@ export interface AnimatedAppleMusicArtworkResolverOptions {
     country: string,
     signal: AbortSignal,
   ) => Promise<string | null>;
+  lookupAppleMusicAlbumURL?: (
+    catalogID: string,
+    country: string,
+    signal: AbortSignal,
+  ) => Promise<string | null>;
   now?: () => number;
   timeoutMs?: number;
   backoffMs?: number;
@@ -93,6 +98,11 @@ export class AnimatedAppleMusicArtworkResolver {
     country: string,
     signal: AbortSignal,
   ) => Promise<string | null>;
+  private readonly lookupAppleMusicAlbumURL: (
+    catalogID: string,
+    country: string,
+    signal: AbortSignal,
+  ) => Promise<string | null>;
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private readonly backoffMs: number;
@@ -107,6 +117,10 @@ export class AnimatedAppleMusicArtworkResolver {
     this.searchAppleMusicAlbumURL = options.searchAppleMusicAlbumURL
       ?? ((artist, album, country, signal) => (
         defaultSearchAppleMusicAlbumURL(artist, album, country, signal, this.fetchText)
+      ));
+    this.lookupAppleMusicAlbumURL = options.lookupAppleMusicAlbumURL
+      ?? ((catalogID, country, signal) => (
+        defaultLookupAppleMusicAlbumURL(catalogID, country, signal, this.fetchText)
       ));
     this.now = options.now ?? (() => Date.now());
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -149,29 +163,48 @@ export class AnimatedAppleMusicArtworkResolver {
     artist: string,
     album: string,
     country: string | null = null,
+    catalogID: string | null = null,
   ): Promise<AnimatedArtworkResolution> {
     if (!this.enabled) return emptyResolution('disabled');
 
     const normalizedArtist = normalizeMetadata(artist);
     const normalizedAlbum = normalizeMetadata(album);
     const normalizedCountry = normalizeCountry(country);
+    const normalizedCatalogID = normalizeCatalogID(catalogID);
     if (!normalizedArtist || !normalizedAlbum) return emptyResolution('miss');
 
     const key = `metadata:${normalizedArtist}:${normalizedAlbum}:${normalizedCountry}`;
+    const knownAlbum = await this.cachedAlbumHit(normalizedArtist, normalizedAlbum);
+    if (knownAlbum) return knownAlbum;
+
     const cached = await this.cachedResolution(key);
-    if (cached) return cached;
+    // A metadata-search miss is not authoritative when Sonos exposes an exact
+    // Apple Music catalog ID. Let the ID lookup repair the stale negative key.
+    if (cached && (cached.status !== 'negative-cache' || !normalizedCatalogID)) return cached;
 
     if (this.isBackedOff()) return emptyResolution('rate-limited');
 
     try {
-      const albumURL = await this.withTimeout(signal => (
-        this.searchAppleMusicAlbumURL(
+      const albumURL = await this.withTimeout(async signal => {
+        let exactURL: string | null = null;
+        if (normalizedCatalogID) {
+          try {
+            exactURL = await this.lookupAppleMusicAlbumURL(
+              normalizedCatalogID,
+              normalizedCountry,
+              signal,
+            );
+          } catch (err) {
+            if (isRateLimitError(err)) throw err;
+          }
+        }
+        return exactURL ?? await this.searchAppleMusicAlbumURL(
           artist.trim(),
           album.trim(),
           normalizedCountry,
           signal,
-        )
-      ));
+        );
+      });
       if (!albumURL) {
         const miss = emptyResolution('miss');
         await this.writeCacheEntry(key, miss, METADATA_MISS_TTL_MS);
@@ -207,6 +240,28 @@ export class AnimatedAppleMusicArtworkResolver {
       return withDimensionDefaults({ ...entry.resolution, status: 'negative-cache', source: 'cache' });
     }
     return withDimensionDefaults({ ...entry.resolution, source: 'cache' });
+  }
+
+  private async cachedAlbumHit(
+    normalizedArtist: string,
+    normalizedAlbum: string,
+  ): Promise<AnimatedArtworkResolution | null> {
+    const cache = await this.loadCache();
+    let removedExpiredEntry = false;
+    for (const [key, entry] of Object.entries(cache)) {
+      if (entry.expiresAt <= this.now()) {
+        delete cache[key];
+        removedExpiredEntry = true;
+        continue;
+      }
+      if (entry.status !== 'hit' || entry.resolution.status !== 'hit') continue;
+      if (normalizeMetadata(entry.resolution.artist ?? '') !== normalizedArtist) continue;
+      if (normalizeMetadata(entry.resolution.album ?? '') !== normalizedAlbum) continue;
+      if (removedExpiredEntry) await this.saveCache();
+      return withDimensionDefaults({ ...entry.resolution, source: 'cache' });
+    }
+    if (removedExpiredEntry) await this.saveCache();
+    return null;
   }
 
   private async resolutionWithArtworkDimensions(
@@ -537,6 +592,32 @@ async function defaultSearchAppleMusicAlbumURL(
   return null;
 }
 
+async function defaultLookupAppleMusicAlbumURL(
+  catalogID: string,
+  country: string,
+  signal: AbortSignal,
+  fetchText: (url: URL, signal: AbortSignal) => Promise<string>,
+): Promise<string | null> {
+  const url = new URL('https://itunes.apple.com/lookup');
+  url.searchParams.set('id', catalogID);
+  url.searchParams.set('entity', 'song');
+  url.searchParams.set('country', country);
+
+  const body = JSON.parse(await fetchText(url, signal)) as { results?: unknown[] };
+  for (const result of body.results ?? []) {
+    if (!result || typeof result !== 'object') continue;
+    const row = result as Record<string, unknown>;
+    const collectionViewUrl = stringValue(row.collectionViewUrl);
+    if (collectionViewUrl && parseAppleMusicAlbumURL(collectionViewUrl)) return collectionViewUrl;
+
+    const collectionID = numberStringValue(row.collectionId);
+    if (collectionID) {
+      return `https://music.apple.com/${country.toLowerCase()}/album/-/${collectionID}`;
+    }
+  }
+  return null;
+}
+
 function emptyResolution(status: AnimatedArtworkStatus): AnimatedArtworkResolution {
   return {
     ok: true,
@@ -563,6 +644,17 @@ function normalizeMetadata(value: string): string {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
+}
+
+function normalizeCatalogID(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? '';
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+function numberStringValue(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return value.trim();
+  return null;
 }
 
 function normalizeCountry(value: string | null | undefined): string {

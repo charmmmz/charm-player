@@ -186,13 +186,15 @@ final class SonosManager {
 
     let discovery = SonosDiscovery()
 
-    /// Main refresh loop. When LAN events are subscribed this becomes a
-    /// low-frequency watchdog; otherwise it keeps the historical polling
-    /// cadence so Cloud mode and pre-subscription LAN still stay fresh.
+    /// Main refresh loop. LAN events are primary; the polling path is a
+    /// bounded watchdog, including while subscriptions are being established.
+    /// Cloud mode retains its separate faster cadence.
     var refreshTask: Task<Void, Never>?
     var positionTask: Task<Void, Never>?
     var eventSubscriptionTask: Task<Void, Never>?
     var eventDrivenRefreshTask: Task<Void, Never>?
+    var pendingEventRefreshServices: Set<SonosEventService> = []
+    var pendingRenderingControlIncludesSoundbarEQ = false
     @ObservationIgnored let lanRefreshGate = RefreshRequestGate()
     @ObservationIgnored let groupRefreshGate = RefreshRequestGate()
     var eventListener: SonosEventListener?
@@ -220,7 +222,12 @@ final class SonosManager {
     ]
     static let albumArtColorTransitionDuration: TimeInterval = 0.45
     static let fastRefreshIntervalSeconds = 3
-    static let lanEventWatchdogRefreshIntervalSeconds = 30
+    static let lanUnsubscribedRefreshIntervalSeconds = 15
+    static let lanUnsubscribedGroupRefreshEveryCycles = 4
+    static let lanEventWatchdogRefreshIntervalSeconds = 120
+    static let lanEventGroupRefreshEveryCycles = 5
+    static let relayBackedLANEventWatchdogRefreshIntervalSeconds = 300
+    static let relayBackedGroupRefreshEveryCycles = 3
     static let sonosEventSubscriptionTimeout = 600
     static let sonosEventServices: [SonosEventService] = [
         .avTransport,
@@ -480,6 +487,37 @@ final class SonosManager {
         in speakers: [SonosPlayer]
     ) -> [SonosPlayer] {
         speakers.filter { $0.isCoordinator && !$0.isInvisible }
+    }
+
+    /// Ordered seed IPs for a LAN topology refresh. A single reachable Sonos
+    /// player can return the whole household's ZoneGroupState, so prefer the
+    /// current control target and only fall back to the saved roster when that
+    /// target has gone offline or its cached address is stale.
+    nonisolated static func topologyRefreshCandidateIPs(
+        selectedSpeaker: SonosPlayer?,
+        allSpeakers: [SonosPlayer]
+    ) -> [String] {
+        var candidates: [String] = []
+        var seen: Set<String> = []
+
+        func append(_ rawIP: String?) {
+            guard let rawIP else { return }
+            let ip = rawIP.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !ip.isEmpty, seen.insert(ip).inserted else { return }
+            candidates.append(ip)
+        }
+
+        append(selectedSpeaker?.playbackIP)
+        append(selectedSpeaker?.ipAddress)
+
+        let orderedRoster = homeSpeakerCoordinatorCandidates(in: allSpeakers)
+            + allSpeakers.filter { !$0.isCoordinator || $0.isInvisible }
+        for speaker in orderedRoster {
+            append(speaker.playbackIP)
+            append(speaker.ipAddress)
+        }
+
+        return candidates
     }
 
     nonisolated static func speakerOrderRank(

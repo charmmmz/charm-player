@@ -233,6 +233,47 @@ extension SonosManager {
         }
     }
 
+    /// RenderingControl events only change volume-related UI. Reading the
+    /// complete transport, position, play mode, media URI, metadata, artwork,
+    /// queue, and audio-quality state for every volume tick overloads Sonos
+    /// during a slider gesture, so keep this path to one group-volume request.
+    func refreshVolumeStateLAN(includeSoundbarEQ: Bool = false) async {
+        guard let expectedSpeakerID = selectedSpeaker?.id else { return }
+        await lanRefreshGate.run { [weak self] in
+            await self?.performRefreshVolumeStateLAN(
+                expectedSpeakerID: expectedSpeakerID,
+                includeSoundbarEQ: includeSoundbarEQ
+            )
+        }
+    }
+
+    func performRefreshVolumeStateLAN(
+        expectedSpeakerID: String,
+        includeSoundbarEQ: Bool
+    ) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID),
+              let playbackIP else { return }
+        do {
+            let groupVolume = try await SonosAPI.getGroupVolume(ip: playbackIP)
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+            volume = groupVolume
+            if let idx = currentGroupStatusIndex() {
+                groupStatuses[idx].volume = groupVolume
+            }
+            connectionState = .connected
+            consecutiveFailures = 0
+            if includeSoundbarEQ, trackInfo?.source == .tv {
+                await refreshSoundbarEQ()
+                guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+                manageLiveActivity()
+            }
+            updateSharedCache()
+            manageRemoteMediaSession()
+        } catch {
+            SonosLog.debug(.sonosEvents, "lightweight volume refresh failed: \(error)")
+        }
+    }
+
     func performRefreshStateLAN(expectedSpeakerID: String) async {
         guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
         guard let pIP = playbackIP else { return }

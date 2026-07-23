@@ -7,9 +7,15 @@ import {
   apnsStatusFromConfig,
   liveActivityNotificationPayloadBytes,
   makeLiveActivityStartNotification,
+  makeNowPlayingNotification,
+  nextMonotonicNowPlayingTimestamp,
   type ApnsConfig,
 } from './apns.js';
-import type { LiveActivityContentState, LiveActivityStartAttributes } from '../types.js';
+import type {
+  LiveActivityContentState,
+  LiveActivityStartAttributes,
+  NowPlayingAttributes,
+} from '../types.js';
 
 const baseConfig: ApnsConfig = {
   bundleId: 'com.charm.SonosWidget',
@@ -71,6 +77,28 @@ const startAttributes: LiveActivityStartAttributes = {
   groupId: '192.168.50.25',
 };
 
+const nowPlayingAttributes: NowPlayingAttributes = {
+  id: 'sonos:192.168.50.25',
+  groupID: '192.168.50.25',
+  speakerName: 'Playroom',
+  trackID: 'track-1',
+  title: 'Blue Monday',
+  artist: 'New Order',
+  album: 'Substance',
+  artworkURLString: 'https://example.com/cover.jpg',
+  artworkFallbackURLString: 'http://relay.local:8789/api/artwork?url=getaa',
+  animatedArtworkURLString: 'https://mvod.itunes.apple.com/artwork-square.m3u8',
+  isLiveStream: false,
+  isPlaying: true,
+  elapsedTime: 42,
+  duration: 460,
+  timestamp: 1_800_000_000,
+  volume: 0.35,
+  clientID: 'phone-a',
+  relayURLString: 'http://relay.local:8789',
+  relayCommandToken: 'update-token',
+};
+
 test('makeLiveActivityStartNotification creates ActivityKit start payload', () => {
   const note = makeLiveActivityStartNotification(
     baseConfig.bundleId,
@@ -122,6 +150,48 @@ test('liveActivityNotificationPayloadBytes measures the serialized APNs payload'
     liveActivityNotificationPayloadBytes(note),
     Buffer.byteLength(JSON.stringify({ aps: note.aps }), 'utf8'),
   );
+});
+
+test('makeNowPlayingNotification uses the dedicated APNs topic and payload contract', () => {
+  const note = makeNowPlayingNotification(
+    baseConfig.bundleId,
+    'update',
+    nowPlayingAttributes,
+    1_800_000_000,
+  );
+
+  assert.equal(note.topic, 'com.charm.SonosWidget.push-type.nowplaying');
+  assert.equal((note as unknown as { pushType: string }).pushType, 'nowplaying');
+  assert.equal(note.expiry, 1_800_003_600);
+  assert.deepEqual(note.aps, {
+    timestamp: 1_800_000_000,
+    event: 'update',
+    attributes: nowPlayingAttributes,
+  });
+});
+
+test('makeNowPlayingNotification end payload carries only the session id', () => {
+  const note = makeNowPlayingNotification(
+    baseConfig.bundleId,
+    'end',
+    { id: nowPlayingAttributes.id },
+    1_800_000_000,
+  );
+  assert.deepEqual(note.aps, {
+    timestamp: 1_800_000_000,
+    event: 'end',
+    attributes: { id: nowPlayingAttributes.id },
+  });
+});
+
+test('Now Playing timestamps remain strictly increasing within the same second', () => {
+  const first = nextMonotonicNowPlayingTimestamp(1_800_000_000.12, 0);
+  const enriched = nextMonotonicNowPlayingTimestamp(1_800_000_000.29, first);
+  const nextSecond = nextMonotonicNowPlayingTimestamp(1_800_000_001.05, enriched);
+
+  assert.equal(first, 1_800_000_000);
+  assert.equal(enriched, 1_800_000_001);
+  assert.equal(nextSecond, 1_800_000_002);
 });
 
 test('pushUpdate dry-run logs payload bytes with the artwork trace id', async () => {

@@ -15,6 +15,7 @@ export interface SonosArtworkResolution {
   fallbackSource?: SonosArtworkResolutionSource | null;
   fallbackUrl?: string | null;
   fallbackCatalogID?: string | null;
+  fallbackErrorStatus?: 'rate-limited' | 'error' | null;
 }
 
 export interface SonosArtworkResolveInput {
@@ -107,6 +108,12 @@ export function createSonosArtworkResolver(options: SonosArtworkResolverOptions 
               fallbackCatalogID: result.catalogID,
             };
           }
+          if (result.status === 'error') {
+            return {
+              ...resolution,
+              fallbackErrorStatus: isITunesRateLimitError(result.error) ? 'rate-limited' : 'error',
+            };
+          }
         } catch (error) {
           logITunesArtworkProbe(logger, probeInput, {
             status: 'error',
@@ -123,6 +130,11 @@ export function createSonosArtworkResolver(options: SonosArtworkResolverOptions 
       return resolution;
     },
   };
+}
+
+function isITunesRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /HTTP\s+(403|429)\b/i.test(message);
 }
 
 export function resolveSonosArtwork(input: ResolveSonosArtworkInput): Promise<SonosArtworkResolution> {

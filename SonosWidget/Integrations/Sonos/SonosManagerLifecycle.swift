@@ -49,6 +49,7 @@ extension SonosManager {
         await selectSpeaker(target)
         await refreshAllGroupStatuses()
         isLoading = false
+        resumeAutoRefreshIfNeeded()
     }
 
     func addSpeaker(ip: String) async {
@@ -70,7 +71,10 @@ extension SonosManager {
             speakers = Self.homeSpeakerCoordinatorCandidates(in: allSpeakers)
             SharedStorage.savedSpeakers = allSpeakers
             let speaker = speakers.first(where: { $0.isCoordinator }) ?? speakers.first
-            if let speaker { await selectSpeaker(speaker) }
+            if let speaker {
+                await selectSpeaker(speaker)
+                resumeAutoRefreshIfNeeded()
+            }
         } catch {
             errorMessage = "Cannot connect to \(trimmed): \(error.localizedDescription)"
         }
@@ -322,6 +326,11 @@ extension SonosManager {
         SharedStorage.savedSpeakers = []
         SharedStorage.speakerIP = nil
         discovery.startScan()
+    }
+
+    func resumeAutoRefreshIfNeeded() {
+        guard refreshTask == nil else { return }
+        startAutoRefresh()
     }
 
 }
