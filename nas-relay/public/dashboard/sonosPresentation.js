@@ -69,8 +69,17 @@ export function isGroupPlaying(group) {
 
 export function groupDisplayName(group) {
   const coordinator = displayableText(group?.speakerName) || 'Unknown room';
-  const memberCount = Math.max(1, Number(group?.groupMemberCount ?? 1));
-  return memberCount > 1 ? `${coordinator} + ${memberCount - 1}` : coordinator;
+  const members = Array.isArray(group?.groupMembers) ? group.groupMembers : [];
+  const additionalNames = [];
+  const seen = new Set([coordinator.toLowerCase()]);
+  for (const member of members) {
+    const name = displayableText(member?.name);
+    const normalizedName = name.toLowerCase();
+    if (!name || member?.isCoordinator === true || seen.has(normalizedName)) continue;
+    seen.add(normalizedName);
+    additionalNames.push(name);
+  }
+  return [coordinator, ...additionalNames].join(' + ');
 }
 
 export function groupPlaybackTitle(group) {

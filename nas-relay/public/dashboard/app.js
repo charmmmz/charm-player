@@ -1,5 +1,11 @@
 import { selectAnimatedArtworkPlayback } from './hlsPlayback.js';
 import {
+  ALBUM_THEME_TRANSITION_MS,
+  albumTransitionIdentity,
+  shouldAnimateAlbumThemeTransition,
+} from './albumThemeTransition.js?v=20260717-album-transition';
+import { presentationSignature } from './renderSignature.js';
+import {
   groupDisplayName,
   groupPlaybackSubtitle,
   groupPlaybackTitle,
@@ -12,6 +18,9 @@ import {
 } from './sonosPresentation.js';
 
 const API = '/api/dashboard';
+const QUEUE_RENDER_CHUNK = 100;
+const QUEUE_ARTWORK_BATCH_LIMIT = 12;
+const CURRENT_FAVORITE_REFRESH_MS = 15_000;
 
 const ui = {
   loginScreen: document.querySelector('#login-screen'),
@@ -31,6 +40,14 @@ const model = {
   logs: [],
   activeView: 'overview',
   selectedSonosGroupId: null,
+  favoritesTargetGroupId: null,
+  favorites: { status: 'idle', items: [], error: null },
+  currentFavorite: currentFavoriteInitialState(),
+  queueOpen: false,
+  queue: { status: 'idle', groupId: null, updateId: 0, currentTrackNumber: null, items: [], error: null },
+  queueVisibleCount: QUEUE_RENDER_CHUNK,
+  queueArtworkAttempted: new Set(),
+  queueArtworkObserver: null,
   logsSource: 'all',
   logsQuery: '',
   logsAutoRefresh: true,
@@ -41,6 +58,9 @@ const model = {
   animatedArtwork: new Map(),
   animatedArtworkPlayers: new Set(),
   artworkThemes: new Map(),
+  albumArtworkUrls: new Map(),
+  overviewRenderSignature: null,
+  sonosRenderSignature: null,
   stateTimer: null,
   progressTimer: null,
   logsTimer: null,
@@ -49,6 +69,7 @@ const model = {
 const viewLabels = {
   overview: ['SYSTEM OVERVIEW', greeting()],
   sonos: ['ROOM CONTROL', 'Sonos setup.'],
+  favorites: ['SONOS LIBRARY', 'Your Sonos Favorites.'],
   activity: ['ACTIVITYKIT PIPELINE', 'Live Activity sessions.'],
   hue: ['LIGHTING AMBIENCE', 'Philips Hue setup.'],
   mcp: ['AGENT INTERFACE', 'MCP setup.'],
@@ -91,6 +112,7 @@ document.querySelectorAll('.nav-item').forEach(button => {
   button.addEventListener('click', () => {
     if (button.dataset.view === 'sonos') {
       model.selectedSonosGroupId = null;
+      resetQueueView();
       renderSonos(model.state);
     }
     showView(button.dataset.view);
@@ -98,7 +120,7 @@ document.querySelectorAll('.nav-item').forEach(button => {
 });
 
 document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-open-group], [data-close-group], [data-command], [data-members-toggle], [data-hue-action], [data-copy-mcp]');
+  const button = event.target.closest('[data-open-group], [data-close-group], [data-command], [data-members-toggle], [data-hue-action], [data-copy-mcp], [data-favorites-refresh], [data-play-favorite], [data-toggle-queue], [data-queue-refresh], [data-queue-more], [data-favorite-current]');
   if (!button) return;
 
   if (button.dataset.openGroup !== undefined) {
@@ -108,7 +130,50 @@ document.addEventListener('click', async event => {
 
   if (button.dataset.closeGroup !== undefined) {
     model.selectedSonosGroupId = null;
+    resetQueueView();
     renderSonos(model.state);
+    return;
+  }
+
+  if (button.dataset.favoritesRefresh !== undefined) {
+    await loadFavorites(true);
+    return;
+  }
+
+  if (button.dataset.playFavorite !== undefined) {
+    await playFavorite(button, button.dataset.playFavorite);
+    return;
+  }
+
+  if (button.dataset.toggleQueue !== undefined) {
+    if (model.queueOpen) {
+      resetQueueView();
+      renderSonos(model.state);
+    } else {
+      await loadQueue(button.dataset.toggleQueue, false);
+    }
+    return;
+  }
+
+  if (button.dataset.queueRefresh !== undefined) {
+    await loadQueue(button.dataset.queueRefresh, true);
+    return;
+  }
+
+  if (button.dataset.queueMore !== undefined) {
+    const queueList = document.querySelector('.queue-list');
+    const previousScrollTop = queueList?.scrollTop ?? 0;
+    model.queueVisibleCount += QUEUE_RENDER_CHUNK;
+    renderSonos(model.state);
+    requestAnimationFrame(() => {
+      const nextQueueList = document.querySelector('.queue-list');
+      if (nextQueueList) nextQueueList.scrollTop = previousScrollTop;
+    });
+    return;
+  }
+
+  if (button.dataset.favoriteCurrent !== undefined) {
+    await addCurrentTrackToFavorites(button, button.dataset.favoriteCurrent);
     return;
   }
 
@@ -314,6 +379,11 @@ document.addEventListener('change', async event => {
     model.logsSource = event.target.value;
     await refreshLogs();
   }
+  if (event.target.id === 'favorites-target') {
+    model.favoritesTargetGroupId = event.target.value;
+    model.favorites = { status: 'idle', items: [], error: null };
+    await loadFavorites(true);
+  }
 });
 
 document.addEventListener('input', event => {
@@ -368,9 +438,15 @@ function leaveDashboard() {
   clearInterval(model.logsTimer);
   model.state = null;
   model.logs = [];
+  model.favoritesTargetGroupId = null;
+  model.favorites = { status: 'idle', items: [], error: null };
+  model.currentFavorite = currentFavoriteInitialState();
+  resetQueueView();
   model.animatedArtwork.clear();
   destroyAnimatedArtworkPlayers();
   model.artworkThemes.clear();
+  model.overviewRenderSignature = null;
+  model.sonosRenderSignature = null;
   ui.appShell.hidden = true;
   showLogin('');
 }
@@ -415,6 +491,7 @@ function renderAll() {
   if (!state) return;
   renderOverview(state);
   if (!model.groupingSourceGroupId) renderSonos(state);
+  if (model.activeView === 'favorites') renderFavorites(state);
   renderActivity(state);
   if (!document.activeElement?.matches('[data-hue-mapping-group]:not(:disabled)')) renderHue(state);
   renderMcp(state);
@@ -425,11 +502,42 @@ function renderAll() {
 
 function renderOverview(state) {
   const playbackTimes = captureAnimatedArtworkTimes();
+  const overviewPanel = document.querySelector('#view-overview');
   const groups = orderedSonosGroups(state.sonos.groups ?? []);
   const featured = groups.find(isActivePlaybackGroup) ?? groups[0];
   const apnsReady = state.liveActivity.apns?.mode === 'ready';
   const hue = state.hue.ambience ?? {};
   const sessions = state.liveActivity.updateTokenCount ?? 0;
+  const renderSignature = presentationSignature({
+    featured,
+    featuredArtwork: animatedArtworkRenderState(featured ? [featured] : []),
+    groupCount: groups.length,
+    activeGroupCount: groups.filter(isActivePlaybackGroup).length,
+    discoveryStatus: state.sonos.discovery.status,
+    apnsMode: state.liveActivity.apns?.mode,
+    apnsEnvironment: state.liveActivity.apns?.environment,
+    sessions,
+    startTokenCount: state.liveActivity.startTokenCount,
+    dismissedSuppressionCount: state.liveActivity.dismissedSuppressionCount,
+    hueConfigured: hue.configured,
+    hueRuntimeActive: hue.runtimeActive,
+    hueRenderMode: hue.renderMode,
+    hueMotionStyle: hue.motionStyle,
+    hueBridgeReachable: state.hue.entertainment?.bridgeReachable,
+    hueBridgeName: hue.bridge?.name,
+    mcpEnabled: state.mcp.enabled,
+    mcpTransport: state.mcp.transport,
+    mcpMaxVolume: state.mcp.maxVolume,
+  });
+  if (model.overviewRenderSignature === renderSignature) {
+    void resolveAnimatedArtwork(groups);
+    void resolveArtworkThemes(groups);
+    return;
+  }
+  const previousTheme = captureAlbumThemeTransition(
+    overviewPanel?.querySelector('.now-playing-card'),
+  );
+  model.overviewRenderSignature = renderSignature;
   const html = `
     <div class="overview-grid">
       ${featured ? nowPlayingCard(featured, state.mcp.maxVolume) : emptyNowPlaying()}
@@ -456,7 +564,11 @@ function renderOverview(state) {
       ${statCard('Hue ambience', hue.runtimeActive ? 'Active' : (hue.configured ? 'Standby' : 'Off'), hue.renderMode ?? hue.motionStyle ?? 'not configured')}
       ${statCard('MCP', state.mcp.enabled ? 'Ready' : 'Disabled', `${state.mcp.transport} · max ${state.mcp.maxVolume}%`)}
     </div>`;
-  document.querySelector('#view-overview').innerHTML = html;
+  overviewPanel.innerHTML = html;
+  animateAlbumThemeTransition(
+    overviewPanel.querySelector('.now-playing-card'),
+    previousTheme,
+  );
   hydrateAnimatedArtwork(playbackTimes);
   void resolveAnimatedArtwork(groups);
   void resolveArtworkThemes(groups);
@@ -464,22 +576,152 @@ function renderOverview(state) {
 
 function renderSonos(state) {
   const playbackTimes = captureAnimatedArtworkTimes();
+  const sonosPanel = document.querySelector('#view-sonos');
   const groups = orderedSonosGroups(state.sonos.groups ?? []);
   const selected = groups.find(group => group.groupId === model.selectedSonosGroupId);
   if (model.selectedSonosGroupId && !selected) model.selectedSonosGroupId = null;
-  if (selected) {
-    document.querySelector('#view-sonos').innerHTML = playerDetail(selected, state.mcp.maxVolume);
-    hydrateAnimatedArtwork(playbackTimes);
+  if (selected) ensureCurrentFavoriteStatus(selected);
+  const renderSignature = presentationSignature({
+    groups,
+    artwork: animatedArtworkRenderState(groups),
+    selectedSonosGroupId: model.selectedSonosGroupId,
+    expandedMemberGroups: [...model.expandedMemberGroups].sort(),
+    queue: model.queueOpen ? {
+      groupId: model.queue.groupId,
+      status: model.queue.status,
+      updateId: model.queue.updateId,
+      currentTrackNumber: model.queue.currentTrackNumber,
+      itemCount: model.queue.items.length,
+      visibleCount: model.queueVisibleCount,
+      error: model.queue.error,
+    } : null,
+    currentFavorite: selected ? currentFavoriteRenderState(selected) : null,
+    discovery: state.sonos.discovery,
+    maxVolume: state.mcp.maxVolume,
+  });
+  if (model.sonosRenderSignature === renderSignature) {
     void resolveAnimatedArtwork(groups);
     void resolveArtworkThemes(groups);
     return;
   }
-  document.querySelector('#view-sonos').innerHTML = `
+  const previousPlayerTheme = captureAlbumThemeTransition(
+    sonosPanel?.querySelector('.player-detail-card'),
+  );
+  model.sonosRenderSignature = renderSignature;
+  if (selected) {
+    sonosPanel.innerHTML = playerDetail(selected, state.mcp.maxVolume);
+    animateAlbumThemeTransition(
+      sonosPanel.querySelector('.player-detail-card'),
+      previousPlayerTheme,
+    );
+    hydrateAnimatedArtwork(playbackTimes);
+    void resolveAnimatedArtwork(groups);
+    void resolveArtworkThemes(groups);
+    observeVisibleQueueArtwork(selected.groupId);
+    return;
+  }
+  sonosPanel.innerHTML = `
     <div class="section-header"><div class="brand-heading"><img class="integration-logo sonos-logo" src="/dashboard/assets/sonos-wordmark.svg" alt="Sonos"><div><h2>Discovered rooms</h2><p>Playback, volume, and soundbar controls</p></div></div><span class="badge ${state.sonos.discovery.status === 'ready' ? 'good' : 'warn'}">${groups.length} groups · ${escapeHtml(state.sonos.discovery.mode)}</span></div>
     ${groups.length ? `<div class="grouping-guide"><span class="grouping-guide-icon">⇄</span><span><strong>Group rooms by dragging</strong><small>Drop one speaker card onto another. Drop a grouped room into the tray to separate it.</small></span></div><div class="room-grid">${groups.map(group => roomCard(group, state.mcp.maxVolume)).join('')}</div><div class="grouping-action-tray" data-ungroup-drop><span class="grouping-tray-icon">−</span><span><strong>Ungroup</strong><small>Separate this room group</small></span></div>` : emptyState('No Sonos groups discovered', state.sonos.discovery.error ?? 'Make sure the relay and Sonos are on the same LAN, or configure SONOS_SEED_IP.')}`;
   hydrateAnimatedArtwork(playbackTimes);
   void resolveAnimatedArtwork(groups);
   void resolveArtworkThemes(groups);
+}
+
+function renderFavorites(state) {
+  const panel = document.querySelector('#view-favorites');
+  if (!panel) return;
+  const groups = orderedSonosGroups(state.sonos.groups ?? []);
+  if (!groups.length) {
+    panel.innerHTML = emptyState('No Sonos rooms discovered', 'Favorites need a reachable Sonos coordinator on this LAN.');
+    return;
+  }
+  if (!groups.some(group => group.groupId === model.favoritesTargetGroupId)) {
+    model.favoritesTargetGroupId = preferredSonosTarget(groups)?.groupId ?? groups[0].groupId;
+  }
+  const target = groups.find(group => group.groupId === model.favoritesTargetGroupId) ?? groups[0];
+  const targetOptions = groups.map(group => `<option value="${escapeAttr(group.groupId)}" ${group.groupId === target.groupId ? 'selected' : ''}>${escapeHtml(groupDisplayName(group))}</option>`).join('');
+  const favorites = model.favorites.items ?? [];
+  const content = model.favorites.status === 'loading'
+    ? '<div class="library-loading"><span class="library-spinner" aria-hidden="true"></span><strong>Loading Sonos Favorites…</strong></div>'
+    : model.favorites.status === 'error'
+      ? emptyState('Favorites could not be loaded', model.favorites.error || 'Check that this Sonos room is reachable, then try again.')
+      : favorites.length
+        ? favoriteSections(favorites)
+        : emptyState('No Sonos Favorites yet', 'Add the current track from a player page, or add favorites in the Sonos app.');
+  panel.innerHTML = `
+    <div class="section-header favorites-section-header">
+      <div class="brand-heading"><img class="integration-logo sonos-logo" src="/dashboard/assets/sonos-wordmark.svg" alt="Sonos"><div><h2>Sonos Favorites</h2><p>Your household favorites, ready for any room</p></div></div>
+      <div class="library-toolbar"><label><span>Play on</span><select class="select-field" id="favorites-target" aria-label="Room for Sonos Favorites">${targetOptions}</select></label><button class="icon-button" data-favorites-refresh title="Refresh Favorites" aria-label="Refresh Favorites">↻</button></div>
+    </div>
+    <div class="library-summary"><span><strong>${favorites.length}</strong> favorite${favorites.length === 1 ? '' : 's'}</span><span>Tap Play to replace playback in ${escapeHtml(groupDisplayName(target))}</span></div>
+    ${content}`;
+}
+
+const favoriteCategoryOrder = ['playlist', 'album', 'song', 'artist', 'station', 'collection'];
+
+function favoriteSections(favorites) {
+  return `<div class="favorite-sections">${favoriteCategoryOrder.map(category => {
+    const items = favorites.filter(favorite => favorite.category === category);
+    if (!items.length) return '';
+    const content = category === 'song'
+      ? `<div class="favorite-song-list">${items.map(favoriteSongRow).join('')}</div>`
+      : `<div class="favorite-card-rail">${items.map(favoriteCard).join('')}</div>`;
+    return `<section class="favorite-category-section" data-favorite-category="${escapeAttr(category)}">
+      <div class="favorite-category-heading"><h3>${escapeHtml(favoriteCategoryTitle(category))}</h3><span>${items.length}</span></div>
+      ${content}
+    </section>`;
+  }).join('')}</div>`;
+}
+
+function favoriteCard(favorite) {
+  const artworkURL = safeUrl(favorite.albumArtUri);
+  const artwork = artworkURL
+    ? `<img src="${escapeAttr(artworkURL)}" alt="${escapeAttr(favorite.title)}" referrerpolicy="no-referrer">`
+    : '<span class="favorite-artwork-fallback" aria-hidden="true">★</span>';
+  const actionLabel = favoriteActionLabel(favorite);
+  return `<button type="button" class="favorite-card ${favorite.category === 'artist' ? 'artist' : ''}" data-play-favorite="${escapeAttr(favorite.id)}" ${favorite.playable ? '' : 'disabled'} title="${escapeAttr(actionLabel)}" aria-label="${escapeAttr(actionLabel)}">
+    <div class="favorite-artwork">${artwork}</div>
+    <span class="favorite-card-copy"><strong>${escapeHtml(favorite.title)}</strong>${favoriteMetadata(favorite)}</span>
+    <span class="favorite-card-action" aria-hidden="true">${favorite.playable ? controlIcon('play') : '—'}</span>
+  </button>`;
+}
+
+function favoriteSongRow(favorite) {
+  const artworkURL = safeUrl(favorite.albumArtUri);
+  const artwork = artworkURL
+    ? `<img src="${escapeAttr(artworkURL)}" alt="${escapeAttr(favorite.title)}" referrerpolicy="no-referrer">`
+    : '<span class="favorite-artwork-fallback" aria-hidden="true">♪</span>';
+  const actionLabel = favoriteActionLabel(favorite);
+  return `<button type="button" class="favorite-song-row" data-play-favorite="${escapeAttr(favorite.id)}" ${favorite.playable ? '' : 'disabled'} title="${escapeAttr(actionLabel)}" aria-label="${escapeAttr(actionLabel)}">
+    <span class="favorite-song-artwork">${artwork}</span>
+    <span class="favorite-card-copy"><strong>${escapeHtml(favorite.title)}</strong>${favoriteMetadata(favorite)}</span>
+    <span class="favorite-card-action" aria-hidden="true">${favorite.playable ? controlIcon('play') : '—'}</span>
+  </button>`;
+}
+
+function favoriteCategoryTitle(category) {
+  return ({ playlist: 'Playlists', album: 'Albums', song: 'Songs', artist: 'Artists', station: 'Stations', collection: 'Collections' })[category] ?? 'Other';
+}
+
+function favoriteCategoryLabel(category) {
+  return ({ playlist: 'Playlist', album: 'Album', song: 'Song', artist: 'Artist Radio', station: 'Station', collection: 'Collection' })[category] ?? 'Sonos Favorite';
+}
+
+function favoriteMetadata(favorite) {
+  return `<span class="favorite-card-meta">${favoriteStreamingServiceBadge(favorite)}<small>${escapeHtml(favoriteCategoryLabel(favorite.category))}</small></span>`;
+}
+
+function favoriteStreamingServiceBadge(favorite) {
+  const badge = streamingServiceBadge(favorite.playbackSourceRaw);
+  return badge || '<span class="media-badge favorite-generic-service" aria-label="Music service"><span aria-hidden="true">♪</span></span>';
+}
+
+function favoriteActionLabel(favorite) {
+  if (!favorite.playable) return `${favorite.title} cannot be played from the Dashboard`;
+  return favorite.playbackKind === 'artistStation'
+    ? `Play ${favorite.title} Radio`
+    : `Play ${favorite.title}`;
 }
 
 function renderActivity(state) {
@@ -655,13 +897,213 @@ function showView(view) {
   [ui.viewEyebrow.textContent, ui.viewTitle.textContent] = viewLabels[view];
   hydrateAnimatedArtwork(captureAnimatedArtworkTimes());
   if (view === 'logs') void refreshLogs();
+  if (view === 'favorites') {
+    renderFavorites(model.state);
+    if (model.favorites.status === 'idle') void loadFavorites(false);
+  }
 }
 
 function openSonosGroup(groupId) {
   if (!groupId || !model.state) return;
   model.selectedSonosGroupId = groupId;
+  resetQueueView();
   showView('sonos');
   renderSonos(model.state);
+}
+
+function preferredSonosTarget(groups) {
+  return groups.find(isActivePlaybackGroup) ?? groups[0] ?? null;
+}
+
+async function loadFavorites(force) {
+  if (!model.state) return;
+  const groups = orderedSonosGroups(model.state.sonos.groups ?? []);
+  if (!groups.length) return;
+  if (!groups.some(group => group.groupId === model.favoritesTargetGroupId)) {
+    model.favoritesTargetGroupId = preferredSonosTarget(groups)?.groupId ?? groups[0].groupId;
+  }
+  if (!force && model.favorites.status === 'ready') {
+    renderFavorites(model.state);
+    return;
+  }
+  model.favorites = { ...model.favorites, status: 'loading', error: null };
+  renderFavorites(model.state);
+  try {
+    const response = await request(`/sonos/favorites?target=${encodeURIComponent(model.favoritesTargetGroupId)}`);
+    model.favorites = { status: 'ready', items: response.favorites ?? [], error: null };
+  } catch (error) {
+    model.favorites = { status: 'error', items: [], error: friendlyError(error) };
+  }
+  renderFavorites(model.state);
+}
+
+async function playFavorite(button, favoriteId) {
+  if (!favoriteId || !model.favoritesTargetGroupId) return;
+  button.disabled = true;
+  try {
+    const favorite = model.favorites.items.find(item => item.id === favoriteId);
+    await request('/sonos/play-favorite', {
+      method: 'POST',
+      body: JSON.stringify({ target: model.favoritesTargetGroupId, favoriteId }),
+    });
+    showToast(favorite?.playbackKind === 'artistStation'
+      ? `Playing ${favorite.title} Radio`
+      : `Playing ${favorite?.title ?? 'Sonos Favorite'}`);
+    await refreshState(false);
+  } catch (error) {
+    showToast(friendlyError(error), true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadQueue(groupId, force) {
+  if (!groupId || !model.state) return;
+  if (!force && model.queueOpen && model.queue.groupId === groupId && model.queue.status === 'ready') {
+    renderSonos(model.state);
+    return;
+  }
+  model.queueOpen = true;
+  model.queueVisibleCount = QUEUE_RENDER_CHUNK;
+  model.queueArtworkAttempted.clear();
+  model.queueArtworkObserver?.disconnect();
+  model.queue = {
+    status: 'loading', groupId, updateId: 0, currentTrackNumber: null, items: [], error: null,
+  };
+  renderSonos(model.state);
+  try {
+    const response = await request(`/sonos/queue?target=${encodeURIComponent(groupId)}`);
+    model.queue = { status: 'ready', error: null, ...response.queue };
+  } catch (error) {
+    model.queue = {
+      status: 'error', groupId, updateId: 0, currentTrackNumber: null, items: [], error: friendlyError(error),
+    };
+  }
+  renderSonos(model.state);
+}
+
+function resetQueueView() {
+  model.queueArtworkObserver?.disconnect();
+  model.queueArtworkObserver = null;
+  model.queueArtworkAttempted.clear();
+  model.queueVisibleCount = QUEUE_RENDER_CHUNK;
+  model.queueOpen = false;
+  model.queue = {
+    status: 'idle', groupId: null, updateId: 0, currentTrackNumber: null, items: [], error: null,
+  };
+}
+
+async function addCurrentTrackToFavorites(button, groupId) {
+  if (!groupId) return;
+  button.disabled = true;
+  try {
+    const result = await request('/sonos/favorite-current', {
+      method: 'POST',
+      body: JSON.stringify({ target: groupId }),
+    });
+    showToast(result.alreadyExists ? 'Already in Sonos Favorites' : 'Added to Sonos Favorites');
+    model.favorites = { status: 'idle', items: [], error: null };
+    const group = model.state?.sonos?.groups?.find(candidate => candidate.groupId === groupId);
+    if (group) {
+      model.currentFavorite = {
+        status: 'ready',
+        groupId,
+        identity: currentFavoriteIdentity(group),
+        available: true,
+        isFavorite: true,
+        favorite: result.favorite ?? null,
+        pending: false,
+        checkedAt: Date.now(),
+        error: null,
+      };
+      model.sonosRenderSignature = null;
+      renderSonos(model.state);
+    }
+  } catch (error) {
+    showToast(friendlyError(error), true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function currentFavoriteInitialState() {
+  return {
+    status: 'idle', groupId: null, identity: '', available: false,
+    isFavorite: false, favorite: null, pending: false, checkedAt: 0, error: null,
+  };
+}
+
+function canFavoriteGroup(group) {
+  return Boolean(group)
+    && !isTVGroup(group)
+    && !isLiveStreamGroup(group)
+    && groupPlaybackTitle(group) !== 'Not playing';
+}
+
+function currentFavoriteIdentity(group) {
+  if (!canFavoriteGroup(group)) return '';
+  return [group.groupId, group.trackTitle, group.artist, group.album, group.durationSeconds]
+    .map(value => String(value ?? '').trim().toLowerCase())
+    .join('|');
+}
+
+function currentFavoriteRenderState(group) {
+  const identity = currentFavoriteIdentity(group);
+  const state = model.currentFavorite;
+  if (!identity || state.groupId !== group.groupId || state.identity !== identity) {
+    return { status: identity ? 'loading' : 'unavailable', isFavorite: false };
+  }
+  return { status: state.status, available: state.available, isFavorite: state.isFavorite };
+}
+
+function ensureCurrentFavoriteStatus(group) {
+  const identity = currentFavoriteIdentity(group);
+  if (!identity) return;
+  const state = model.currentFavorite;
+  if (state.groupId !== group.groupId || state.identity !== identity) {
+    model.currentFavorite = {
+      ...currentFavoriteInitialState(),
+      status: 'loading', groupId: group.groupId, identity, pending: true,
+    };
+    void loadCurrentFavoriteStatus(group.groupId, identity);
+    return;
+  }
+  if (!state.pending && Date.now() - state.checkedAt >= CURRENT_FAVORITE_REFRESH_MS) {
+    state.pending = true;
+    void loadCurrentFavoriteStatus(group.groupId, identity);
+  }
+}
+
+async function loadCurrentFavoriteStatus(groupId, identity) {
+  try {
+    const response = await request(`/sonos/favorite-current?target=${encodeURIComponent(groupId)}`);
+    if (model.currentFavorite.groupId !== groupId || model.currentFavorite.identity !== identity) return;
+    model.currentFavorite = {
+      status: 'ready', groupId, identity,
+      available: response.available === true,
+      isFavorite: response.isFavorite === true,
+      favorite: response.favorite ?? null,
+      pending: false,
+      checkedAt: Date.now(),
+      error: null,
+    };
+    model.sonosRenderSignature = null;
+    renderSonos(model.state);
+  } catch (error) {
+    if (model.currentFavorite.groupId !== groupId || model.currentFavorite.identity !== identity) return;
+    const keepReadyState = model.currentFavorite.status === 'ready';
+    model.currentFavorite = {
+      ...model.currentFavorite,
+      status: keepReadyState ? 'ready' : 'error',
+      pending: false,
+      checkedAt: Date.now(),
+      error: friendlyError(error),
+    };
+    if (!keepReadyState) {
+      model.sonosRenderSignature = null;
+      renderSonos(model.state);
+    }
+  }
 }
 
 function nowPlayingCard(group, maxVolume) {
@@ -669,12 +1111,12 @@ function nowPlayingCard(group, maxVolume) {
   const displayName = groupDisplayName(group);
   const tv = isTVGroup(group);
   const sourceClass = isTVGroup(group) ? ' tv-source' : (isLiveStreamGroup(group) ? ' live-source' : '');
-  return `<article class="now-playing-card album-themed-card is-clickable${sourceClass}" style="${albumThemeStyle(group)}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(displayName)} in Sonos">
+  return `<article class="now-playing-card album-themed-card is-clickable${sourceClass}" style="${albumThemeStyle(group)}" data-album-theme-key="${escapeAttr(albumThemeKey(group))}" data-open-group="${escapeAttr(group.groupId)}" role="link" tabindex="0" aria-label="Open ${escapeAttr(displayName)} in Sonos">
     ${albumThemeBackdrop(group)}
     <div class="artwork-wrap">${artwork(group, 'large')}</div>
     <div class="now-playing-content">
       <div class="card-kicker"><span>${tv ? 'TV input' : 'Now playing'}</span><span class="room-live">${escapeHtml(displayName)} <span class="open-player-arrow">→</span></span></div>
-      <div class="track-meta"><h2>${escapeHtml(groupPlaybackTitle(group))}</h2>${tv ? '' : `<p>${escapeHtml(groupPlaybackSubtitle(group))}</p><div class="quality-row">${sourceBadges(group)}${chip(groupSourceState(group))}</div>`}</div>
+      <div class="track-meta"><h2>${escapeHtml(groupPlaybackTitle(group))}</h2>${tv ? '' : `<p>${escapeHtml(groupPlaybackSubtitle(group))}</p><div class="quality-row">${sourceBadges(group)}</div>`}</div>
       ${playbackProgress(group, 'overview')}
       <div class="playback-controls ${tv ? 'tv-summary-controls' : ''}">${playbackButtons(group)}<span class="volume-mini">VOL ${Math.min(volume,maxVolume)}%</span></div>
     </div>
@@ -694,11 +1136,12 @@ function roomCard(group, maxVolume) {
   const title = groupPlaybackTitle(group);
   const subtitle = groupPlaybackSubtitle(group, { compact: true });
   const trackLine = title === 'Not playing' ? 'Idle' : `${escapeHtml(title)} — ${escapeHtml(subtitle)}`;
+  const mediaBadges = isTVGroup(group) ? '' : sourceBadges(group);
   const members = visibleGroupMembers(group);
   const membersExpanded = members.length > 1 && model.expandedMemberGroups.has(group.groupId);
   return `<article class="room-card album-themed-card${sourceClass}" style="${albumThemeStyle(group)}" draggable="true" data-drag-group="${target}">${albumThemeBackdrop(group)}
     <div class="room-top">
-      <div class="room-open-button" data-open-group="${target}" role="link" tabindex="0" aria-label="Open player for ${escapeAttr(displayName)}">${artwork(group, 'room')}<span class="room-info"><strong>${escapeHtml(displayName)}</strong><span class="room-track">${trackLine}</span><span class="room-meta">${isTVGroup(group) ? '' : sourceBadges(group)}<small>${escapeHtml(groupSourceState(group))}</small></span></span></div>
+      <div class="room-open-button" data-open-group="${target}" role="link" tabindex="0" aria-label="Open player for ${escapeAttr(displayName)}">${artwork(group, 'room')}<span class="room-info"><strong>${escapeHtml(displayName)}</strong><span class="room-track">${trackLine}</span>${mediaBadges ? `<span class="room-meta">${mediaBadges}</span>` : ''}</span></div>
       ${roomPrimaryControl(group)}
     </div>
     <div class="room-volume-section"><label class="room-volume-control" title="Group volume"><span class="room-volume-icon" aria-hidden="true">◖</span><input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${target}" aria-label="${escapeAttr(displayName)} group volume"><span class="volume-value">${volume}</span></label>${members.length > 1 ? `<button class="member-volume-toggle ${membersExpanded ? 'expanded' : ''}" data-members-toggle="${target}" title="${membersExpanded ? 'Hide' : 'Show'} room volumes" aria-label="${membersExpanded ? 'Hide' : 'Show'} room volumes">⌄</button>` : ''}</div>
@@ -734,9 +1177,13 @@ function playerDetail(group, maxVolume) {
   return `
     <div class="player-detail-header">
       <button class="back-button" data-close-group>← All rooms</button>
-      <span class="badge ${groupSourceState(group) === 'LIVE' || groupSourceState(group) === 'PLAYING' ? 'good' : ''}">${escapeHtml(groupSourceState(group))}</span>
+      <div class="player-library-actions">
+        <button class="secondary-button compact ${model.queueOpen ? 'active' : ''}" data-toggle-queue="${escapeAttr(group.groupId)}"><span aria-hidden="true">≡</span>${model.queueOpen ? 'Hide Queue' : 'Queue'}</button>
+        ${favoriteCurrentButton(group)}
+      </div>
     </div>
-    <article class="player-detail-card album-themed-card${sourceClass}" style="${albumThemeStyle(group)}">
+    <div class="player-stage ${model.queueOpen ? 'queue-open' : ''}">
+    <article class="player-detail-card album-themed-card${sourceClass}" style="${albumThemeStyle(group)}" data-album-theme-key="${escapeAttr(albumThemeKey(group))}">
       ${albumThemeBackdrop(group)}
       <div class="player-detail-artwork artwork-wrap">${artwork(group, 'large')}</div>
       <div class="player-detail-content">
@@ -745,19 +1192,132 @@ function playerDetail(group, maxVolume) {
           <h2>${escapeHtml(groupPlaybackTitle(group))}</h2>
           ${isTVGroup(group) ? '' : `<p>${escapeHtml(groupPlaybackSubtitle(group))}</p>`}
           ${isTVGroup(group) ? '' : `<small>${escapeHtml(group.album || 'No album metadata')}</small>`}
-          ${tv ? '' : `<div class="quality-row">${sourceBadges(group)}${chip(groupSourceState(group))}</div>`}
+          ${tv ? '' : `<div class="quality-row">${sourceBadges(group)}</div>`}
         </div>
         ${playbackProgress(group, 'detail')}
-        ${tv ? (hasSoundbar ? soundbarControlPanel(group, speechLevel) : '') : `<div class="player-detail-controls">${playbackButtons(group)}</div>`}
+        ${tv ? (hasSoundbar ? soundbarControlPanel(group, speechLevel) : '') : `<div class="player-detail-controls ${isLiveStreamGroup(group) ? 'single-control' : ''}">${playbackButtons(group)}</div>`}
         <label class="player-volume-control">
-          <span>Volume</span>
-          <input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${escapeAttr(group.groupId)}">
+          <span class="player-volume-icon" aria-hidden="true">${volumeIcon()}</span>
+          <input type="range" min="0" max="${maxVolume}" value="${volume}" data-volume-target="${escapeAttr(group.groupId)}" aria-label="${escapeAttr(displayName)} group volume">
           <strong class="volume-value">${volume}%</strong>
         </label>
         ${visibleGroupMembers(group).length > 1 ? memberVolumePanel(group, maxVolume, true) : ''}
         ${!tv && hasSoundbar ? soundbarControlPanel(group, speechLevel) : ''}
       </div>
-    </article>`;
+    </article>
+    ${model.queueOpen ? queuePanel(group) : ''}
+    </div>`;
+}
+
+function favoriteCurrentButton(group) {
+  if (!canFavoriteGroup(group)) return '';
+  const state = currentFavoriteRenderState(group);
+  if (state.status === 'loading') {
+    return '<button class="secondary-button compact favorite-current-button checking" disabled><span class="library-spinner" aria-hidden="true"></span>Checking Favorites…</button>';
+  }
+  if (state.status === 'ready' && state.isFavorite) {
+    return '<button class="secondary-button compact favorite-current-button active" disabled title="This track is already in Sonos Favorites"><span aria-hidden="true">★</span>In Sonos Favorites</button>';
+  }
+  return `<button class="secondary-button compact favorite-current-button" data-favorite-current="${escapeAttr(group.groupId)}"><span aria-hidden="true">☆</span>Add to Sonos Favorites</button>`;
+}
+
+function queuePanel(group) {
+  const queue = model.queue;
+  const loading = queue.status === 'loading' || queue.groupId !== group.groupId;
+  const currentIndex = Math.max(0, queue.items.findIndex(item => item.trackNumber === queue.currentTrackNumber));
+  const visibleItems = queue.items.slice(currentIndex, currentIndex + model.queueVisibleCount);
+  const hiddenCount = Math.max(0, queue.items.length - currentIndex - visibleItems.length);
+  let content;
+  if (loading) {
+    content = '<div class="library-loading queue-loading"><span class="library-spinner" aria-hidden="true"></span><strong>Loading queue…</strong></div>';
+  } else if (queue.status === 'error') {
+    content = emptyState('Queue could not be loaded', queue.error || 'Try refreshing this room queue.');
+  } else if (!queue.items.length) {
+    content = emptyState('The queue is empty', 'Play an album or add music from the Sonos app to populate this room queue.');
+  } else {
+    content = `<div class="queue-list">${visibleItems.map(item => queueRow(item, queue.currentTrackNumber)).join('')}${hiddenCount > 0 ? `<button class="queue-load-more" data-queue-more="${escapeAttr(group.groupId)}">Load ${Math.min(QUEUE_RENDER_CHUNK, hiddenCount)} more <span>${hiddenCount} remaining</span></button>` : ''}</div>`;
+  }
+  return `<aside class="queue-panel" aria-label="${escapeAttr(groupDisplayName(group))} Queue">
+    <div class="queue-panel-header"><div><p class="eyebrow">UP NEXT</p><h2>${escapeHtml(groupDisplayName(group))} Queue</h2><p>${queue.items.length} track${queue.items.length === 1 ? '' : 's'}${queue.items.length ? ` · showing ${visibleItems.length} from current` : ''}</p></div><div class="queue-panel-actions"><button class="icon-button" data-queue-refresh="${escapeAttr(group.groupId)}" title="Refresh Queue" aria-label="Refresh Queue">↻</button><button class="icon-button" data-toggle-queue="${escapeAttr(group.groupId)}" title="Close Queue" aria-label="Close Queue">×</button></div></div>
+    ${content}
+  </aside>`;
+}
+
+function queueRow(item, currentTrackNumber) {
+  const current = item.trackNumber === currentTrackNumber;
+  const artworkURL = safeUrl(item.albumArtUri);
+  const artwork = artworkURL
+    ? `<img src="${escapeAttr(artworkURL)}" alt="${escapeAttr(item.album || item.title)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : '<span aria-hidden="true">♪</span>';
+  const subtitle = [item.artist, item.album].filter(Boolean).join(' · ') || 'Unknown artist';
+  return `<article class="queue-row ${current ? 'current' : ''}" data-queue-album-key="${escapeAttr(item.albumKey)}" data-artwork-source="${escapeAttr(item.artworkSource)}">
+    <span class="queue-number">${current ? '<i aria-hidden="true"></i>' : item.trackNumber}</span>
+    <span class="queue-artwork">${artwork}</span>
+    <span class="queue-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(subtitle)}</small></span>
+    <span class="queue-duration">${item.durationSeconds > 0 ? formatTime(item.durationSeconds) : '—'}</span>
+  </article>`;
+}
+
+function observeVisibleQueueArtwork(groupId) {
+  model.queueArtworkObserver?.disconnect();
+  model.queueArtworkObserver = null;
+  if (!model.queueOpen || model.queue.status !== 'ready' || model.queue.groupId !== groupId) return;
+  const queueList = document.querySelector('.queue-list');
+  const rows = [...document.querySelectorAll('.queue-row[data-queue-album-key]')];
+  if (!queueList || !rows.length) return;
+
+  if (!('IntersectionObserver' in window)) {
+    void loadQueueArtworkAlbums(groupId, rows.slice(0, QUEUE_ARTWORK_BATCH_LIMIT)
+      .map(row => row.dataset.queueAlbumKey));
+    return;
+  }
+  model.queueArtworkObserver = new IntersectionObserver(entries => {
+    const albumKeys = entries
+      .filter(entry => entry.isIntersecting)
+      .map(entry => entry.target.dataset.queueAlbumKey)
+      .filter(Boolean);
+    if (albumKeys.length) void loadQueueArtworkAlbums(groupId, albumKeys);
+  }, { root: queueList, rootMargin: '180px 0px' });
+  rows.forEach(row => model.queueArtworkObserver.observe(row));
+}
+
+async function loadQueueArtworkAlbums(groupId, albumKeys) {
+  const requested = [...new Set(albumKeys)]
+    .filter(key => key && !model.queueArtworkAttempted.has(key))
+    .slice(0, QUEUE_ARTWORK_BATCH_LIMIT);
+  if (!requested.length) return;
+  requested.forEach(key => model.queueArtworkAttempted.add(key));
+  try {
+    const response = await request('/sonos/queue-artwork', {
+      method: 'POST',
+      body: JSON.stringify({ target: groupId, albumKeys: requested }),
+    });
+    if (!model.queueOpen || model.queue.groupId !== groupId) return;
+    const artworkByAlbum = new Map((response.artwork ?? [])
+      .filter(item => safeUrl(item.albumArtUri))
+      .map(item => [item.albumKey, item]));
+    if (!artworkByAlbum.size) return;
+    model.queue.items = model.queue.items.map(item => {
+      const artwork = artworkByAlbum.get(item.albumKey);
+      return artwork ? {
+        ...item,
+        albumArtUri: artwork.albumArtUri,
+        artworkSource: artwork.artworkSource,
+      } : item;
+    });
+    document.querySelectorAll('.queue-row[data-queue-album-key]').forEach(row => {
+      const artwork = artworkByAlbum.get(row.dataset.queueAlbumKey);
+      const url = safeUrl(artwork?.albumArtUri);
+      if (!url) return;
+      const container = row.querySelector('.queue-artwork');
+      const item = model.queue.items.find(candidate => candidate.albumKey === artwork.albumKey);
+      if (!container || !item) return;
+      container.innerHTML = `<img src="${escapeAttr(url)}" alt="${escapeAttr(item.album || item.title)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+      row.dataset.artworkSource = artwork.artworkSource;
+    });
+  } catch (error) {
+    console.warn('[dashboard] queue artwork batch failed', { groupId, error: friendlyError(error) });
+  }
 }
 
 function playbackButtons(group) {
@@ -765,9 +1325,24 @@ function playbackButtons(group) {
   if (isTVGroup(group)) return '';
   if (isLiveStreamGroup(group)) {
     const label = group.isPlaying ? 'Stop live stream' : 'Play live stream';
-    return `<button class="control-button primary live-control" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${label}" aria-label="${label}">${group.isPlaying ? '■' : '▶'}</button>`;
+    return `<button class="control-button primary live-control" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${label}" aria-label="${label}">${controlIcon(group.isPlaying ? 'stop' : 'play')}</button>`;
   }
-  return `<button class="control-button" data-command="previous" data-target="${target}" title="Previous track">‹</button><button class="control-button primary" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'}">${group.isPlaying ? 'Ⅱ' : '▶'}</button><button class="control-button" data-command="next" data-target="${target}" title="Next track">›</button>`;
+  return `<button class="control-button" data-command="previous" data-target="${target}" title="Previous track" aria-label="Previous track">${controlIcon('previous')}</button><button class="control-button primary" data-command="${group.isPlaying ? 'pause' : 'play'}" data-target="${target}" title="${group.isPlaying ? 'Pause' : 'Play'}" aria-label="${group.isPlaying ? 'Pause' : 'Play'}">${controlIcon(group.isPlaying ? 'pause' : 'play')}</button><button class="control-button" data-command="next" data-target="${target}" title="Next track" aria-label="Next track">${controlIcon('next')}</button>`;
+}
+
+function controlIcon(kind) {
+  const body = {
+    previous: '<path d="M15 5 8 12l7 7"/>',
+    next: '<path d="m9 5 7 7-7 7"/>',
+    play: '<path class="filled" d="m9 6 10 6-10 6z"/>',
+    pause: '<path class="filled" d="M8 6h3v12H8zM15 6h3v12h-3z"/>',
+    stop: '<path class="filled" d="M7 7h10v10H7z"/>',
+  }[kind] ?? '';
+  return `<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
+
+function volumeIcon() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h4l5 4V6L9 10H5z"/><path class="sound-wave" d="M17 9.5c1.4 1.4 1.4 3.6 0 5M19.5 7c2.8 2.8 2.8 7.2 0 10"/></svg>';
 }
 
 function roomPrimaryControl(group) {
@@ -833,7 +1408,7 @@ function artwork(group, variant) {
     const tvArtwork = `<div class="${large ? 'artwork-fallback ' : 'room-art placeholder '}tv-artwork ${live ? 'has-signal' : ''}" role="img" aria-label="TV audio ${state.toLowerCase()}"><span class="tv-screen" aria-hidden="true"><span></span></span>${large ? `<span class="tv-signal-badge ${live ? 'live' : ''}"><i aria-hidden="true"></i>${state}</span>` : ''}</div>`;
     return room ? `<span class="room-artwork">${tvArtwork}</span>` : tvArtwork;
   }
-  const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
+  const url = albumArtworkURL(group);
   const staticArtwork = url
     ? `<img class="${large ? '' : 'room-art'}" src="${escapeAttr(url)}" alt="${escapeAttr(group.album || group.trackTitle || 'Album artwork')}" referrerpolicy="no-referrer">`
     : (large ? '<div class="artwork-fallback">◉</div>' : '<div class="room-art placeholder">◉</div>');
@@ -852,14 +1427,14 @@ function artwork(group, variant) {
   const animatedArtwork = `${staticArtwork}<video class="animated-artwork" data-animated-key="${escapeAttr(key)}" data-animated-src="${escapeAttr(animatedUrl)}"${poster} muted loop playsinline preload="metadata" aria-hidden="true"></video>`;
   return room
     ? `<span class="room-artwork">${animatedArtwork}</span>`
-    : `${animatedArtwork}<span class="animated-artwork-badge" aria-hidden="true">Animated</span>`;
+    : animatedArtwork;
 }
 
 function albumThemeBackdrop(group) {
   if (isTVGroup(group)) {
     return `<div class="album-theme-backdrop tv-theme-backdrop ${tvAudioPresentation(group).hasSignal ? 'has-signal' : ''}" aria-hidden="true"></div>`;
   }
-  const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
+  const url = albumArtworkURL(group);
   if (!url) return '';
   return `<div class="album-theme-backdrop" aria-hidden="true"><img src="${escapeAttr(url)}" alt="" referrerpolicy="no-referrer"></div>`;
 }
@@ -871,16 +1446,117 @@ function albumThemeStyle(group) {
       ? '--album-theme:#86A9E8;--tv-glow-rgb:134,169,232'
       : '--album-theme:#E1E1DD;--tv-glow-rgb:225,225,221';
   }
-  const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
+  const url = albumArtworkURL(group);
   const theme = safeThemeColor(model.artworkThemes.get(url)?.color) || '#FF9C6F';
   return `--album-theme:${theme}`;
+}
+
+function albumThemeKey(group) {
+  if (isTVGroup(group)) {
+    const presentation = tvAudioPresentation(group);
+    return `tv:${presentation.hasSignal}:${presentation.isAtmos}`;
+  }
+  return albumTransitionIdentity(group);
+}
+
+function albumArtworkURL(group) {
+  if (!group || isTVGroup(group)) return '';
+  const key = albumTransitionIdentity(group);
+  const candidate = safeUrl(group.albumArtFallbackUri || group.albumArtUri);
+  const cached = model.albumArtworkUrls.get(key);
+  if (cached) return cached;
+  if (!candidate) return '';
+  model.albumArtworkUrls.set(key, candidate);
+  while (model.albumArtworkUrls.size > 128) {
+    const oldest = model.albumArtworkUrls.keys().next().value;
+    if (!oldest) break;
+    model.albumArtworkUrls.delete(oldest);
+  }
+  return candidate;
+}
+
+function captureAlbumThemeTransition(card) {
+  if (!card) return null;
+  const style = getComputedStyle(card);
+  return {
+    key: card.dataset.albumThemeKey ?? '',
+    albumTheme: style.getPropertyValue('--album-theme').trim(),
+    tvGlowRgb: style.getPropertyValue('--tv-glow-rgb').trim(),
+    backdrop: card.querySelector(':scope > .album-theme-backdrop')?.cloneNode(true) ?? null,
+    artwork: card.querySelector(':scope > .artwork-wrap')?.cloneNode(true) ?? null,
+  };
+}
+
+function animateAlbumThemeTransition(card, previous) {
+  if (!card || !previous) return;
+  const nextKey = card.dataset.albumThemeKey ?? '';
+  if (!shouldAnimateAlbumThemeTransition(previous.key, nextKey, prefersReducedMotion())) return;
+
+  const nextBackdrop = card.querySelector(':scope > .album-theme-backdrop');
+  const nextArtwork = card.querySelector(':scope > .artwork-wrap');
+  const nextAlbumTheme = card.style.getPropertyValue('--album-theme').trim();
+  if (previous.albumTheme && nextAlbumTheme && previous.albumTheme !== nextAlbumTheme) {
+    card.style.setProperty('--album-theme', previous.albumTheme);
+    card.classList.add('album-theme-accent-transition');
+  }
+
+  if (nextBackdrop) nextBackdrop.classList.add('album-theme-backdrop-entering');
+  if (nextArtwork) nextArtwork.classList.add('album-artwork-entering');
+  const previousBackdrop = previous.backdrop;
+  if (previousBackdrop) {
+    previousBackdrop.classList.remove('album-theme-backdrop-entering', 'is-active');
+    previousBackdrop.classList.add('album-theme-backdrop-previous');
+    previousBackdrop.style.setProperty('--album-theme', previous.albumTheme);
+    if (previous.tvGlowRgb) previousBackdrop.style.setProperty('--tv-glow-rgb', previous.tvGlowRgb);
+    card.insertBefore(previousBackdrop, card.children[1] ?? null);
+  }
+
+  const previousArtwork = previous.artwork;
+  let previousArtworkLayer = null;
+  if (previousArtwork && nextArtwork) {
+    previousArtwork.querySelectorAll('video').forEach(video => video.remove());
+    previousArtworkLayer = document.createElement('div');
+    previousArtworkLayer.className = 'album-artwork-previous';
+    while (previousArtwork.firstChild) previousArtworkLayer.append(previousArtwork.firstChild);
+    nextArtwork.append(previousArtworkLayer);
+  }
+
+  let started = false;
+  const startTransition = () => {
+    if (started) return;
+    started = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+    nextBackdrop?.classList.add('is-active');
+    previousBackdrop?.classList.add('is-active');
+    nextArtwork?.classList.add('is-active');
+    previousArtworkLayer?.classList.add('is-active');
+    if (nextAlbumTheme) card.style.setProperty('--album-theme', nextAlbumTheme);
+    }));
+
+    window.setTimeout(() => {
+      previousBackdrop?.remove();
+      previousArtworkLayer?.remove();
+      nextBackdrop?.classList.remove('album-theme-backdrop-entering', 'is-active');
+      nextArtwork?.classList.remove('album-artwork-entering', 'is-active');
+      card.classList.remove('album-theme-accent-transition');
+    }, ALBUM_THEME_TRANSITION_MS + 100);
+  };
+
+  const nextImage = nextArtwork?.querySelector(':scope > img')
+    ?? nextBackdrop?.querySelector('img');
+  if (!nextImage || nextImage.complete) startTransition();
+  else {
+    nextImage.addEventListener('load', startTransition, { once: true });
+    nextImage.addEventListener('error', startTransition, { once: true });
+    window.setTimeout(startTransition, 900);
+  }
 }
 
 async function resolveArtworkThemes(groups) {
   const now = Date.now();
   const candidates = new Set();
   for (const group of groups) {
-    const url = safeUrl(group.albumArtUri || group.albumArtFallbackUri);
+    const url = albumArtworkURL(group);
     if (!url) continue;
     const current = model.artworkThemes.get(url);
     if (current?.status === 'loading' || current?.status === 'ready') continue;
@@ -931,6 +1607,8 @@ async function resolveAnimatedArtwork(groups) {
   const results = await Promise.all([...candidates].map(async ([key, group]) => {
     try {
       const query = new URLSearchParams({ artist: group.artist, album: group.album });
+      if (group.trackUri) query.set('trackUri', group.trackUri);
+      if (group.albumArtUri) query.set('albumArtUri', group.albumArtUri);
       const response = await fetch(`/api/animated-artwork/search?${query}`, { credentials: 'same-origin' });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
@@ -989,7 +1667,25 @@ function hydrateAnimatedArtwork(playbackTimes = new Map()) {
       }, { once: true });
       attachAnimatedArtworkSource(video);
     }
-    if (!video.dataset.hlsPlayer) playAnimatedArtworkVideo(video);
+    // Existing HLS players are paused while their view is hidden. Resume the
+    // same media element when the view becomes visible again instead of
+    // waiting for a manifest event that has already fired.
+    playAnimatedArtworkVideo(video);
+  });
+}
+
+function animatedArtworkRenderState(groups) {
+  return groups.map(group => {
+    const key = animatedArtworkKey(group);
+    const artworkURL = albumArtworkURL(group);
+    const resolution = key ? model.animatedArtwork.get(key) : null;
+    return {
+      key,
+      status: resolution?.status ?? null,
+      url: resolution?.url ?? null,
+      unplayable: resolution?.unplayable === true,
+      theme: model.artworkThemes.get(artworkURL)?.color ?? null,
+    };
   });
 }
 
@@ -1051,7 +1747,6 @@ function playAnimatedArtworkVideo(video) {
 function markAnimatedArtworkUnplayable(video) {
   video.hidden = true;
   video.classList.remove('ready');
-  video.parentElement?.querySelector('.animated-artwork-badge')?.setAttribute('hidden', '');
   const resolution = model.animatedArtwork.get(video.dataset.animatedKey);
   if (resolution?.status === 'ready') resolution.unplayable = true;
 }
@@ -1304,11 +1999,17 @@ function friendlyError(error) {
     origin_not_allowed: 'The request origin does not match the relay address.',
     state_unavailable: 'Relay status is temporarily unavailable.',
     unknown_sonos_group: 'This Sonos group is no longer available. Refresh and try again.',
+    current_favorite_unavailable: 'Choose a regular music track before adding it to Sonos Favorites.',
+    artist_station_unavailable: 'This Apple Music artist radio could not be resolved for the selected Sonos room.',
+    favorite_not_playable: 'This Sonos shortcut cannot be played directly from the Dashboard.',
+    unknown_favorite: 'This Sonos Favorite is no longer available. Refresh Favorites and try again.',
     hue_not_configured: 'Pair and sync the Hue Bridge before configuring assignments.',
     unknown_hue_group: 'This Hue group is no longer available. Refresh Hue resources and try again.',
     hue_mapping_save_failed: 'The Hue assignment could not be saved.',
   };
-  return messages[error.message] ?? error.message ?? 'Request failed';
+  const message = error?.message ?? '';
+  const matchedKey = Object.keys(messages).find(key => message === key || message.startsWith(`${key}:`));
+  return (matchedKey ? messages[matchedKey] : null) ?? message ?? 'Request failed';
 }
 
 function groupName(state, groupId) { const group = state.sonos.groups.find(candidate => candidate.groupId === groupId); return group ? groupDisplayName(group) : (groupId ?? '—'); }

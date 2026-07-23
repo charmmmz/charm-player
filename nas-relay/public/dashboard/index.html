@@ -8,7 +8,7 @@
   <title>Charm Relay Console</title>
   <link rel="icon" type="image/png" href="./assets/charm-player-logo.png">
   <link rel="apple-touch-icon" href="./assets/charm-player-logo.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20260717-favorite-status">
 </head>
 <body>
   <section class="login-screen" id="login-screen" aria-labelledby="login-title">
@@ -39,6 +39,7 @@
       <nav class="navigation" aria-label="Console pages">
         <button class="nav-item active" data-view="overview"><span class="nav-glyph">◉</span><span class="nav-label">Overview</span></button>
         <button class="nav-item nav-brand-item" data-view="sonos" aria-label="Sonos"><span class="nav-glyph nav-brand-glyph"><img class="nav-brand-logo nav-sonos-logo" src="./assets/sonos-wordmark.svg" alt=""></span></button>
+        <button class="nav-item" data-view="favorites"><span class="nav-glyph">★</span><span class="nav-label">Favorites</span></button>
         <button class="nav-item nav-brand-item" data-view="hue" aria-label="Hue"><span class="nav-glyph nav-brand-glyph"><img class="nav-brand-logo nav-hue-logo" src="./assets/hue-wordmark.svg" alt=""></span></button>
         <button class="nav-item" data-view="activity"><span class="nav-glyph">◫</span><span class="nav-label">Live Activity</span></button>
         <button class="nav-item" data-view="mcp"><span class="nav-glyph">⌘</span><span class="nav-label">MCP</span></button>
@@ -66,6 +67,7 @@
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
       <section class="view active" id="view-overview" data-view-panel="overview"><div class="loading-card">Loading relay status…</div></section>
       <section class="view" id="view-sonos" data-view-panel="sonos"></section>
+      <section class="view" id="view-favorites" data-view-panel="favorites"></section>
       <section class="view" id="view-activity" data-view-panel="activity"></section>
       <section class="view" id="view-hue" data-view-panel="hue"></section>
       <section class="view" id="view-mcp" data-view-panel="mcp"></section>
@@ -74,6 +76,6 @@
   </div>
 
   <script src="./vendor/hls.min.js"></script>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=20260717-favorite-status"></script>
 </body>
 </html>

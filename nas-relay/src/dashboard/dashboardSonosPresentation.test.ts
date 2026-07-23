@@ -13,10 +13,27 @@ import {
   tvAudioPresentation,
 } from '../../public/dashboard/sonosPresentation.js';
 
-test('dashboard compacts grouped room names using the coordinator and additional member count', () => {
+test('dashboard names grouped rooms using each visible speaker name', () => {
   assert.equal(groupDisplayName({ speakerName: 'Playroom', groupMemberCount: 1 }), 'Playroom');
-  assert.equal(groupDisplayName({ speakerName: 'Playroom', groupMemberCount: 2 }), 'Playroom + 1');
-  assert.equal(groupDisplayName({ speakerName: 'Playroom', groupMemberCount: 4 }), 'Playroom + 3');
+  assert.equal(groupDisplayName({
+    speakerName: 'Playroom',
+    groupMemberCount: 2,
+    groupMembers: [
+      { name: 'Playroom', isCoordinator: true },
+      { name: 'Move', isCoordinator: false },
+    ],
+  }), 'Playroom + Move');
+  assert.equal(groupDisplayName({
+    speakerName: 'Playroom',
+    groupMemberCount: 4,
+    groupMembers: [
+      { name: 'Playroom', isCoordinator: true },
+      { name: 'Move', isCoordinator: false },
+      { name: 'Kitchen', isCoordinator: false },
+      { name: 'Office', isCoordinator: false },
+    ],
+  }), 'Playroom + Move + Kitchen + Office');
+  assert.equal(groupDisplayName({ speakerName: 'Playroom', groupMemberCount: 3 }), 'Playroom');
 });
 
 test('dashboard gives TV playback dedicated title, format, and live state presentation', () => {
