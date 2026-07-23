@@ -1,8 +1,9 @@
 import Foundation
 import Observation
+import Darwin
 
 extension Notification.Name {
-    static let hueAmbienceRelayEnabledChanged = Notification.Name("hueAmbienceRelayEnabledChanged")
+    static let hueAmbienceRelayRunningChanged = Notification.Name("hueAmbienceRelayRunningChanged")
 }
 
 @MainActor
@@ -61,6 +62,7 @@ final class RelayManager {
 
     private(set) var urlString: String = ""
     private(set) var discoveredURLString: String?
+    private(set) var discoveredRelayURLStrings: [String] = []
     private(set) var status: Status = .disabled
     private(set) var relaySonos: RelayClient.HealthResponse.Sonos?
     private(set) var relayAPNs: RelayClient.HealthResponse.APNs?
@@ -77,6 +79,7 @@ final class RelayManager {
 
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
     @ObservationIgnored private var inFlightProbe: Task<Void, Never>?
+    @ObservationIgnored private var hueAmbienceStatusGeneration: UInt = 0
     @ObservationIgnored private let discovery = RelayDiscovery()
 
     private var manualURL: URL? {
@@ -102,6 +105,27 @@ final class RelayManager {
         url?.absoluteString
     }
 
+    /// App extensions don't participate in the main app's Bonjour resolution
+    /// context reliably. Prefer a discovered numeric address on the same LAN
+    /// as the selected Sonos coordinator when serializing a relay URL into
+    /// RemoteMediaSession attributes.
+    func appExtensionURLString(preferredPeerHost: String?) -> String? {
+        if let manualURL, Self.isNumericHost(manualURL.host) {
+            return manualURL.absoluteString
+        }
+        let candidates = discoveredRelayURLStrings.compactMap(URL.init(string:))
+        if let prefix = Self.ipv4NetworkPrefix(preferredPeerHost),
+           let sameLAN = candidates.first(where: {
+               Self.ipv4NetworkPrefix($0.host) == prefix
+           }) {
+            return sameLAN.absoluteString
+        }
+        if let numeric = candidates.first(where: { Self.isNumericHost($0.host) }) {
+            return numeric.absoluteString
+        }
+        return activeURLString
+    }
+
     var isUsingDiscoveredURL: Bool {
         manualURL == nil && discoveredURL != nil
     }
@@ -115,6 +139,12 @@ final class RelayManager {
 
     var shouldDeferLocalHueAmbience: Bool {
         isAvailable && isHueAmbienceRelayConfigured
+    }
+
+    var isHueAmbienceRelayRunning: Bool {
+        isHueAmbienceRelayConfigured
+            && isHueAmbienceRelayEnabled
+            && !isHueAmbienceRelayPaused
     }
 
     private init() {
@@ -164,9 +194,15 @@ final class RelayManager {
         }
         // Don't pile up parallel probes on every onAppear / 30s tick.
         inFlightProbe?.cancel()
+        let hueAmbienceReadGeneration = beginHueAmbienceStatusRead()
         let task = Task { [weak self] in
             guard let self else { return }
-            self.status = .probing
+            // Keep the last known connected state while refreshing. Flipping
+            // to `probing` here made Hue Ambience briefly fall back to the
+            // local renderer and local UserDefaults on every 30-second probe.
+            if !self.isAvailable {
+                self.status = .probing
+            }
             SonosLog.info(.relay, "health probe start url=\(url.absoluteString)")
             do {
                 let health = try await RelayClient.health(baseURL: url)
@@ -179,7 +215,9 @@ final class RelayManager {
                 self.status = .connected(groupCount: health.groups.count)
                 self.relaySonos = health.sonos
                 self.relayAPNs = health.apns
-                self.updateHueAmbienceRuntimeStatus(from: health.hueAmbience)
+                if self.shouldApplyHueAmbienceStatusRead(hueAmbienceReadGeneration) {
+                    self.updateHueAmbienceRuntimeStatus(from: health.hueAmbience)
+                }
                 self.updateHueEntertainmentStatus(health.hueEntertainment)
             } catch is CancellationError {
                 // Newer probe took over — its result is what matters.
@@ -228,8 +266,13 @@ final class RelayManager {
 
     private func refreshHueAmbienceRuntimeOnly() async {
         guard let url else { return }
+        let generation = beginHueAmbienceStatusRead()
         do {
             let response = try await RelayClient.hueAmbienceStatus(baseURL: url)
+            guard shouldApplyHueAmbienceStatusRead(generation) else {
+                SonosLog.debug(.relay, "ignored stale Hue ambience status poll")
+                return
+            }
             let status = response.status
             updateHueAmbienceRuntimeStatus(
                 configured: status.configured,
@@ -258,9 +301,25 @@ final class RelayManager {
     private func handleDiscoveredRelay(_ url: URL) async {
         guard manualURL == nil else { return }
         SonosLog.info(.relay, "received relay candidate url=\(url.absoluteString)")
+        if !discoveredRelayURLStrings.contains(url.absoluteString) {
+            discoveredRelayURLStrings.append(url.absoluteString)
+        }
         discoveredURLString = url.absoluteString
         SharedStorage.discoveredRelayURLString = url.absoluteString
         await probeNow()
+    }
+
+    private nonisolated static func isNumericHost(_ host: String?) -> Bool {
+        guard let host else { return false }
+        var address = in_addr()
+        return host.withCString { inet_pton(AF_INET, $0, &address) == 1 }
+    }
+
+    private nonisolated static func ipv4NetworkPrefix(_ host: String?) -> String? {
+        guard let host, isNumericHost(host) else { return nil }
+        let octets = host.split(separator: ".")
+        guard octets.count == 4 else { return nil }
+        return octets.prefix(3).joined(separator: ".")
     }
 
     func updateHueAmbienceRuntimeStatus(
@@ -278,13 +337,26 @@ final class RelayManager {
     ) {
         let wasConfigured = isHueAmbienceRelayConfigured
         let wasEnabled = isHueAmbienceRelayEnabled
+        let wasPaused = isHueAmbienceRelayPaused
+        let wasRunning = isHueAmbienceRelayRunning
         isHueAmbienceRelayConfigured = configured
         isHueAmbienceRelayEnabled = configured && enabled
         isHueAmbienceRelayPaused = configured && runtimePaused == true
-        if configured && (!wasConfigured || wasEnabled != isHueAmbienceRelayEnabled) {
+        let isRunning = isHueAmbienceRelayRunning
+        if wasConfigured != configured
+            || wasEnabled != isHueAmbienceRelayEnabled
+            || wasPaused != isHueAmbienceRelayPaused {
+            SonosLog.info(
+                .relay,
+                "Hue ambience relay state configured=\(configured) "
+                    + "enabled=\(isHueAmbienceRelayEnabled) "
+                    + "paused=\(isHueAmbienceRelayPaused) running=\(isRunning)"
+            )
+        }
+        if configured && (!wasConfigured || wasRunning != isRunning) {
             NotificationCenter.default.post(
-                name: .hueAmbienceRelayEnabledChanged,
-                object: isHueAmbienceRelayEnabled
+                name: .hueAmbienceRelayRunningChanged,
+                object: isRunning
             )
         }
         hueAmbienceSyncStatus = configured ? .synced(Date()) : .idle
@@ -352,6 +424,19 @@ final class RelayManager {
             lastFrameAt: health.lastFrameAt,
             lastError: health.lastError
         )
+    }
+
+    func beginHueAmbienceStatusRead() -> UInt {
+        hueAmbienceStatusGeneration &+= 1
+        return hueAmbienceStatusGeneration
+    }
+
+    func invalidateHueAmbienceStatusReads() {
+        hueAmbienceStatusGeneration &+= 1
+    }
+
+    func shouldApplyHueAmbienceStatusRead(_ generation: UInt) -> Bool {
+        generation == hueAmbienceStatusGeneration
     }
 
     private func updateHueEntertainmentStatus(_ health: RelayClient.HealthResponse.HueEntertainment?) {

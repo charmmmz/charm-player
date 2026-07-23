@@ -41,9 +41,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .appleMusicShareRouteReceived)) { _ in
             routePendingAppleMusicShareToHomeIfNeeded()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .hueAmbienceRelayEnabledChanged)) { notification in
-            guard let enabled = notification.object as? Bool else { return }
-            HueAmbienceStore.shared.isEnabled = enabled
+        .onReceive(NotificationCenter.default.publisher(for: .hueAmbienceRelayRunningChanged)) { notification in
+            guard let running = notification.object as? Bool else { return }
+            HueAmbienceStore.shared.isEnabled = running
             MusicAmbienceManager.shared.refreshStatus()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in

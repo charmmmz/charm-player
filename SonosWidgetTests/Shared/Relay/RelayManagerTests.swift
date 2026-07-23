@@ -555,6 +555,7 @@ final class RelayManagerTests: XCTestCase {
 
         XCTAssertTrue(relay.isHueAmbienceRelayConfigured)
         XCTAssertFalse(relay.isHueAmbienceRelayEnabled)
+        XCTAssertFalse(relay.isHueAmbienceRelayRunning)
         guard case .synced = relay.hueAmbienceSyncStatus else {
             return XCTFail("Disabled Hue config should still be marked as synced to NAS")
         }
@@ -584,6 +585,7 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertTrue(relay.isHueAmbienceRelayConfigured)
         XCTAssertTrue(relay.isHueAmbienceRelayEnabled)
         XCTAssertTrue(relay.isHueAmbienceRelayPaused)
+        XCTAssertFalse(relay.isHueAmbienceRelayRunning)
         XCTAssertEqual(relay.hueAmbienceRuntimeStatus, .ready("NAS ambience stopped"))
         XCTAssertEqual(
             relay.hueAmbienceRuntimeDetail,
@@ -606,6 +608,7 @@ final class RelayManagerTests: XCTestCase {
 
         XCTAssertTrue(relay.isHueAmbienceRelayConfigured)
         XCTAssertTrue(relay.isHueAmbienceRelayEnabled)
+        XCTAssertTrue(relay.isHueAmbienceRelayRunning)
         XCTAssertEqual(
             relay.hueAmbienceRuntimeStatus,
             .fallback("Streaming-ready via CLIP fallback")
@@ -615,6 +618,18 @@ final class RelayManagerTests: XCTestCase {
             "NAS controls Hue Ambience while it is reachable."
         )
         XCTAssertFalse(relay.shouldDeferLocalHueAmbience)
+    }
+
+    func testHueAmbienceMutationInvalidatesOlderStatusReads() async {
+        let relay = RelayManager.shared
+        await prepareUnavailableRelay(relay)
+        defer { resetRelay(relay) }
+
+        let staleGeneration = relay.beginHueAmbienceStatusRead()
+        let currentGeneration = relay.beginHueAmbienceStatusRead()
+
+        XCTAssertFalse(relay.shouldApplyHueAmbienceStatusRead(staleGeneration))
+        XCTAssertTrue(relay.shouldApplyHueAmbienceStatusRead(currentGeneration))
     }
 
     private func prepareUnavailableRelay(_ relay: RelayManager) async {

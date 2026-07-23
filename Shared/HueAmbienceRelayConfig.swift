@@ -34,7 +34,8 @@ struct HueAmbienceRelayConfig: Encodable, Sendable {
         store: HueAmbienceStore,
         credentialStore: HueCredentialStore = HueCredentialStore(),
         sonosSpeakers: [SonosPlayer],
-        flowIntervalSeconds: Double? = nil
+        flowIntervalSeconds: Double? = nil,
+        enabledOverride: Bool? = nil
     ) throws {
         guard let bridge = store.bridge else {
             throw HueAmbienceRelayConfigError.missingBridge
@@ -49,7 +50,7 @@ struct HueAmbienceRelayConfig: Encodable, Sendable {
         }
 
         self.schemaVersion = 1
-        self.enabled = store.isEnabled
+        self.enabled = enabledOverride ?? store.isEnabled
         self.bridge = bridge
         self.applicationKey = applicationKey
         self.streamingClientKey = credentialStore.streamingClientKey(forBridgeID: bridge.id)
@@ -172,12 +173,17 @@ extension RelayManager {
         }
 
         hueAmbienceSyncStatus = .syncing
+        invalidateHueAmbienceStatusReads()
         do {
             let config = try HueAmbienceRelayConfig(
                 store: store,
-                sonosSpeakers: sonosSpeakers
+                sonosSpeakers: sonosSpeakers,
+                enabledOverride: isHueAmbienceRelayConfigured
+                    ? isHueAmbienceRelayRunning
+                    : nil
             )
             try await RelayClient.putHueAmbienceConfig(baseURL: url, config: config)
+            invalidateHueAmbienceStatusReads()
             updateHueAmbienceRuntimeStatus(configured: true, enabled: config.enabled)
         } catch {
             hueAmbienceSyncStatus = .failed(error.localizedDescription)
@@ -191,8 +197,10 @@ extension RelayManager {
         }
 
         hueAmbienceSyncStatus = .syncing
+        invalidateHueAmbienceStatusReads()
         do {
             try await RelayClient.deleteHueAmbienceConfig(baseURL: url)
+            invalidateHueAmbienceStatusReads()
             updateHueAmbienceRuntimeStatus(configured: false)
             hueAmbienceSyncStatus = .idle
         } catch {
@@ -206,8 +214,10 @@ extension RelayManager {
             return
         }
 
+        let generation = beginHueAmbienceStatusRead()
         do {
             let response = try await RelayClient.hueAmbienceStatus(baseURL: url)
+            guard shouldApplyHueAmbienceStatusRead(generation) else { return }
             updateHueAmbienceRuntimeStatus(
                 configured: response.status.configured,
                 enabled: response.status.enabled != false,
@@ -232,8 +242,10 @@ extension RelayManager {
             return
         }
 
+        invalidateHueAmbienceStatusReads()
         do {
             let response = try await RelayClient.setHueAmbienceRunning(baseURL: url, running: running)
+            invalidateHueAmbienceStatusReads()
             updateHueAmbienceRuntimeStatus(
                 configured: response.status.configured,
                 enabled: response.status.enabled != false,

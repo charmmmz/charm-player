@@ -134,10 +134,11 @@ private struct SettingsHubDestinationMark: View {
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 1)
             case .hueAmbience:
-                Image("PhilipsHueLogo")
+                Image("HueWordmark")
                     .resizable()
-                    .renderingMode(.original)
+                    .renderingMode(.template)
                     .scaledToFit()
+                    .foregroundStyle(.primary)
             case .externalConnection, .diagnostics:
                 Image(systemName: destination.systemImage)
                     .font(.title3)

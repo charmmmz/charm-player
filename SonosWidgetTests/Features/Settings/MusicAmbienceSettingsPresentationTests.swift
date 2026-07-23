@@ -8,15 +8,13 @@ final class MusicAmbienceSettingsPresentationTests: XCTestCase {
             localEnabled: true,
             relayAvailable: true,
             relayConfigured: true,
-            relayEnabled: true,
-            relayPaused: true
+            relayRunning: false
         ))
         XCTAssertTrue(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
             localEnabled: true,
             relayAvailable: true,
             relayConfigured: true,
-            relayEnabled: true,
-            relayPaused: false
+            relayRunning: true
         ))
     }
 
@@ -25,20 +23,17 @@ final class MusicAmbienceSettingsPresentationTests: XCTestCase {
             localEnabled: true,
             relayAvailable: false,
             relayConfigured: true,
-            relayEnabled: true,
-            relayPaused: true
+            relayRunning: false
         ))
         XCTAssertTrue(HueAmbienceEnableControlPolicy.usesRelayRuntime(
             relayAvailable: true,
-            relayConfigured: true,
-            relayEnabled: false
+            relayConfigured: true
         ))
         XCTAssertFalse(HueAmbienceEnableControlPolicy.effectiveIsEnabled(
             localEnabled: true,
             relayAvailable: true,
             relayConfigured: true,
-            relayEnabled: false,
-            relayPaused: false
+            relayRunning: false
         ))
     }
 

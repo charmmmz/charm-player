@@ -18,8 +18,7 @@ enum HueAmbienceSetupPresentation {
 enum HueAmbienceEnableControlPolicy {
     static func usesRelayRuntime(
         relayAvailable: Bool,
-        relayConfigured: Bool,
-        relayEnabled _: Bool
+        relayConfigured: Bool
     ) -> Bool {
         relayAvailable && relayConfigured
     }
@@ -28,17 +27,15 @@ enum HueAmbienceEnableControlPolicy {
         localEnabled: Bool,
         relayAvailable: Bool,
         relayConfigured: Bool,
-        relayEnabled: Bool,
-        relayPaused: Bool
+        relayRunning: Bool
     ) -> Bool {
         guard usesRelayRuntime(
             relayAvailable: relayAvailable,
-            relayConfigured: relayConfigured,
-            relayEnabled: relayEnabled
+            relayConfigured: relayConfigured
         ) else {
             return localEnabled
         }
-        return relayEnabled && !relayPaused
+        return relayRunning
     }
 }
 
@@ -495,8 +492,7 @@ struct MusicAmbienceSettingsView: View {
                 localEnabled: store.isEnabled,
                 relayAvailable: relay.isAvailable,
                 relayConfigured: relay.isHueAmbienceRelayConfigured,
-                relayEnabled: relay.isHueAmbienceRelayEnabled,
-                relayPaused: relay.isHueAmbienceRelayPaused
+                relayRunning: relay.isHueAmbienceRelayRunning
             )
         } set: { enabled in
             guard usesRelayRuntimeControl else {
@@ -522,8 +518,7 @@ struct MusicAmbienceSettingsView: View {
     private var usesRelayRuntimeControl: Bool {
         HueAmbienceEnableControlPolicy.usesRelayRuntime(
             relayAvailable: relay.isAvailable,
-            relayConfigured: relay.isHueAmbienceRelayConfigured,
-            relayEnabled: relay.isHueAmbienceRelayEnabled
+            relayConfigured: relay.isHueAmbienceRelayConfigured
         )
     }
 
