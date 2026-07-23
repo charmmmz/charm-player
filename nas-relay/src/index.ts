@@ -129,7 +129,7 @@ async function main(): Promise<void> {
 
   const nowPlayingProduction = (process.env.NOW_PLAYING_APNS_PRODUCTION ?? 'true') === 'true';
   const nowPlayingAnimatedArtworkEnabled =
-    (process.env.NOW_PLAYING_ANIMATED_ARTWORK_ENABLED ?? 'false') === 'true';
+    (process.env.NOW_PLAYING_ANIMATED_ARTWORK_ENABLED ?? 'true') === 'true';
   const nowPlayingKeyId = process.env.NOW_PLAYING_APNS_KEY_ID?.trim()
     || (apnsConfig.production ? apnsConfig.keyId : DEFAULT_NOW_PLAYING_APNS_KEY_ID);
   const nowPlayingApns = await ApnsClient.create(
