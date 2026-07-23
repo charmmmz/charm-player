@@ -376,8 +376,36 @@ test('bridge refreshes authoritative topology when a coordinator changes', async
 });
 
 test('bridge starts with SSDP discovery when no Sonos seed IP is configured', async () => {
-  const bridge = testBridge();
   const calls: string[] = [];
+  let listenerHost = '172.29.32.1';
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    discoveryFactory: () => ({
+      SearchOne: async timeoutSeconds => {
+        calls.push(`discover:${timeoutSeconds}`);
+        return { host: '192.168.50.25', port: 1400 };
+      },
+    }),
+    listenerHostResolver: async sonosHost => {
+      calls.push(`resolve:${sonosHost}`);
+      return '192.168.50.20';
+    },
+    eventListener: {
+      UpdateSettings: settings => {
+        listenerHost = settings.host ?? listenerHost;
+        calls.push(`listener:${listenerHost}`);
+        return true;
+      },
+      GetStatus: () => ({
+        host: listenerHost,
+        port: 6330,
+        isListening: false,
+        subscriptionUrl: `http://${listenerHost}:6330/sonos/{sonos-uuid}/{serviceName}`,
+        subscriptionCount: 0,
+      }),
+    },
+  });
   const device = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -388,7 +416,7 @@ test('bridge starts with SSDP discovery when no Sonos seed IP is configured', as
     manager: {
       Devices: unknown[];
       InitializeWithDiscovery: (timeoutSeconds: number) => Promise<boolean>;
-      InitializeFromDevice: (seedIp: string) => Promise<boolean>;
+      InitializeFromDevice: (seedIp: string, port?: number) => Promise<boolean>;
       CancelSubscription: () => void;
     };
     refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
@@ -398,8 +426,8 @@ test('bridge starts with SSDP discovery when no Sonos seed IP is configured', as
       calls.push(`auto:${timeoutSeconds}`);
       return true;
     },
-    InitializeFromDevice: async seedIp => {
-      calls.push(`seed:${seedIp}`);
+    InitializeFromDevice: async (seedIp, port) => {
+      calls.push(`seed:${seedIp}:${port}`);
       return true;
     },
     CancelSubscription: () => undefined,
@@ -411,7 +439,12 @@ test('bridge starts with SSDP discovery when no Sonos seed IP is configured', as
   try {
     await bridge.start();
 
-    assert.deepEqual(calls, ['auto:10']);
+    assert.deepEqual(calls, [
+      'discover:10',
+      'resolve:192.168.50.25',
+      'listener:192.168.50.20',
+      'seed:192.168.50.25:1400',
+    ]);
     assert.equal(bridge.discovery.mode, 'auto');
     assert.equal(bridge.discovery.status, 'ready');
   } finally {
@@ -420,8 +453,30 @@ test('bridge starts with SSDP discovery when no Sonos seed IP is configured', as
 });
 
 test('bridge starts from configured Sonos seed IP when provided', async () => {
-  const bridge = testBridge();
   const calls: string[] = [];
+  let listenerHost = '172.29.32.1';
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    listenerHostResolver: async sonosHost => {
+      calls.push(`resolve:${sonosHost}`);
+      return '192.168.50.20';
+    },
+    eventListener: {
+      UpdateSettings: settings => {
+        listenerHost = settings.host ?? listenerHost;
+        calls.push(`listener:${listenerHost}`);
+        return true;
+      },
+      GetStatus: () => ({
+        host: listenerHost,
+        port: 6330,
+        isListening: false,
+        subscriptionUrl: `http://${listenerHost}:6330/sonos/{sonos-uuid}/{serviceName}`,
+        subscriptionCount: 0,
+      }),
+    },
+  });
   const device = playbackDevice({
     Host: '192.168.50.25',
     Name: 'Playroom',
@@ -455,11 +510,81 @@ test('bridge starts from configured Sonos seed IP when provided', async () => {
   try {
     await bridge.start('192.168.50.25');
 
-    assert.deepEqual(calls, ['seed:192.168.50.25']);
+    assert.deepEqual(calls, [
+      'resolve:192.168.50.25',
+      'listener:192.168.50.20',
+      'seed:192.168.50.25',
+    ]);
     assert.equal(bridge.discovery.mode, 'seed');
     assert.equal(bridge.discovery.status, 'ready');
   } finally {
     bridge.stop();
+  }
+});
+
+test('explicit Sonos listener host overrides route-derived callback selection', async () => {
+  const previousListenerHost = process.env.SONOS_LISTENER_HOST;
+  process.env.SONOS_LISTENER_HOST = '192.168.50.99';
+  const calls: string[] = [];
+  let listenerHost = '172.29.32.1';
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    listenerHostResolver: async () => {
+      calls.push('resolve');
+      return '192.168.50.20';
+    },
+    eventListener: {
+      UpdateSettings: settings => {
+        listenerHost = settings.host ?? listenerHost;
+        calls.push(`listener:${listenerHost}`);
+        return true;
+      },
+      GetStatus: () => ({
+        host: listenerHost,
+        port: 6330,
+        isListening: false,
+        subscriptionUrl: `http://${listenerHost}:6330/sonos/{sonos-uuid}/{serviceName}`,
+        subscriptionCount: 0,
+      }),
+    },
+  });
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+  });
+  device.Coordinator = device;
+  (bridge as unknown as {
+    manager: {
+      Devices: unknown[];
+      InitializeFromDevice: (seedIp: string) => Promise<boolean>;
+      CancelSubscription: () => void;
+    };
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).manager = {
+    Devices: [device],
+    InitializeFromDevice: async seedIp => {
+      calls.push(`seed:${seedIp}`);
+      return true;
+    },
+    CancelSubscription: () => undefined,
+  };
+  (bridge as unknown as {
+    refreshSnapshot: (device: unknown, trigger: unknown) => Promise<void>;
+  }).refreshSnapshot = async () => undefined;
+
+  try {
+    await bridge.start('192.168.50.25');
+
+    assert.deepEqual(calls, ['listener:192.168.50.99', 'seed:192.168.50.25']);
+  } finally {
+    bridge.stop();
+    if (previousListenerHost === undefined) {
+      delete process.env.SONOS_LISTENER_HOST;
+    } else {
+      process.env.SONOS_LISTENER_HOST = previousListenerHost;
+    }
   }
 });
 

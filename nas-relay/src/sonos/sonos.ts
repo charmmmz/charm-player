@@ -1,4 +1,11 @@
-import { SonosEvents, SonosManager, type SonosDevice } from '@svrooij/sonos';
+import {
+  SonosDeviceDiscovery,
+  SonosEventListener,
+  SonosEvents,
+  SonosManager,
+  type SonosDevice,
+} from '@svrooij/sonos';
+import { createSocket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
 import https from 'node:https';
 import type { Logger } from 'pino';
@@ -60,6 +67,26 @@ export interface SonosLocalControlClient {
   playbackQuality(input: { host: string; playerId: string }): Promise<SonosLocalPlaybackQuality | null>;
 }
 
+export interface SonosDiscoveryPlayer {
+  host: string;
+  port: number;
+}
+
+export interface SonosDiscoveryClient {
+  SearchOne(timeoutSeconds?: number): Promise<SonosDiscoveryPlayer>;
+}
+
+export interface SonosEventListenerClient {
+  UpdateSettings(settings: { host?: string; port?: number }): boolean;
+  GetStatus(): {
+    host: string;
+    port: number;
+    isListening: boolean;
+    subscriptionUrl: string;
+    subscriptionCount: number;
+  };
+}
+
 export interface SonosBridgeOptions {
   localControl?: SonosLocalControlClient | null;
   artworkITunes?: ITunesArtworkLookupClient | null;
@@ -70,6 +97,9 @@ export interface SonosBridgeOptions {
   playbackWatchdogIntervalMs?: number;
   fullHouseWatchdogEveryCycles?: number;
   managerFactory?: () => SonosManager;
+  discoveryFactory?: () => SonosDiscoveryClient;
+  eventListener?: SonosEventListenerClient;
+  listenerHostResolver?: (sonosHost: string) => Promise<string>;
   topologyRecoveryDiscoveryTimeoutSeconds?: number;
 }
 
@@ -195,6 +225,57 @@ interface SonosTVAudioFormatSnapshot {
 
 const SONOS_LOCAL_CONTROL_PORT = 1443;
 const SONOS_LOCAL_CONTROL_API_KEY = '12345678-abcd-1234-5678-123456789000';
+const SONOS_ROUTE_PROBE_TIMEOUT_MS = 1_500;
+
+/**
+ * Ask the kernel which local IPv4 address it would use to reach a Sonos peer.
+ * Connecting a UDP socket performs route selection without sending traffic.
+ */
+export function localIPv4AddressForSonosPeer(sonosHost: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createSocket('udp4');
+    let settled = false;
+    const timer = setTimeout(() => {
+      finish(new Error(`route lookup for Sonos peer ${sonosHost} timed out`));
+    }, SONOS_ROUTE_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+
+    const finish = (err?: Error, address?: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      try {
+        socket.close();
+      } catch {
+        // The socket can already be closed after an asynchronous connect error.
+      }
+      if (err) {
+        reject(err);
+      } else if (address) {
+        resolve(address);
+      } else {
+        reject(new Error(`route lookup for Sonos peer ${sonosHost} returned no address`));
+      }
+    };
+
+    socket.once('error', err => {
+      finish(err);
+    });
+    socket.connect(9, sonosHost, () => {
+      try {
+        const address = socket.address();
+        if (typeof address === 'string' || address.family !== 'IPv4') {
+          finish(new Error(`route lookup for Sonos peer ${sonosHost} did not return IPv4`));
+          return;
+        }
+        finish(undefined, address.address);
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  });
+}
 
 class SonosLocalControlApiClient implements SonosLocalControlClient {
   private readonly groupIdsByPlayerId = new Map<string, string>();
@@ -296,6 +377,9 @@ class SonosLocalControlApiClient implements SonosLocalControlClient {
 export class SonosBridge extends EventEmitter {
   private manager: SonosManager;
   private readonly managerFactory: () => SonosManager;
+  private readonly discoveryFactory: () => SonosDiscoveryClient;
+  private readonly eventListener: SonosEventListenerClient;
+  private readonly listenerHostResolver: (sonosHost: string) => Promise<string>;
   private readonly snapshots = new Map<string, SonosGroupSnapshot>();
   private readonly refreshSequences = new Map<string, number>();
   private readonly localQualityLogSignatures = new Map<string, string>();
@@ -336,6 +420,9 @@ export class SonosBridge extends EventEmitter {
   constructor(log: Logger, options: SonosBridgeOptions = {}) {
     super();
     this.managerFactory = options.managerFactory ?? (() => new SonosManager());
+    this.discoveryFactory = options.discoveryFactory ?? (() => new SonosDeviceDiscovery());
+    this.eventListener = options.eventListener ?? SonosEventListener.DefaultInstance;
+    this.listenerHostResolver = options.listenerHostResolver ?? localIPv4AddressForSonosPeer;
     this.manager = this.managerFactory();
     this.log = log.child({ module: 'sonos' });
     this.localControl = options.localControl === undefined
@@ -401,13 +488,53 @@ export class SonosBridge extends EventEmitter {
 
   private async startFromSeed(seedIp: string): Promise<boolean> {
     this.log.info({ seedIp }, 'discovering Sonos household via seed IP');
+    await this.configureEventListenerForPeer(seedIp);
     return this.manager.InitializeFromDevice(seedIp);
   }
 
   private async startFromDiscovery(): Promise<boolean> {
     const timeoutSeconds = 10;
     this.log.info({ timeoutSeconds }, 'discovering Sonos household via SSDP');
-    return this.manager.InitializeWithDiscovery(timeoutSeconds);
+    const player = await this.discoveryFactory().SearchOne(timeoutSeconds);
+    await this.configureEventListenerForPeer(player.host);
+    return this.manager.InitializeFromDevice(player.host, player.port);
+  }
+
+  private async configureEventListenerForPeer(sonosHost: string): Promise<void> {
+    const configuredHost = process.env.SONOS_LISTENER_HOST?.trim();
+    let listenerHost = configuredHost;
+    let source = 'environment';
+
+    if (!listenerHost) {
+      source = 'route';
+      try {
+        listenerHost = await this.listenerHostResolver(sonosHost);
+      } catch (err) {
+        this.log.warn(
+          { err, sonosHost },
+          'could not determine the local Sonos event callback address; using library default',
+        );
+        return;
+      }
+    }
+
+    this.eventListener.UpdateSettings({ host: listenerHost });
+    const status = this.eventListener.GetStatus();
+    const context = {
+      sonosHost,
+      listenerHost: status.host,
+      listenerPort: status.port,
+      subscriptionUrl: status.subscriptionUrl,
+      source,
+    };
+    if (status.host !== listenerHost) {
+      this.log.warn(
+        { ...context, requestedListenerHost: listenerHost },
+        'Sonos event callback address did not apply',
+      );
+      return;
+    }
+    this.log.info(context, 'Sonos event callback address configured');
   }
 
   stop(): void {
