@@ -20,7 +20,8 @@ struct SonosRemoteMediaSessionExtension: RemoteMediaSessionExtension {
             await SonosRemoteMediaSessionRelayClient.report(
                 level: "info",
                 message: "session-create session=\(attributes.id) "
-                    + "animated=\(attributes.animatedArtworkURLString == nil ? "no" : "yes")",
+                    + "animated=\(attributes.animatedArtworkURLString == nil ? "no" : "yes") "
+                    + attributes.deviceDiagnostic,
                 attributes: attributes
             )
         }
@@ -39,6 +40,7 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
     )
 
     private var attributes: SonosRemoteMediaSessionAttributes
+    private(set) var devices: [MediaDevice]
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
     @ObservationIgnored private var pushTokenRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private var registeredPushTokenKey: String?
@@ -47,6 +49,8 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
 
     init(attributes: SonosRemoteMediaSessionAttributes) {
         self.attributes = attributes
+        self.devices = []
+        self.devices = makeMediaDevices(from: attributes)
     }
 
     func startObservingPushToken() {
@@ -113,7 +117,9 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
         return result
     }
 
-    var devices: [MediaDevice] {
+    private func makeMediaDevices(
+        from attributes: SonosRemoteMediaSessionAttributes
+    ) -> [MediaDevice] {
         let members = attributes.devices ?? []
         guard !members.isEmpty else {
             let currentVolume = attributes.volume
@@ -152,12 +158,17 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
     func update(_ attributes: SonosRemoteMediaSessionAttributes) {
         let previousAnimated = self.attributes.animatedArtworkURLString
         self.attributes = attributes
+        // Device membership can change without the track changing. Keep the
+        // protocol requirement as a directly observable stored property so
+        // NowPlaying receives an explicit mutation for grouping changes.
+        devices = makeMediaDevices(from: attributes)
         Task {
             await SonosRemoteMediaSessionRelayClient.report(
                 level: "info",
                 message: "session-update session=\(attributes.id) track=\(attributes.trackID) "
                     + "animated=\(attributes.animatedArtworkURLString == nil ? "no" : "yes") "
-                    + "animatedChanged=\(previousAnimated != attributes.animatedArtworkURLString)",
+                    + "animatedChanged=\(previousAnimated != attributes.animatedArtworkURLString) "
+                    + attributes.deviceDiagnostic,
                 attributes: attributes
             )
         }
@@ -445,6 +456,14 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
         if let index = attributes.devices?.firstIndex(where: { $0.id == member.id }) {
             attributes.devices?[index].volume = clamped
         }
+    }
+}
+
+@available(iOSApplicationExtension 27.0, *)
+private extension SonosRemoteMediaSessionAttributes {
+    var deviceDiagnostic: String {
+        let names = (devices ?? []).map(\.name)
+        return "devices=\(names.count)[\(names.joined(separator: "|"))]"
     }
 }
 

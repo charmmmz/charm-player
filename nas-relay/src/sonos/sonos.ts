@@ -3,6 +3,7 @@ import {
   SonosEventListener,
   SonosEvents,
   SonosManager,
+  ServiceEvents,
   type SonosDevice,
 } from '@svrooij/sonos';
 import { createSocket } from 'node:dgram';
@@ -140,6 +141,12 @@ interface AttachedDeviceListeners {
     event: SonosEvents;
     listener: (...args: any[]) => void;
   }>;
+}
+
+interface AttachedManagerTopologyListener {
+  manager: SonosManager;
+  events: EventEmitter;
+  listener: (data: unknown) => void;
 }
 
 const QUEUE_ARTWORK_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -405,6 +412,7 @@ export class SonosBridge extends EventEmitter {
   private readonly pendingVolumeWrites = new Map<string, PendingVolumeWrite>();
   private readonly attachedDeviceListenerKeys = new Set<string>();
   private readonly attachedDeviceListeners = new Map<string, AttachedDeviceListeners>();
+  private attachedManagerTopologyListener: AttachedManagerTopologyListener | null = null;
   private visibleTopologyCoordinatorKeys = new Set<string>();
   private topologyFilterReady = false;
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
@@ -566,6 +574,7 @@ export class SonosBridge extends EventEmitter {
     if (this.topologyRefreshTimer) clearTimeout(this.topologyRefreshTimer);
     this.topologyRefreshTimer = null;
     this.detachDeviceListeners();
+    this.detachManagerTopologyListener(this.manager);
     this.cancelManagerSubscription(this.manager);
   }
 
@@ -1195,6 +1204,8 @@ export class SonosBridge extends EventEmitter {
   }
 
   private attachManagerListeners(manager: SonosManager): void {
+    this.attachManagerTopologyListener(manager);
+
     for (const device of manager.Devices) {
       if (!shouldAttachSonosDeviceEvents(device)) continue;
       this.log.info(
@@ -1217,6 +1228,40 @@ export class SonosBridge extends EventEmitter {
       }
       this.scheduleTopologyRefresh();
     });
+  }
+
+  private attachManagerTopologyListener(manager: SonosManager): void {
+    this.detachManagerTopologyListener();
+    // SonosManager already owns the GENA subscription. Listening to its
+    // existing service emitter adds no second subscription or polling loop.
+    const zoneService = (manager as unknown as {
+      zoneService?: { Events?: EventEmitter };
+    }).zoneService;
+    const events = zoneService?.Events;
+    if (!events) {
+      this.log.debug('Sonos manager has no ZoneGroupTopology event emitter');
+      return;
+    }
+
+    const listener = (data: unknown): void => {
+      if (
+        typeof data !== 'object'
+        || data === null
+        || !Object.prototype.hasOwnProperty.call(data, 'ZoneGroupState')
+      ) {
+        return;
+      }
+      this.scheduleTopologyRefresh();
+    };
+    events.on(ServiceEvents.ServiceEvent, listener);
+    this.attachedManagerTopologyListener = { manager, events, listener };
+  }
+
+  private detachManagerTopologyListener(manager?: SonosManager): void {
+    const attached = this.attachedManagerTopologyListener;
+    if (!attached || (manager && attached.manager !== manager)) return;
+    attached.events.off(ServiceEvents.ServiceEvent, attached.listener);
+    this.attachedManagerTopologyListener = null;
   }
 
   private attachDeviceListeners(device: any): void {
@@ -1519,6 +1564,7 @@ export class SonosBridge extends EventEmitter {
   private replaceManager(nextManager: SonosManager): void {
     const previousManager = this.manager;
     this.detachDeviceListeners();
+    this.detachManagerTopologyListener(previousManager);
     this.manager = nextManager;
     this.cancelManagerSubscription(previousManager);
 

@@ -431,6 +431,8 @@ async function main(): Promise<void> {
         sent: result.sent,
         failed: result.failed,
         title: attributes.title,
+        deviceCount: attributes.devices?.length ?? 0,
+        deviceNames: attributes.devices?.map(device => device.name) ?? [],
         artworkURLString: attributes.artworkURLString ?? null,
         artworkFallbackURLString: attributes.artworkFallbackURLString ?? null,
         animatedArtworkURLString: attributes.animatedArtworkURLString ?? null,

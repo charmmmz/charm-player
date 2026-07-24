@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { SonosEvents, SonosManager } from '@svrooij/sonos';
+import { ServiceEvents, SonosEvents, SonosManager } from '@svrooij/sonos';
 import pino from 'pino';
 
 import {
@@ -373,6 +373,46 @@ test('bridge refreshes authoritative topology when a coordinator changes', async
   await delay(20);
 
   assert.equal(topologyRefreshes, 1);
+});
+
+test('bridge refreshes authoritative topology when an existing member rejoins a group', async () => {
+  const bridge = new SonosBridge(pino({ enabled: false }), {
+    localControl: null,
+    artworkResolver: null,
+    eventRefreshDebounceMs: 5,
+  });
+  const deviceEvents = new EventEmitter();
+  const topologyEvents = new EventEmitter();
+  const device = {
+    Name: 'Playroom',
+    Host: '192.168.50.249',
+    Uuid: 'rincon-playroom',
+    Events: deviceEvents,
+  };
+  const manager = {
+    Devices: [device],
+    zoneService: { Events: topologyEvents },
+    CancelSubscription: () => undefined,
+  } as unknown as SonosManager;
+  (bridge as unknown as { manager: SonosManager }).manager = manager;
+  let topologyRefreshes = 0;
+  (bridge as unknown as { refreshTopologySnapshots: () => Promise<void> }).refreshTopologySnapshots = async () => {
+    topologyRefreshes += 1;
+  };
+
+  (bridge as unknown as { attachManagerListeners: (manager: SonosManager) => void })
+    .attachManagerListeners(manager);
+
+  // Rejoining an already-known speaker does not necessarily emit a device
+  // Coordinator/GroupName event, but the household topology service does.
+  topologyEvents.emit(ServiceEvents.ServiceEvent, {
+    ZoneGroupState: [{ coordinator: 'rincon-playroom', members: ['rincon-playroom', 'rincon-move'] }],
+  });
+  await delay(20);
+
+  assert.equal(topologyRefreshes, 1);
+  bridge.stop();
+  assert.equal(topologyEvents.listenerCount(ServiceEvents.ServiceEvent), 0);
 });
 
 test('bridge starts with SSDP discovery when no Sonos seed IP is configured', async () => {

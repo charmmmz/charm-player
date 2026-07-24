@@ -464,6 +464,8 @@ function summarizeNowPlayingAttributes(
     artist: attributes.artist,
     isPlaying: attributes.isPlaying,
     duration: Math.round(attributes.duration),
+    deviceCount: attributes.devices?.length ?? 0,
+    deviceNames: attributes.devices?.map(device => device.name) ?? [],
     hasPrimaryArtwork: Boolean(attributes.artworkURLString),
     hasFallbackArtwork: Boolean(attributes.artworkFallbackURLString),
   };
