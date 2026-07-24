@@ -7,6 +7,7 @@ export function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> 
     trackTitle: snap.trackTitle,
     artist: snap.artist,
     album: snap.album,
+    trackUri: snap.trackUri ?? null,
     albumArtUri: snap.albumArtUri,
     albumArtFallbackUri: snap.albumArtFallbackUri ?? null,
     isPlaying: snap.isPlaying,

@@ -35,6 +35,7 @@ test('playback state route returns the cached snapshot without pulling Sonos', a
     assert.equal(body.source, 'cached');
     assert.equal(body.state.groupId, '192.168.50.25');
     assert.equal(body.state.trackTitle, 'Song A');
+    assert.equal(body.state.trackUri, 'x-sonos-http:song%3a1440857781.mp4?sid=204');
     assert.equal(body.state.albumArtUri, 'http://192.168.50.25:1400/getaa?u=x');
   } finally {
     await new Promise<void>((resolve, reject) => {
@@ -50,6 +51,7 @@ function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapsh
     trackTitle: 'Song A',
     artist: 'Artist A',
     album: 'Album A',
+    trackUri: 'x-sonos-http:song%3a1440857781.mp4?sid=204',
     albumArtUri: 'http://192.168.50.25:1400/getaa?u=x',
     isPlaying: true,
     playbackSourceRaw: 'appleMusic',

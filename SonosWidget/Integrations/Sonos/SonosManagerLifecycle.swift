@@ -188,6 +188,7 @@ extension SonosManager {
         cachedCloudQuality = nil
         lastEnrichedTrackKey = nil
         lastCloudQualityAttempt = .distantPast
+        relayPlaybackStateActive = false
         lastLiveActivityRelayPreferencesSignature = nil
         if !userInitiatedLiveActivityResume {
             pushLiveActivityRelayPreferencesIfNeeded(force: true)

@@ -744,27 +744,64 @@ enum RelayClient {
         let trackTitle: String
         let artist: String
         let album: String
+        let trackUri: String?
         let albumArtUri: String?
+        let albumArtFallbackUri: String?
         let isPlaying: Bool
+        let transportStateRaw: String?
+        let groupVolume: Int?
         let playbackSourceRaw: String?
+        let tvAudioFormatRawCode: Int?
+        let tvAudioFormatLabel: String?
+        let tvHasSignal: Bool?
         let audioQualityLabel: String?
         let soundbarNightMode: Bool?
         let soundbarSpeechEnhancementRawLevel: Int?
         let positionSeconds: Double
         let durationSeconds: Double
         let groupMemberCount: Int
+        let sampledAt: String?
 
         var trackInfo: TrackInfo {
-            TrackInfo(
+            let source = playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+            var info = TrackInfo(
                 title: trackTitle,
                 artist: artist,
                 album: album,
-                albumArtURL: albumArtUri,
+                albumArtURL: albumArtFallbackUri ?? albumArtUri,
                 duration: Self.sonosTime(from: durationSeconds),
                 position: Self.sonosTime(from: positionSeconds),
-                source: playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown,
-                audioQuality: audioQualityLabel.map { AudioQuality(codec: $0) }
+                source: source,
+                audioQuality: source == .tv
+                    ? nil
+                    : audioQualityLabel.map { AudioQuality(codec: $0) },
+                trackURI: trackUri
             )
+            if source == .tv,
+               let rawCode = tvAudioFormatRawCode,
+               let label = tvAudioFormatLabel {
+                info.tvFormat = TVAudioFormat(rawCode: rawCode, label: label)
+            }
+            return info
+        }
+
+        var transportState: TransportState {
+            if let transportStateRaw,
+               let state = TransportState(rawValue: transportStateRaw) {
+                return state
+            }
+            return isPlaying ? .playing : .stopped
+        }
+
+        func effectivePosition(at now: Date = Date()) -> Double {
+            guard isPlaying,
+                  let sampledAt,
+                  let sampledDate = try? Date(sampledAt, strategy: .iso8601) else {
+                return max(0, positionSeconds)
+            }
+            let elapsed = max(0, now.timeIntervalSince(sampledDate))
+            let projected = max(0, positionSeconds + elapsed)
+            return durationSeconds > 0 ? min(projected, durationSeconds) : projected
         }
 
         private static func sonosTime(from seconds: Double) -> String {

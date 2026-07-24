@@ -129,26 +129,42 @@ final class LiveActivityUpdatePolicyTests: XCTestCase {
         XCTAssertEqual(secondPlan.sleepSeconds, 15)
     }
 
-    func testRelayBackedLANEventsReduceWholeHousePolling() {
+    func testRelayPlaybackStateUsesFastCachedRefreshWithoutWholeHousePolling() {
         let initialPlan = SonosManager.autoRefreshPlan(
             transportBackend: .lan,
             hasLANEventSubscriptions: true,
             relayAvailable: true,
+            relayPlaybackStateActive: true,
             cycle: 0
         )
         let nextPlan = SonosManager.autoRefreshPlan(
             transportBackend: .lan,
             hasLANEventSubscriptions: true,
             relayAvailable: true,
+            relayPlaybackStateActive: true,
             cycle: 1
         )
 
         XCTAssertTrue(initialPlan.refreshState)
         XCTAssertTrue(initialPlan.refreshGroups)
-        XCTAssertEqual(initialPlan.sleepSeconds, 300)
+        XCTAssertEqual(initialPlan.sleepSeconds, 3)
         XCTAssertTrue(nextPlan.refreshState)
         XCTAssertFalse(nextPlan.refreshGroups)
-        XCTAssertEqual(nextPlan.sleepSeconds, 300)
+        XCTAssertEqual(nextPlan.sleepSeconds, 3)
+    }
+
+    func testRelayPlaybackStateFailureUsesBoundedRetryCadence() {
+        let plan = SonosManager.autoRefreshPlan(
+            transportBackend: .lan,
+            hasLANEventSubscriptions: true,
+            relayAvailable: true,
+            relayPlaybackStateActive: false,
+            cycle: 1
+        )
+
+        XCTAssertTrue(plan.refreshState)
+        XCTAssertFalse(plan.refreshGroups)
+        XCTAssertEqual(plan.sleepSeconds, 15)
     }
 
     func testRelayOwnedLiveActivitySkipsBackgroundKeepalive() {

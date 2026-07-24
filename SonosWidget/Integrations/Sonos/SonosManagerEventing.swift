@@ -221,7 +221,9 @@ extension SonosManager {
                 }
             }
             if services.contains(.avTransport) || services.contains(.contentDirectory) {
-                await self.refreshStateLAN()
+                // Relay snapshots are the preferred foreground read path when
+                // available; refreshState() falls back to this same LAN path.
+                await self.refreshState()
             } else if services.contains(.renderingControl) {
                 await self.refreshVolumeStateLAN(
                     includeSoundbarEQ: includeSoundbarEQ

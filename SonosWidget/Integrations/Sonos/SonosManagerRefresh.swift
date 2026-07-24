@@ -19,6 +19,10 @@ extension SonosManager {
     func refreshState(expectedSpeakerID: String) async {
         guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
 
+        if await refreshStateFromRelayIfAvailable(expectedSpeakerID: expectedSpeakerID) {
+            return
+        }
+
         switch transportBackend {
         case .lan:
             await refreshStateLAN(expectedSpeakerID: expectedSpeakerID)
@@ -38,6 +42,122 @@ extension SonosManager {
                 }
             }
         }
+    }
+
+    func refreshStateFromRelayIfAvailable(expectedSpeakerID: String) async -> Bool {
+        guard RelayManager.shared.isAvailable,
+              let relayURL = RelayManager.shared.url,
+              let groupId = selectedSpeaker?.playbackIP else {
+            relayPlaybackStateActive = false
+            return false
+        }
+
+        do {
+            guard let state = try await RelayClient.fetchPlaybackState(
+                baseURL: relayURL,
+                groupId: groupId
+            ) else {
+                relayPlaybackStateActive = false
+                return false
+            }
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID),
+                  state.groupId == groupId else {
+                return false
+            }
+
+            await applyRelayPlaybackState(
+                state,
+                expectedSpeakerID: expectedSpeakerID
+            )
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else {
+                return false
+            }
+            let wasActive = relayPlaybackStateActive
+            relayPlaybackStateActive = true
+            if !wasActive {
+                SonosLog.info(
+                    .relay,
+                    "playback-state source active group=\(groupId) relay=\(relayURL.absoluteString)"
+                )
+            }
+            return true
+        } catch {
+            guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else {
+                return false
+            }
+            relayPlaybackStateActive = false
+            SonosLog.debug(
+                .relay,
+                "playback-state read failed group=\(groupId) error=\(error.localizedDescription); " +
+                "falling back to \(transportBackend)"
+            )
+            return false
+        }
+    }
+
+    func applyRelayPlaybackState(
+        _ state: RelayClient.RelayPlaybackState,
+        expectedSpeakerID: String,
+        now: Date = Date()
+    ) async {
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+
+        let incomingTransportState = state.transportState
+        var incomingTrackInfo = state.trackInfo
+        if incomingTrackInfo.source == .appleMusic,
+           let artworkURL = incomingTrackInfo.albumArtURL,
+           !QueueArtPrefetchPolicy.isLocalSonosArtworkURL(artworkURL) {
+            incomingTrackInfo.albumArtURL =
+                PlaybackArtworkImageSize.nowPlayingURLString(from: artworkURL)
+        }
+        if incomingTrackInfo.title == trackInfo?.title,
+           incomingTrackInfo.artist == trackInfo?.artist,
+           incomingTrackInfo.album == trackInfo?.album {
+            // Older relays do not include trackUri, and relay snapshots do not
+            // carry the MusicKit-derived artwork colors. Preserve both while
+            // the same track is playing.
+            incomingTrackInfo.trackURI = incomingTrackInfo.trackURI ?? trackInfo?.trackURI
+            incomingTrackInfo.artworkThemeColors =
+                incomingTrackInfo.artworkThemeColors ?? trackInfo?.artworkThemeColors
+        }
+        var incomingPresentationTrackInfo = incomingTrackInfo
+        incomingPresentationTrackInfo.position = nil
+        var currentPresentationTrackInfo = trackInfo
+        currentPresentationTrackInfo?.position = nil
+        let incomingVolume = state.groupVolume ?? volume
+        let incomingNightMode = state.soundbarNightMode ?? nightMode
+        let incomingSpeechEnhancement = state.soundbarSpeechEnhancementRawLevel
+            .map { SpeechEnhancementLevel.from(rawLevel: $0) }
+            ?? speechEnhancement
+        let requiresPresentationUpdate = !relayPlaybackStateActive
+            || incomingTransportState != transportState
+            || incomingPresentationTrackInfo != currentPresentationTrackInfo
+            || incomingVolume != volume
+            || incomingNightMode != nightMode
+            || incomingSpeechEnhancement != speechEnhancement
+
+        applyIncomingTransportState(incomingTransportState)
+        trackInfo = incomingTrackInfo
+        positionSeconds = state.effectivePosition(at: now)
+        durationSeconds = state.durationSeconds
+        positionFetchedAt = now
+        volume = incomingVolume
+        nightMode = incomingNightMode
+        speechEnhancement = incomingSpeechEnhancement
+
+        consecutiveFailures = 0
+        connectionState = .connected
+        errorMessage = nil
+        ensureEventSubscriptionsIfNeeded()
+        managePositionTimer()
+        guard requiresPresentationUpdate else { return }
+
+        syncCurrentGroupStatusFromPlaybackState()
+        updateSharedCache()
+        await loadAlbumArt()
+        guard speakerSelectionMatches(expectedSpeakerID: expectedSpeakerID) else { return }
+        MusicAmbienceManager.shared.receive(snapshot: musicAmbienceSnapshot())
+        manageLiveActivity()
     }
 
     /// Refresh after a handoff using the backend captured when the transfer

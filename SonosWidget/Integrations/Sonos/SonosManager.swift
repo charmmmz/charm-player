@@ -226,8 +226,10 @@ final class SonosManager {
     static let lanUnsubscribedGroupRefreshEveryCycles = 4
     static let lanEventWatchdogRefreshIntervalSeconds = 120
     static let lanEventGroupRefreshEveryCycles = 5
-    static let relayBackedLANEventWatchdogRefreshIntervalSeconds = 300
-    static let relayBackedGroupRefreshEveryCycles = 3
+    static let relayPlaybackRefreshIntervalSeconds = 3
+    static let relayPlaybackRetryIntervalSeconds = 15
+    static let relayPlaybackGroupRefreshEveryActiveCycles = 300
+    static let relayPlaybackGroupRefreshEveryRetryCycles = 60
     static let sonosEventSubscriptionTimeout = 600
     static let sonosEventServices: [SonosEventService] = [
         .avTransport,
@@ -281,6 +283,10 @@ final class SonosManager {
     /// Timestamp of the last real Sonos position fetch, used to keep timerInterval accurate.
     var positionFetchedAt: Date = .now
     var lastHomeSpeakerCardsRefreshAt: Date?
+    /// True after the selected group has successfully loaded from the relay's
+    /// cached playback-state endpoint. It controls only refresh cadence;
+    /// playback commands continue to use the probed LAN/Cloud backend.
+    var relayPlaybackStateActive = false
 
     /// Cloud API group ID resolved for the currently selected speaker.
     var cloudGroupId: String?

@@ -781,16 +781,24 @@ extension SonosManager {
         transportBackend: TransportBackend,
         hasLANEventSubscriptions: Bool,
         relayAvailable: Bool = false,
+        relayPlaybackStateActive: Bool = false,
         cycle: Int
     ) -> AutoRefreshPlan {
+        if relayAvailable {
+            return AutoRefreshPlan(
+                refreshState: true,
+                refreshGroups: cycle.isMultiple(
+                    of: relayPlaybackStateActive
+                        ? relayPlaybackGroupRefreshEveryActiveCycles
+                        : relayPlaybackGroupRefreshEveryRetryCycles
+                ),
+                sleepSeconds: relayPlaybackStateActive
+                    ? relayPlaybackRefreshIntervalSeconds
+                    : relayPlaybackRetryIntervalSeconds
+            )
+        }
+
         if transportBackend == .lan && hasLANEventSubscriptions {
-            if relayAvailable {
-                return AutoRefreshPlan(
-                    refreshState: true,
-                    refreshGroups: cycle.isMultiple(of: relayBackedGroupRefreshEveryCycles),
-                    sleepSeconds: relayBackedLANEventWatchdogRefreshIntervalSeconds
-                )
-            }
             return AutoRefreshPlan(
                 refreshState: true,
                 refreshGroups: cycle.isMultiple(of: lanEventGroupRefreshEveryCycles),
@@ -825,6 +833,37 @@ extension SonosManager {
         startLiveActivityPushToStartObservers()
 
         groupRefreshCounter = 0
+        startAutoRefreshLoop()
+
+        // Start background keepalive when app goes to background (while Live Activity is running).
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.startBackgroundKeepalive() }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopBackgroundKeepalive()
+                // LAN reachability may have flipped while we were in the
+                // background (user left home / came back). Invalidate and
+                // probe immediately, then rebuild subscriptions before the
+                // Relay-preferred refresh loop resumes.
+                self?.invalidateBackend()
+                _ = await self?.probeBackend()
+                self?.ensureEventSubscriptionsIfNeeded()
+                self?.restartAutoRefreshLoop()
+            }
+        }
+    }
+
+    func restartAutoRefreshLoop() {
+        guard refreshTask != nil else { return }
+        refreshTask?.cancel()
+        refreshTask = nil
+        startAutoRefreshLoop()
+    }
+
+    private func startAutoRefreshLoop() {
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -832,6 +871,7 @@ extension SonosManager {
                     transportBackend: self.transportBackend,
                     hasLANEventSubscriptions: self.hasActiveLANEventSubscriptions,
                     relayAvailable: RelayManager.shared.isAvailable,
+                    relayPlaybackStateActive: self.relayPlaybackStateActive,
                     cycle: self.groupRefreshCounter
                 )
                 if plan.refreshState {
@@ -848,26 +888,10 @@ extension SonosManager {
                     transportBackend: self.transportBackend,
                     hasLANEventSubscriptions: self.hasActiveLANEventSubscriptions,
                     relayAvailable: RelayManager.shared.isAvailable,
+                    relayPlaybackStateActive: self.relayPlaybackStateActive,
                     cycle: self.groupRefreshCounter
                 )
                 try? await Task.sleep(for: .seconds(nextCadence.sleepSeconds))
-            }
-        }
-
-        // Start background keepalive when app goes to background (while Live Activity is running).
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.startBackgroundKeepalive() }
-        }
-        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.stopBackgroundKeepalive()
-                // LAN reachability may have flipped while we were in the
-                // background (user left home / came back). Invalidate the
-                // cached backend so the next command re-probes.
-                self?.invalidateBackend()
-                _ = await self?.probeBackend()
             }
         }
     }

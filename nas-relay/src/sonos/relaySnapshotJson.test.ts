@@ -15,6 +15,7 @@ test('relay snapshot JSON includes TV soundbar state for command responses', () 
     soundbarSpeechEnhancementRawLevel: 3,
     groupVolume: 34,
     transportStateRaw: 'PLAYING',
+    trackUri: 'x-sonos-http:song%3a1440857781.mp4?sid=204',
     groupMembers: [{
       id: 'rincon-playroom', name: 'Playroom', host: '192.168.50.25', isCoordinator: true, volume: 21,
     }],
@@ -29,6 +30,7 @@ test('relay snapshot JSON includes TV soundbar state for command responses', () 
   assert.equal(json.soundbarSpeechEnhancementRawLevel, 3);
   assert.equal(json.groupVolume, 34);
   assert.equal(json.transportStateRaw, 'PLAYING');
+  assert.equal(json.trackUri, 'x-sonos-http:song%3a1440857781.mp4?sid=204');
   assert.deepEqual(json.groupMembers, [{
     id: 'rincon-playroom', name: 'Playroom', host: '192.168.50.25', isCoordinator: true, volume: 21,
   }]);

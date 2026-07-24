@@ -46,6 +46,11 @@ struct ContentView: View {
             HueAmbienceStore.shared.isEnabled = running
             MusicAmbienceManager.shared.refreshStatus()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .relayAvailabilityChanged)) { _ in
+            // Cancel any older LAN watchdog sleep so Relay availability takes
+            // effect immediately and establishes the new fast cached cadence.
+            manager.restartAutoRefreshLoop()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             routePendingAppleMusicShareToHomeIfNeeded()
             syncPlayerOrientationPolicy()

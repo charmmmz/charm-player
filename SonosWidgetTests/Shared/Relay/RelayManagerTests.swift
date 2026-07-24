@@ -228,15 +228,23 @@ final class RelayManagerTests: XCTestCase {
           "trackTitle": "TV",
           "artist": "Live audio",
           "album": "",
+          "trackUri": "x-sonos-htastream:RINCON_1:spdif",
           "albumArtUri": null,
+          "albumArtFallbackUri": null,
           "isPlaying": true,
+          "transportStateRaw": "PLAYING",
+          "groupVolume": 18,
           "playbackSourceRaw": "tv",
+          "tvAudioFormatRawCode": 84934678,
+          "tvAudioFormatLabel": "Multichannel PCM 5.1",
+          "tvHasSignal": true,
           "soundbarNightMode": true,
           "soundbarSpeechEnhancementRawLevel": 3,
           "audioQualityLabel": "Dolby Atmos · MAT",
           "positionSeconds": 0,
           "durationSeconds": 0,
-          "groupMemberCount": 1
+          "groupMemberCount": 1,
+          "sampledAt": "2026-07-24T05:46:13.000Z"
         }
         """.utf8)
 
@@ -244,6 +252,11 @@ final class RelayManagerTests: XCTestCase {
 
         XCTAssertEqual(state.soundbarNightMode, true)
         XCTAssertEqual(state.soundbarSpeechEnhancementRawLevel, 3)
+        XCTAssertEqual(state.transportState, .playing)
+        XCTAssertEqual(state.groupVolume, 18)
+        XCTAssertEqual(state.trackInfo.trackURI, "x-sonos-htastream:RINCON_1:spdif")
+        XCTAssertEqual(state.trackInfo.tvFormat?.label, "Multichannel PCM 5.1")
+        XCTAssertNil(state.trackInfo.audioQuality)
     }
 
     func testPlaybackStateURLUsesRelayBaseURLAndCoordinatorGroup() throws {
@@ -276,15 +289,20 @@ final class RelayManagerTests: XCTestCase {
             "trackTitle": "Song A",
             "artist": "Artist A",
             "album": "Album A",
+            "trackUri": "x-sonos-http:song%3a1440857781.mp4?sid=204",
             "albumArtUri": "http://192.168.50.25:1400/getaa?u=x",
+            "albumArtFallbackUri": "https://example.com/cover.jpg",
             "isPlaying": true,
+            "transportStateRaw": "PLAYING",
+            "groupVolume": 22,
             "playbackSourceRaw": "appleMusic",
             "audioQualityLabel": "Lossless",
             "soundbarNightMode": null,
             "soundbarSpeechEnhancementRawLevel": null,
             "positionSeconds": 42,
             "durationSeconds": 240,
-            "groupMemberCount": 2
+            "groupMemberCount": 2,
+            "sampledAt": "2026-07-24T05:46:13.000Z"
           }
         }
         """.utf8)
@@ -294,8 +312,19 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertTrue(response.ok)
         XCTAssertEqual(response.source, "cached")
         XCTAssertEqual(response.state?.trackTitle, "Song A")
+        XCTAssertEqual(
+            response.state?.trackInfo.trackURI,
+            "x-sonos-http:song%3a1440857781.mp4?sid=204"
+        )
         XCTAssertEqual(response.state?.albumArtUri, "http://192.168.50.25:1400/getaa?u=x")
+        XCTAssertEqual(response.state?.trackInfo.albumArtURL, "https://example.com/cover.jpg")
         XCTAssertEqual(response.state?.groupMemberCount, 2)
+        XCTAssertEqual(
+            response.state?.effectivePosition(
+                at: try Date("2026-07-24T05:46:23.000Z", strategy: .iso8601)
+            ),
+            52
+        )
     }
 
     func testLiveActivityCommandRouteUsesRegisteredRelayTokenAndCoordinatorGroup() throws {

@@ -4,6 +4,7 @@ import Darwin
 
 extension Notification.Name {
     static let hueAmbienceRelayRunningChanged = Notification.Name("hueAmbienceRelayRunningChanged")
+    static let relayAvailabilityChanged = Notification.Name("relayAvailabilityChanged")
 }
 
 @MainActor
@@ -63,7 +64,27 @@ final class RelayManager {
     private(set) var urlString: String = ""
     private(set) var discoveredURLString: String?
     private(set) var discoveredRelayURLStrings: [String] = []
-    private(set) var status: Status = .disabled
+    private(set) var status: Status = .disabled {
+        didSet {
+            let wasAvailable: Bool
+            if case .connected = oldValue {
+                wasAvailable = true
+            } else {
+                wasAvailable = false
+            }
+            let isAvailable: Bool
+            if case .connected = status {
+                isAvailable = true
+            } else {
+                isAvailable = false
+            }
+            guard wasAvailable != isAvailable else { return }
+            NotificationCenter.default.post(
+                name: .relayAvailabilityChanged,
+                object: isAvailable
+            )
+        }
+    }
     private(set) var relaySonos: RelayClient.HealthResponse.Sonos?
     private(set) var relayAPNs: RelayClient.HealthResponse.APNs?
     private(set) var relayDiscoveryMessage: String?
