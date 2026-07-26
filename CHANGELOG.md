@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog 1.1.0], and versioned components follow
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-26
+
 ### Added
 
 - Relay playback snapshots now preserve structured Sonos audio-quality details,
@@ -33,5 +35,7 @@ The format is based on [Keep a Changelog 1.1.0], and versioned components follow
 - TV Remote Media Sessions retain the negotiated HDMI/eARC audio format through
   momentary silence and end only for a true no-input state.
 
+[Unreleased]: https://github.com/charmmmz/charm-player/compare/nas-relay-v0.1.0...HEAD
+[0.1.0]: https://github.com/charmmmz/charm-player/releases/tag/nas-relay-v0.1.0
 [Keep a Changelog 1.1.0]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning 2.0.0]: https://semver.org/spec/v2.0.0.html
