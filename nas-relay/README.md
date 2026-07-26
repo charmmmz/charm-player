@@ -106,6 +106,9 @@ deploy it with Docker Compose or Portainer. This stack runs two relays:
 
 Use the GitHub Container Registry image by default. Mainland China users can
 replace each `image:` line with the Aliyun ACR line shown in the comments.
+The `latest` examples track stable releases only. Ordinary `main` builds publish
+`edge` plus `sha-<commit>` snapshots; creating a `nas-relay-v0.1.0` Git tag
+matching `nas-relay/package.json` publishes `0.1.0` and moves `latest`.
 
 ```yaml
 services:
