@@ -2,11 +2,8 @@ name: Build nas-relay image
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - nas-relay/**
-      - .github/workflows/nas-relay-image.yml
+    tags:
+      - "nas-relay-v*"
   pull_request:
     paths:
       - nas-relay/**
@@ -34,6 +31,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Verify relay release version
+        if: startsWith(github.ref, 'refs/tags/nas-relay-v')
+        run: |
+          package_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' nas-relay/package.json | head -1)
+          tag_version="${GITHUB_REF_NAME#nas-relay-v}"
+          if [ -z "$package_version" ] || [ "$package_version" != "$tag_version" ]; then
+            echo "::error::Git tag nas-relay-v${tag_version} does not match nas-relay/package.json ${package_version:-missing}."
+            exit 1
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -41,7 +48,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/nas-relay-v')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -54,8 +61,9 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=match,pattern=nas-relay-v(.*),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/nas-relay-v') }}
             type=sha,prefix=sha-
 
       - name: Build and optionally push image
@@ -64,7 +72,7 @@ jobs:
           context: ./nas-relay
           file: ./nas-relay/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/nas-relay-v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
