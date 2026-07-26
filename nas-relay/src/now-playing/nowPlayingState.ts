@@ -16,9 +16,17 @@ export function shouldSendNowPlayingStart(
 }
 
 export function isNowPlayingActive(snap: SonosGroupSnapshot): boolean {
-  if (!snap.trackTitle.trim()) return false;
   const state = snap.transportStateRaw?.trim().toUpperCase() ?? '';
-  return snap.isPlaying || state === 'PAUSED_PLAYBACK' || state === 'TRANSITIONING';
+  const transportActive = snap.isPlaying
+    || state === 'PAUSED_PLAYBACK'
+    || state === 'TRANSITIONING';
+  if (snap.playbackSourceRaw === 'tv') {
+    return transportActive && (
+      snap.tvHasSignal === true
+      || isNegotiatedSilentTVFormat(snap.tvAudioFormatRawCode)
+    );
+  }
+  return Boolean(snap.trackTitle.trim()) && transportActive;
 }
 
 export function buildNowPlayingAttributes(
@@ -27,12 +35,17 @@ export function buildNowPlayingAttributes(
   animatedArtworkURLString: string | null = null,
   sessionGeneration: string | null = null,
 ): NowPlayingAttributes {
-  const duration = Math.max(0, finite(snap.durationSeconds));
+  const isTV = snap.playbackSourceRaw === 'tv';
+  const duration = isTV ? 0 : Math.max(0, finite(snap.durationSeconds));
   const elapsedTime = Math.min(
-    Math.max(0, finite(snap.positionSeconds)),
+    isTV ? 0 : Math.max(0, finite(snap.positionSeconds)),
     duration > 0 ? duration : Number.MAX_SAFE_INTEGER,
   );
-  const artwork = nowPlayingArtworkURLs(snap, target.relayURLString);
+  const artwork = isTV
+    ? { primary: null, fallback: null }
+    : nowPlayingArtworkURLs(snap, target.relayURLString);
+  const title = isTV ? 'TV Audio' : snap.trackTitle;
+  const artist = isTV ? tvNowPlayingFormatLabel(snap) : snap.artist;
 
   return {
     id: target.sessionId || `sonos:${snap.groupId}`,
@@ -42,14 +55,15 @@ export function buildNowPlayingAttributes(
     devices: nowPlayingDevices(snap),
     trackID: snap.trackUri?.trim()
       || [snap.trackTitle, snap.artist, snap.album].join('|'),
-    title: snap.trackTitle,
-    artist: snap.artist,
-    album: snap.album,
+    title,
+    artist,
+    album: isTV ? '' : snap.album,
     ...(artwork.primary ? { artworkURLString: artwork.primary } : {}),
     ...(artwork.fallback ? { artworkFallbackURLString: artwork.fallback } : {}),
-    ...(animatedArtworkURLString ? { animatedArtworkURLString } : {}),
-    isLiveStream: isLiveStream(snap),
-    isPlaying: snap.isPlaying,
+    ...(!isTV && animatedArtworkURLString ? { animatedArtworkURLString } : {}),
+    playbackSourceRaw: snap.playbackSourceRaw ?? null,
+    isLiveStream: isTV || isLiveStream(snap),
+    isPlaying: isTV ? true : snap.isPlaying,
     elapsedTime,
     duration,
     timestamp: snap.sampledAt.getTime() / 1000,
@@ -220,6 +234,18 @@ function isLiveStream(snap: SonosGroupSnapshot): boolean {
   if (snap.durationSeconds <= 0) return true;
   const uri = snap.trackUri?.toLowerCase() ?? '';
   return uri.startsWith('x-sonosapi-stream:') || uri.startsWith('x-sonosapi-hls:');
+}
+
+function isNegotiatedSilentTVFormat(rawCode: number | null | undefined): boolean {
+  return rawCode === 33554454 || rawCode === 84934678;
+}
+
+function tvNowPlayingFormatLabel(snap: SonosGroupSnapshot): string {
+  const quality = snap.audioQualityLabel?.trim();
+  if (quality) return quality;
+  const raw = snap.tvAudioFormatLabel?.trim();
+  if (raw) return raw.replace(/\s+no audio$/i, '');
+  return 'TV Audio';
 }
 
 function finite(value: number): number {

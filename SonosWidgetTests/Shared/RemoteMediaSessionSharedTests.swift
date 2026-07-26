@@ -3,6 +3,39 @@ import XCTest
 @testable import SonosWidget
 
 final class RemoteMediaSessionSharedTests: XCTestCase {
+    @available(iOS 27.0, *)
+    func testTVSessionPresentationPolicyUsesLiveDurationAndNoTransportCommands() {
+        let attributes = SonosRemoteMediaSessionAttributes(
+            id: "sonos-v20:192.168.50.78",
+            sessionGeneration: "generation-a",
+            groupID: "192.168.50.78",
+            speakerName: "Home Theater",
+            devices: nil,
+            trackID: "x-sonos-htastream:RINCON_HOME_THEATER:spdif",
+            title: "TV Audio",
+            artist: "Multichannel PCM · 5.1",
+            album: "",
+            artworkURLString: nil,
+            artworkFallbackURLString: nil,
+            animatedArtworkURLString: nil,
+            playbackSourceRaw: "tv",
+            isLiveStream: true,
+            isPlaying: true,
+            elapsedTime: 0,
+            duration: 0,
+            timestamp: 1_800_000_000,
+            volume: 0.25,
+            clientID: "phone-a",
+            relayURLString: "http://192.168.50.20:8789",
+            relayCommandToken: "token-a"
+        )
+
+        XCTAssertTrue(attributes.isTVSource)
+        XCTAssertTrue(attributes.usesLiveDuration)
+        XCTAssertFalse(attributes.supportsPlaybackCommands)
+        XCTAssertFalse(attributes.supportsTrackNavigation)
+    }
+
     @MainActor
     func testRegistrationLedgerCoalescesInflightAndPersistsRecentSuccess() {
         let suiteName = "RemoteMediaSessionSharedTests.\(UUID().uuidString)"

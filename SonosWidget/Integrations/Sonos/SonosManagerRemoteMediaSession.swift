@@ -23,11 +23,12 @@ extension SonosManager {
             preferredPeerHost: groupID
         )
         let artworkURLs = remoteMediaSessionArtworkURLs(
-            sourceURLString: trackInfo.albumArtURL,
+            sourceURLString: trackInfo.source == .tv ? nil : trackInfo.albumArtURL,
             relayURLString: relayURLString
         )
         let devices = remoteMediaSessionDevices(fallbackSpeaker: speaker)
-        let sessionID = "sonos-v19:\(groupID)"
+        let isTVSource = trackInfo.source == .tv
+        let sessionID = "sonos-v20:\(groupID)"
         let attributes = SonosRemoteMediaSessionAttributes(
             // Bump the session namespace when the extension representation or
             // Codable contract changes so iOS doesn't reuse a cached process.
@@ -39,16 +40,19 @@ extension SonosManager {
             speakerName: speaker.name,
             devices: devices,
             trackID: trackID,
-            title: trackInfo.title,
-            artist: trackInfo.artist,
-            album: trackInfo.album,
+            title: isTVSource ? "TV Audio" : trackInfo.title,
+            artist: isTVSource
+                ? trackInfo.tvFormat?.displayLabel ?? trackInfo.artist
+                : trackInfo.artist,
+            album: isTVSource ? "" : trackInfo.album,
             artworkURLString: artworkURLs.primary,
             artworkFallbackURLString: artworkURLs.fallback,
             animatedArtworkURLString: nil,
-            isLiveStream: trackInfo.isLiveStream,
+            playbackSourceRaw: trackInfo.source.rawValue,
+            isLiveStream: isTVSource || trackInfo.isLiveStream,
             isPlaying: transportState == .playing,
-            elapsedTime: elapsed,
-            duration: duration,
+            elapsedTime: isTVSource ? 0 : elapsed,
+            duration: isTVSource ? 0 : duration,
             timestamp: positionFetchedAt.timeIntervalSince1970,
             volume: Float(min(max(volume, 0), 100)) / 100,
             clientID: SharedStorage.liveActivityRelayClientID,
@@ -453,6 +457,7 @@ private extension SonosRemoteMediaSessionAttributes {
             && album == other.album
             && artworkURLString == other.artworkURLString
             && artworkFallbackURLString == other.artworkFallbackURLString
+            && playbackSourceRaw == other.playbackSourceRaw
             && isLiveStream == other.isLiveStream
             && isPlaying == other.isPlaying
             && duration == other.duration

@@ -1669,6 +1669,7 @@ export class SonosBridge extends EventEmitter {
       const metadata = trackMetadataFromMetadata(position.TrackMetaData);
       const metadataDiagnostic = trackMetadataDiagnostic(position.TrackMetaData);
       let localPlaybackMetadata: SonosLocalPlaybackMetadata | null = null;
+      let audioQuality: SonosLocalPlaybackQuality | null = null;
       let audioQualityLabel = audioQualityLabelFromMetadata(
         position.TrackMetaData,
         playbackSourceRaw,
@@ -1686,14 +1687,14 @@ export class SonosBridge extends EventEmitter {
             localPlaybackServiceName(localPlaybackMetadata),
           ) ?? playbackSourceRaw;
         }
-        const localQuality = localPlaybackMetadata
+        audioQuality = localPlaybackMetadata
           ? localPlaybackQualityFromPlaybackMetadata(localPlaybackMetadata)
           : this.localControl?.playbackMetadata
             ? null
             : await this.localControlPlaybackQuality(coordinator, device);
         if (!this.isCurrentRefresh(resolvedGroupId, refreshSequence)) return false;
-        if (localQuality?.label) {
-          audioQualityLabel = localQuality.label;
+        if (audioQuality?.label) {
+          audioQualityLabel = audioQuality.label;
         }
       }
       const includeGroupDetails = options.includeGroupDetails
@@ -1902,6 +1903,7 @@ export class SonosBridge extends EventEmitter {
         soundbarNightMode: soundbarEQ.soundbarNightMode,
         soundbarSpeechEnhancementRawLevel: soundbarEQ.soundbarSpeechEnhancementRawLevel,
         audioQualityLabel,
+        audioQuality,
         musicAmbienceEligible: isMusicAmbienceEligibleForSnapshot({
           trackTitle,
           artist,
@@ -2397,6 +2399,7 @@ const tvAudioFormatLabels: Record<number, string> = {
   33554492: 'Dolby TrueHD 2.0',
   33554494: 'Dolby Multichannel PCM 2.0',
   84934658: 'Multichannel PCM 5.1',
+  84934678: 'Multichannel PCM 5.1 no audio',
   84934713: 'Dolby 5.1',
   84934714: 'Dolby Digital Plus 5.1',
   84934716: 'Dolby TrueHD 5.1',

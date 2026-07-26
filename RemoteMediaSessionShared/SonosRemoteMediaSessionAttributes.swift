@@ -30,6 +30,9 @@ struct SonosRemoteMediaSessionAttributes: RemoteMediaSessionAttributes, Codable,
     /// Apple Music square motion artwork HLS master playlist. The extension
     /// materializes a local video file only when the system asks to display it.
     var animatedArtworkURLString: String?
+    /// `PlaybackSource.rawValue`. Optional so an older cached session remains
+    /// decodable after adding TV-specific presentation behavior.
+    var playbackSourceRaw: String? = nil
     var isLiveStream: Bool
     var isPlaying: Bool
     var elapsedTime: TimeInterval
@@ -41,4 +44,23 @@ struct SonosRemoteMediaSessionAttributes: RemoteMediaSessionAttributes, Codable,
     var clientID: String
     var relayURLString: String?
     var relayCommandToken: String?
+}
+
+@available(iOS 27.0, iOSApplicationExtension 27.0, *)
+extension SonosRemoteMediaSessionAttributes {
+    var isTVSource: Bool {
+        playbackSourceRaw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tv"
+    }
+
+    var usesLiveDuration: Bool {
+        isTVSource || isLiveStream
+    }
+
+    var supportsPlaybackCommands: Bool {
+        !isTVSource
+    }
+
+    var supportsTrackNavigation: Bool {
+        supportsPlaybackCommands && !isLiveStream
+    }
 }

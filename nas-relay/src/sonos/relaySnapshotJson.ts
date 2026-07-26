@@ -18,6 +18,7 @@ export function snapshotJson(snap: SonosGroupSnapshot): Record<string, unknown> 
     tvAudioFormatLabel: snap.tvAudioFormatLabel ?? null,
     tvHasSignal: snap.tvHasSignal ?? null,
     audioQualityLabel: snap.audioQualityLabel ?? null,
+    audioQuality: snap.audioQuality ?? null,
     soundbarNightMode: snap.soundbarNightMode ?? null,
     soundbarSpeechEnhancementRawLevel: snap.soundbarSpeechEnhancementRawLevel ?? null,
     positionSeconds: snap.positionSeconds,

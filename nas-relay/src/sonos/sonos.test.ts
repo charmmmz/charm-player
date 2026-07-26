@@ -961,6 +961,28 @@ test('bridge distinguishes PLAYING TV transport from an HTAudioIn no-audio signa
   assert.equal(snapshot?.audioQualityLabel, 'PCM · 2.0');
 });
 
+test('bridge preserves negotiated Multichannel PCM 5.1 while TV audio is momentarily silent', async () => {
+  const bridge = testBridge();
+  const device = playbackDevice({
+    Host: '192.168.50.25',
+    Name: 'Playroom',
+    Uuid: 'rincon-playroom',
+    DevicePropertiesService: {
+      GetZoneInfo: async () => ({ HTAudioIn: 84934678 }),
+    },
+  }, tvPositionInfo());
+
+  await (bridge as unknown as {
+    refreshSnapshot: (device: unknown) => Promise<void>;
+  }).refreshSnapshot(device);
+
+  const snapshot = bridge.current('192.168.50.25');
+  assert.equal(snapshot?.tvAudioFormatRawCode, 84934678);
+  assert.equal(snapshot?.tvAudioFormatLabel, 'Multichannel PCM 5.1 no audio');
+  assert.equal(snapshot?.tvHasSignal, false);
+  assert.equal(snapshot?.audioQualityLabel, 'Multichannel PCM · 5.1');
+});
+
 test('bridge writes Night Sound through RenderingControl EQ', async () => {
   const bridge = testBridge();
   const calls: unknown[] = [];
@@ -1399,6 +1421,14 @@ test('bridge prefers local Control API playback quality over generic track metad
   }]);
   const snapshot = bridge.current('192.168.50.25');
   assert.equal(snapshot?.audioQualityLabel, 'Hi-Res Lossless');
+  assert.deepEqual(snapshot?.audioQuality, {
+    label: 'Hi-Res Lossless',
+    serviceName: 'Apple Music',
+    lossless: true,
+    immersive: false,
+    bitDepth: 24,
+    sampleRate: 48_000,
+  });
 });
 
 test('bridge prefers local Control API current track artwork for Apple Music radio streams', async () => {

@@ -473,6 +473,17 @@ struct TVAudioFormat: Codable, Equatable, Sendable {
         return !(lower.contains("no input") || lower.contains("no audio"))
     }
 
+    /// Stable user-facing format text. Sonos can keep the negotiated PCM
+    /// layout while the HDMI/eARC source is momentarily silent. Preserve that
+    /// useful format instead of replacing it with a transient "No audio".
+    nonisolated var displayLabel: String {
+        let lower = label.lowercased()
+        if lower.contains("no input") || lower == "no audio" {
+            return statusLabel
+        }
+        return geekLabel
+    }
+
     /// True when the bitstream is carrying Dolby Atmos object audio
     /// (over TrueHD, DD+, or MAT 2.0).
     nonisolated var isAtmos: Bool {
@@ -563,6 +574,7 @@ struct TVAudioFormat: Codable, Equatable, Sendable {
         33554492: "Dolby TrueHD 2.0",
         33554494: "Dolby Multichannel PCM 2.0",
         84934658: "Multichannel PCM 5.1",
+        84934678: "Multichannel PCM 5.1 no audio",
         84934713: "Dolby 5.1",
         84934714: "Dolby Digital Plus 5.1",
         84934716: "Dolby TrueHD 5.1",

@@ -66,7 +66,7 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
 
     var content: (any MediaContentRepresentable)? {
         reportContentEvaluationIfNeeded()
-        let duration: MediaDuration = attributes.isLiveStream
+        let duration: MediaDuration = attributes.usesLiveDuration
             ? .live
             : .finite(attributes.duration)
         let contentID = SonosRemoteIdentifier.make(
@@ -99,18 +99,19 @@ final class SonosRemoteMediaSessionRepresentation: RemoteMediaSessionRepresentab
     var playbackSnapshot: MediaPlaybackSnapshot? {
         MediaPlaybackSnapshot(
             state: attributes.isPlaying ? .playing() : .paused,
-            elapsedTime: attributes.isLiveStream ? nil : attributes.elapsedTime,
+            elapsedTime: attributes.usesLiveDuration ? nil : attributes.elapsedTime,
             timestamp: Date(timeIntervalSince1970: attributes.timestamp)
         )
     }
 
     var commands: [MediaCommand] {
+        guard attributes.supportsPlaybackCommands else { return [] }
         var result: [MediaCommand] = [
             attributes.isPlaying
                 ? .pause { [weak self] in try await self?.perform("pause", playing: false) }
                 : .play { [weak self] in try await self?.perform("play", playing: true) }
         ]
-        if !attributes.isLiveStream {
+        if attributes.supportsTrackNavigation {
             result.append(.previous { [weak self] in try await self?.perform("previous") })
             result.append(.next { [weak self] in try await self?.perform("next") })
         }

@@ -755,6 +755,7 @@ enum RelayClient {
         let tvAudioFormatLabel: String?
         let tvHasSignal: Bool?
         let audioQualityLabel: String?
+        let audioQuality: RelayAudioQuality?
         let soundbarNightMode: Bool?
         let soundbarSpeechEnhancementRawLevel: Int?
         let positionSeconds: Double
@@ -764,25 +765,70 @@ enum RelayClient {
 
         var trackInfo: TrackInfo {
             let source = playbackSourceRaw.flatMap(PlaybackSource.init(rawValue:)) ?? .unknown
+            let tvFormat: TVAudioFormat? = if source == .tv,
+                                             let rawCode = tvAudioFormatRawCode,
+                                             let label = tvAudioFormatLabel {
+                TVAudioFormat(rawCode: rawCode, label: label)
+            } else {
+                nil
+            }
+            let resolvedTitle = source == .tv ? "TV" : trackTitle
+            let resolvedArtist = source == .tv
+                ? tvFormat?.displayLabel ?? audioQualityLabel ?? "Live audio"
+                : artist
             var info = TrackInfo(
-                title: trackTitle,
-                artist: artist,
-                album: album,
+                title: resolvedTitle,
+                artist: resolvedArtist,
+                album: source == .tv ? "" : album,
                 albumArtURL: albumArtFallbackUri ?? albumArtUri,
                 duration: Self.sonosTime(from: durationSeconds),
                 position: Self.sonosTime(from: positionSeconds),
                 source: source,
                 audioQuality: source == .tv
                     ? nil
-                    : audioQualityLabel.map { AudioQuality(codec: $0) },
+                    : audioQuality?.model
+                        ?? audioQualityLabel.map { AudioQuality(codec: $0) },
                 trackURI: trackUri
             )
-            if source == .tv,
-               let rawCode = tvAudioFormatRawCode,
-               let label = tvAudioFormatLabel {
-                info.tvFormat = TVAudioFormat(rawCode: rawCode, label: label)
-            }
+            info.tvFormat = tvFormat
             return info
+        }
+
+        struct RelayAudioQuality: Decodable, Sendable {
+            let label: String?
+            let serviceName: String?
+            let lossless: Bool?
+            let immersive: Bool?
+            let bitDepth: Int?
+            let sampleRate: Int?
+
+            var model: AudioQuality? {
+                let trimmedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let hasStructuredValue = lossless != nil
+                    || immersive != nil
+                    || bitDepth != nil
+                    || sampleRate != nil
+                guard hasStructuredValue || trimmedLabel?.isEmpty == false else { return nil }
+
+                let codec: String
+                if immersive == true {
+                    codec = "Atmos"
+                } else if lossless == true {
+                    codec = "Lossless"
+                } else if let trimmedLabel, !trimmedLabel.isEmpty {
+                    codec = trimmedLabel
+                } else {
+                    codec = "Audio"
+                }
+                return AudioQuality(
+                    codec: codec,
+                    sampleRate: sampleRate,
+                    bitDepth: bitDepth,
+                    channels: nil,
+                    lossless: lossless,
+                    immersive: immersive
+                )
+            }
         }
 
         var transportState: TransportState {

@@ -2,6 +2,62 @@ import XCTest
 @testable import SonosWidget
 
 final class AudioQualityRefreshTests: XCTestCase {
+    func testRelayPlaybackStatePreservesStructuredHiResQuality() throws {
+        let json = """
+        {
+          "groupId": "192.168.50.25",
+          "speakerName": "Playroom",
+          "trackTitle": "As It Was",
+          "artist": "Harry Styles",
+          "album": "Harry's House",
+          "isPlaying": true,
+          "playbackSourceRaw": "appleMusic",
+          "audioQualityLabel": "Hi-Res Lossless",
+          "audioQuality": {
+            "label": "Hi-Res Lossless",
+            "serviceName": "Apple Music",
+            "lossless": true,
+            "immersive": false,
+            "bitDepth": 24,
+            "sampleRate": 48000
+          },
+          "positionSeconds": 42,
+          "durationSeconds": 167,
+          "groupMemberCount": 1
+        }
+        """.data(using: .utf8)!
+
+        let state = try JSONDecoder().decode(RelayClient.RelayPlaybackState.self, from: json)
+
+        XCTAssertEqual(state.trackInfo.audioQuality?.label, "Hi-Res Lossless")
+        XCTAssertEqual(state.trackInfo.audioQuality?.bitDepth, 24)
+        XCTAssertEqual(state.trackInfo.audioQuality?.sampleRate, 48_000)
+        XCTAssertEqual(state.trackInfo.audioQuality?.lossless, true)
+        XCTAssertEqual(state.trackInfo.audioQuality?.immersive, false)
+    }
+
+    func testRelayPlaybackStateKeepsLegacyQualityLabelCompatibility() throws {
+        let json = """
+        {
+          "groupId": "192.168.50.25",
+          "speakerName": "Playroom",
+          "trackTitle": "Legacy Song",
+          "artist": "Legacy Artist",
+          "album": "Legacy Album",
+          "isPlaying": true,
+          "playbackSourceRaw": "appleMusic",
+          "audioQualityLabel": "Lossless",
+          "positionSeconds": 0,
+          "durationSeconds": 180,
+          "groupMemberCount": 1
+        }
+        """.data(using: .utf8)!
+
+        let state = try JSONDecoder().decode(RelayClient.RelayPlaybackState.self, from: json)
+
+        XCTAssertEqual(state.trackInfo.audioQuality?.label, "Lossless")
+    }
+
     func testLANRefreshKeepsLocallyConfirmedQualityWhenCloudCanEnhance() {
         let local = AudioQuality(codec: "FLAC", sampleRate: 96_000, bitDepth: 24, channels: 2)
         let incoming = TrackInfo(

@@ -259,6 +259,15 @@ final class RelayManagerTests: XCTestCase {
         XCTAssertNil(state.trackInfo.audioQuality)
     }
 
+    func testNegotiatedSilentTVFormatKeepsUserFacingPCMLabel() {
+        let format = TVAudioFormat.from(htAudioInCode: 84_934_678)
+
+        XCTAssertEqual(format.label, "Multichannel PCM 5.1 no audio")
+        XCTAssertEqual(format.geekLabel, "Multichannel PCM · 5.1")
+        XCTAssertEqual(format.displayLabel, "Multichannel PCM · 5.1")
+        XCTAssertFalse(format.hasSignal)
+    }
+
     func testPlaybackStateURLUsesRelayBaseURLAndCoordinatorGroup() throws {
         let url = try XCTUnwrap(
             RelayClient.playbackStateURL(

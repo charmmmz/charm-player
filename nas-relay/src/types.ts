@@ -42,6 +42,18 @@ export interface SonosGroupMemberSnapshot {
   volume?: number | null;
 }
 
+/// Structured track quality reported by Sonos Local Control. Keep the display
+/// label for backwards compatibility, but clients should prefer these raw
+/// fields so a relay refresh cannot collapse Hi-Res metadata to a string.
+export interface SonosAudioQualitySnapshot {
+  label?: string | null;
+  serviceName?: string | null;
+  lossless?: boolean | null;
+  immersive?: boolean | null;
+  bitDepth?: number | null;
+  sampleRate?: number | null;
+}
+
 /// Minimal projection of what we keep in memory per Sonos coordinator. Built
 /// from sonos-ts AVTransport / RenderingControl events.
 export interface SonosGroupSnapshot {
@@ -79,6 +91,7 @@ export interface SonosGroupSnapshot {
   soundbarSpeechEnhancementRawLevel?: number | null;
   liveActivityStyleRaw?: string | null;
   audioQualityLabel?: string | null;
+  audioQuality?: SonosAudioQualitySnapshot | null;
   musicAmbienceEligible?: boolean;
   positionSeconds: number;
   durationSeconds: number;
@@ -193,6 +206,7 @@ export interface NowPlayingAttributes {
   artworkURLString?: string | null;
   artworkFallbackURLString?: string | null;
   animatedArtworkURLString?: string | null;
+  playbackSourceRaw?: string | null;
   isLiveStream: boolean;
   isPlaying: boolean;
   elapsedTime: number;

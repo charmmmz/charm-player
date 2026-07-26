@@ -206,6 +206,83 @@ test('paused playback remains an active media session while stopped playback end
   }), false);
 });
 
+test('TV audio can start a session without music metadata and uses a live presentation', () => {
+  const tvSnapshot: SonosGroupSnapshot = {
+    ...snapshot,
+    trackTitle: '',
+    artist: '',
+    album: '',
+    trackUri: 'x-sonos-htastream:RINCON_HOME_THEATER:spdif',
+    albumArtUri: null,
+    albumArtFallbackUri: null,
+    playbackSourceRaw: 'tv',
+    tvAudioFormatRawCode: 84934658,
+    tvAudioFormatLabel: 'Multichannel PCM 5.1',
+    tvHasSignal: true,
+    audioQualityLabel: 'Multichannel PCM · 5.1',
+    positionSeconds: 0,
+    durationSeconds: 0,
+  };
+
+  assert.equal(isNowPlayingActive(tvSnapshot), true);
+  const attributes = buildNowPlayingAttributes(tvSnapshot, target);
+  assert.equal(attributes.title, 'TV Audio');
+  assert.equal(attributes.artist, 'Multichannel PCM · 5.1');
+  assert.equal(attributes.album, '');
+  assert.equal(attributes.playbackSourceRaw, 'tv');
+  assert.equal(attributes.isLiveStream, true);
+  assert.equal(attributes.isPlaying, true);
+  assert.equal(attributes.elapsedTime, 0);
+  assert.equal(attributes.duration, 0);
+  assert.equal(attributes.artworkURLString, undefined);
+  assert.equal(attributes.artworkFallbackURLString, undefined);
+});
+
+test('negotiated silent TV formats keep the session and display format stable', () => {
+  const activePCM: SonosGroupSnapshot = {
+    ...snapshot,
+    trackTitle: '',
+    artist: '',
+    album: '',
+    playbackSourceRaw: 'tv',
+    tvAudioFormatRawCode: 84934658,
+    tvAudioFormatLabel: 'Multichannel PCM 5.1',
+    tvHasSignal: true,
+    audioQualityLabel: 'Multichannel PCM · 5.1',
+    durationSeconds: 0,
+    positionSeconds: 0,
+  };
+  const silentPCM: SonosGroupSnapshot = {
+    ...activePCM,
+    tvAudioFormatRawCode: 84934678,
+    tvAudioFormatLabel: 'Multichannel PCM 5.1 no audio',
+    tvHasSignal: false,
+  };
+
+  assert.equal(isNowPlayingActive(silentPCM), true);
+  assert.equal(
+    buildNowPlayingAttributes(silentPCM, target).artist,
+    'Multichannel PCM · 5.1',
+  );
+  assert.equal(
+    hashNowPlayingAttributes(buildNowPlayingAttributes(activePCM, target)),
+    hashNowPlayingAttributes(buildNowPlayingAttributes(silentPCM, target)),
+  );
+});
+
+test('TV no-input state ends the media session even when Sonos transport says PLAYING', () => {
+  assert.equal(isNowPlayingActive({
+    ...snapshot,
+    trackTitle: '',
+    artist: '',
+    album: '',
+    playbackSourceRaw: 'tv',
+    tvAudioFormatRawCode: 21,
+    tvAudioFormatLabel: 'No input',
+    tvHasSignal: false,
+  }), false);
+});
+
 test('Now Playing sends a start only when explicitly requested', () => {
   assert.equal(shouldSendNowPlayingStart('start', false, false), false);
   assert.equal(shouldSendNowPlayingStart('start', true, false), false);

@@ -511,7 +511,7 @@ enum SonosAPI {
         if source == .tv {
             title = "TV"
             if let format = tvFormat {
-                artist = format.hasSignal ? format.geekLabel : format.statusLabel
+                artist = format.displayLabel
             } else {
                 artist = "Live audio"
             }

@@ -36,6 +36,30 @@ test('relay snapshot JSON includes TV soundbar state for command responses', () 
   }]);
 });
 
+test('relay snapshot JSON includes structured Sonos track quality', () => {
+  const json = snapshotJson(snapshot({
+    playbackSourceRaw: 'appleMusic',
+    audioQualityLabel: 'Hi-Res Lossless',
+    audioQuality: {
+      label: 'Hi-Res Lossless',
+      serviceName: 'Apple Music',
+      lossless: true,
+      immersive: false,
+      bitDepth: 24,
+      sampleRate: 48_000,
+    },
+  }));
+
+  assert.deepEqual(json.audioQuality, {
+    label: 'Hi-Res Lossless',
+    serviceName: 'Apple Music',
+    lossless: true,
+    immersive: false,
+    bitDepth: 24,
+    sampleRate: 48_000,
+  });
+});
+
 function snapshot(overrides: Partial<SonosGroupSnapshot> = {}): SonosGroupSnapshot {
   return {
     groupId: '192.168.50.25',
