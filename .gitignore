@@ -31,6 +31,7 @@ Config/SonosSecrets.xcconfig
 
 # Generated/bundled artifacts
 artifacts/
+.playwright-cli/
 .superpowers/
 .worktrees/
 
