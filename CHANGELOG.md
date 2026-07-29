@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog 1.1.0], and versioned components follow
 
 ## [Unreleased]
 
+### Changed
+
+- Repository publishing now keeps Forgejo and GitHub on the same commit history:
+  Forgejo remains the fast `edge`/SHA image channel, while GitHub publishes the
+  complete multi-platform stable image only from matching `nas-relay-v*` tags.
+- Charm Player repository, deployment, and package references now use the
+  `charm-player` name, including the
+  `ghcr.io/charmmmz/charm-player/nas-relay` image path.
+- Removed the one-way Forgejo-to-GitHub README sync that could create
+  host-specific commits and branch divergence.
+
 ### Fixed
 
 - Now Playing no longer repeats bit-depth and sample-rate text when Sonos

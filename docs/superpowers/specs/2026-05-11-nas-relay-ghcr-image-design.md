@@ -6,7 +6,7 @@ Build the `nas-relay` Docker image automatically after relevant changes reach `m
 
 ## Architecture
 
-The repository gets a single GitHub Actions workflow at `.github/workflows/nas-relay-image.yml`. It uses Docker Buildx to build `nas-relay/Dockerfile` for `linux/amd64` and `linux/arm64`, then pushes the image to `ghcr.io/charmmmz/charm-for-sonos/nas-relay` on non-PR events.
+The repository gets a single GitHub Actions workflow at `.github/workflows/nas-relay-image.yml`. It uses Docker Buildx to build `nas-relay/Dockerfile` for `linux/amd64` and `linux/arm64`, then pushes the image to `ghcr.io/charmmmz/charm-player/nas-relay` on non-PR events.
 
 The workflow opts JavaScript actions into the Node 24 runtime with `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` so it stays ahead of GitHub's 2026 Node 20 action-runtime deprecation.
 
@@ -24,7 +24,7 @@ The workflow opts JavaScript actions into the Node 24 runtime with `FORCE_JAVASC
 
 ## NAS Deployment
 
-`nas-relay/docker-compose.yml` references `ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest` directly. If the GHCR package is private, the NAS must run `docker login ghcr.io` with a GitHub token that can read packages before pulling.
+`nas-relay/docker-compose.yml` references `ghcr.io/charmmmz/charm-player/nas-relay:latest` directly. If the GHCR package is private, the NAS must run `docker login ghcr.io` with a GitHub token that can read packages before pulling.
 
 ## Verification
 

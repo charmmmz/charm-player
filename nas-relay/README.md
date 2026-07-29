@@ -113,7 +113,7 @@ matching `nas-relay/package.json` publishes `0.1.0` and moves `latest`.
 ```yaml
 services:
   relay:
-    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    image: ghcr.io/charmmmz/charm-player/nas-relay:latest
     # Mainland China image:
     # image: crpi-wgo31iwe48epi9ov.cn-hangzhou.personal.cr.aliyuncs.com/charmmmz/sonos-nas-relay:latest
     pull_policy: always
@@ -136,7 +136,7 @@ services:
       - ${NAS_RELAY_DATA_DIR:-./data}:/app/data
 
   relay-debug:
-    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    image: ghcr.io/charmmmz/charm-player/nas-relay:latest
     # Mainland China image:
     # image: crpi-wgo31iwe48epi9ov.cn-hangzhou.personal.cr.aliyuncs.com/charmmmz/sonos-nas-relay:latest
     pull_policy: always

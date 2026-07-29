@@ -152,13 +152,13 @@ Initial deployment is private:
 ```yaml
 services:
   nas-relay:
-    image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest
+    image: ghcr.io/charmmmz/charm-player/nas-relay:latest
     environment:
       HUE_RENDERER: edk-sidecar
       HUE_EDK_SIDECAR_URL: http://hue-edk-sidecar:8787
 
   hue-edk-sidecar:
-    image: ghcr.io/charmmmz/charm-for-sonos/hue-edk-sidecar:latest
+    image: ghcr.io/charmmmz/hue-edk-sidecar:latest
     network_mode: host
     volumes:
       - ./data/hue-edk-sidecar:/data

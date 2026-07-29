@@ -40,16 +40,16 @@ Expected: PASS with exit code 0.
 
 - [ ] **Step 1: Verify compose is not using GHCR yet**
 
-Run: `grep -q 'ghcr.io/charmmmz/charm-for-sonos/nas-relay' nas-relay/docker-compose.yml`
+Run: `grep -q 'ghcr.io/charmmmz/charm-player/nas-relay' nas-relay/docker-compose.yml`
 Expected: FAIL with exit code 1.
 
 - [ ] **Step 2: Update compose**
 
-Replace the local `build: .` service setup with `image: ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest`. Update the comment to use `docker compose pull && docker compose up -d`.
+Replace the local `build: .` service setup with `image: ghcr.io/charmmmz/charm-player/nas-relay:latest`. Update the comment to use `docker compose pull && docker compose up -d`.
 
 - [ ] **Step 3: Update README**
 
-Document that Portainer pulls `ghcr.io/charmmmz/charm-for-sonos/nas-relay:latest` and that private packages require `docker login ghcr.io` with a GitHub token that can read packages.
+Document that Portainer pulls `ghcr.io/charmmmz/charm-player/nas-relay:latest` and that private packages require `docker login ghcr.io` with a GitHub token that can read packages.
 
 - [ ] **Step 4: Validate compose config**
 
