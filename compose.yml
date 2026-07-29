@@ -1,4 +1,4 @@
-# Charm for Sonos NAS stack: relay + LAN MCP endpoint.
+# Charm Player NAS stack: relay + LAN MCP endpoint.
 # Copy `.env.stack.example` → `.env` in this directory, fill in values, then:
 #   docker compose up -d --build
 #

@@ -1,4 +1,4 @@
-# Charm for Sonos
+# Charm Player
 
 > **Charm Player** is a private iPhone companion for Sonos. It focuses on the
 > places where Sonos control should be faster: Home, Apple Music handoff,

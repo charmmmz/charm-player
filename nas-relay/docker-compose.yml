@@ -57,7 +57,7 @@ services:
       # in the iOS app. Lower values move faster; examples: 8, 6, 4.
       HUE_FLOW_INTERVAL_SECONDS: "${HUE_FLOW_INTERVAL_SECONDS:-}"
 
-      # APNs — bundle/team defaults match Charm for Sonos. Leave KEY_ID blank
+      # APNs — bundle/team defaults match Charm Player. Leave KEY_ID blank
       # during initial setup; the relay runs in dry-run mode and logs the
       # payloads it would have sent until a .p8 key is mounted.
       APNS_BUNDLE_ID: "${APNS_BUNDLE_ID:-com.charm.SonosWidget}"
