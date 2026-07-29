@@ -657,6 +657,20 @@ struct AudioQuality: Codable, Equatable, Sendable {
         }
     }
 
+    /// Descriptive text rendered beside separately displayed bit-depth/sample-rate
+    /// details in Now Playing. Generic Cloud quality uses the technical details
+    /// themselves as `label`, so suppress that label when it would repeat the
+    /// compact technical token.
+    var nowPlayingCompanionLabel: String? {
+        if badgeAssetImageName != nil {
+            return Self.badgeCompanionLabel(forQualityLabel: label)
+        }
+        if bitDepth != nil, sampleRate != nil, label == technicalLabel {
+            return nil
+        }
+        return label
+    }
+
     var isHiRes: Bool {
         guard isLossless else { return false }
         return (sampleRate ?? 0) > 48000 || ((sampleRate ?? 0) >= 48000 && (bitDepth ?? 0) >= 24)

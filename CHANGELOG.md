@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog 1.1.0], and versioned components follow
 
 ## [Unreleased]
 
+### Fixed
+
+- Now Playing no longer repeats bit-depth and sample-rate text when Sonos
+  reports technical audio parameters without a descriptive quality badge.
+
 ## [0.1.0] - 2026-07-26
 
 ### Added

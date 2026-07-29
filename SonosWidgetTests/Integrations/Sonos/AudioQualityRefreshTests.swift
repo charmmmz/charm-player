@@ -250,6 +250,28 @@ final class AudioQualityRefreshTests: XCTestCase {
         XCTAssertFalse(SonosManager.audioQualityNeedsDelayedBadgeRetry(lossless))
     }
 
+    func testNowPlayingCompanionOmitsDuplicateTechnicalLabel() {
+        let technical = AudioQuality(
+            codec: "Audio",
+            sampleRate: 48_000,
+            bitDepth: 16,
+            channels: nil,
+            lossless: false,
+            immersive: false
+        )
+        let lossless = AudioQuality(
+            codec: "ALAC",
+            sampleRate: 48_000,
+            bitDepth: 16,
+            channels: nil,
+            lossless: true,
+            immersive: false
+        )
+
+        XCTAssertNil(technical.nowPlayingCompanionLabel)
+        XCTAssertEqual(lossless.nowPlayingCompanionLabel, "Lossless")
+    }
+
     func testPlaybackMetadataContainerFallbackEnrichesAppleMusicLiveStation() throws {
         let incoming = TrackInfo(
             title: "Unknown",

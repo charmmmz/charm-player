@@ -219,17 +219,12 @@ extension NowPlayingOverlay {
                 Spacer()
 
                 if let quality = manager.trackInfo?.audioQuality {
-                    // When a Dolby Atmos badge is present, the badge itself
-                    // already reads "Dolby Atmos" — repeating it as text
-                    // creates the duplicate the user complained about. Hand
-                    // the label through `badgeCompanionLabel` which strips
-                    // the redundant prefix (returning nil when nothing
-                    // remains, e.g. plain music Atmos with no transport
-                    // variant). Lossless/Hi-Res keep their full label since
-                    // the badge is glyph-only.
-                    let companion: String? = quality.badgeAssetImageName != nil
-                        ? AudioQuality.badgeCompanionLabel(forQualityLabel: quality.label)
-                        : quality.label
+                    // Keep only descriptive text beside the compact technical
+                    // token: Atmos text is already carried by its badge, and a
+                    // generic "Audio" label may itself be the same bit-depth /
+                    // sample-rate pair. Lossless/Hi-Res remain because their
+                    // glyph-only badge does not repeat the wording.
+                    let companion = quality.nowPlayingCompanionLabel
                     HStack(spacing: 4) {
                         if let badge = quality.badgeAssetImageName {
                             Image(badge)
